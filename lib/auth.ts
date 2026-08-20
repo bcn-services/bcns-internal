@@ -100,7 +100,7 @@ export function routeAccessDecision(input: RouteAccessInput): AccessDecision {
  * unrecognized or absent value resolves to null, which the gate treats as
  * "not authorized".
  *
- * This mirrors auth.role_claim() in supabase/migrations/0002_rls_policies.sql,
+ * This mirrors public.role_claim() in supabase/migrations/0002_rls_policies.sql,
  * so the app-layer gate and the database's RLS agree on who the caller is. If
  * one is ever changed, change the other in the same commit.
  *

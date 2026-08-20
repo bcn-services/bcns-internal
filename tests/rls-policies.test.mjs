@@ -105,7 +105,7 @@ describe("RLS: admin vs member vs unprovisioned", () => {
     const rows = pg.run(
       `select proname, provolatile, coalesce(array_to_string(proconfig,','),'NONE')
        from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-       where n.nspname='auth' and proname in ('is_admin','is_staff','role_claim')
+       where n.nspname='public' and proname in ('is_admin','is_staff','role_claim')
        order by proname`).split("\n");
     assert.equal(rows.length, 3);
     for (const r of rows) {
@@ -120,7 +120,7 @@ describe("RLS: admin vs member vs unprovisioned", () => {
     assert.equal(pg.run(`select count(*) from pg_policies where schemaname='public'`), "0");
     assert.equal(pg.run(
       `select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-       where n.nspname='auth' and proname in ('is_admin','is_staff','role_claim')`), "0");
+       where n.nspname='public' and proname in ('is_admin','is_staff','role_claim')`), "0");
     // With policies gone, RLS is still ON: back to deny-all for authenticated.
     assert.equal(pg.runClaims(CLAIMS.admin, `select count(*) from accounts`).out, "0");
     pg.runFile("0002_rls_policies.sql");

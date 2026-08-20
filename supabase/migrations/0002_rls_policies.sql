@@ -31,12 +31,16 @@
 -- ---------------------------------------------------------------------------
 -- Authorization helpers. STABLE (the JWT is constant within a statement) and
 -- pinned to an empty search_path, so every reference is schema-qualified.
--- Defined in the `auth` schema next to auth.jwt().
+-- Defined in `public`, NOT in `auth`: Supabase revoked CREATE on the auth
+-- schema from the postgres role, so `create function auth.is_staff()` fails
+-- with "permission denied for schema auth" against a real project. Supabase
+-- also documents the auth schema as theirs to manage. Calling auth.jwt() from
+-- public is unaffected -- only creating objects there is denied.
 -- ---------------------------------------------------------------------------
 
 -- role_claim(): the raw app_metadata.role claim, '' when absent. coalesce guards
 -- an anonymous or unprovisioned session so downstream comparisons never see NULL.
-create or replace function auth.role_claim()
+create or replace function public.role_claim()
 returns text
 language sql
 stable
@@ -46,25 +50,25 @@ as $$
 $$;
 
 -- is_admin(): true iff the claim is exactly 'admin'.
-create or replace function auth.is_admin()
+create or replace function public.is_admin()
 returns boolean
 language sql
 stable
 set search_path = ''
 as $$
-  select auth.role_claim() = 'admin';
+  select public.role_claim() = 'admin';
 $$;
 
 -- is_staff(): true for admin OR member. An unprovisioned authenticated user
 -- (invited but never assigned a role) matches NEITHER and therefore sees zero
 -- rows — fail-safe, and the reason an unknown claim must not default to member.
-create or replace function auth.is_staff()
+create or replace function public.is_staff()
 returns boolean
 language sql
 stable
 set search_path = ''
 as $$
-  select auth.role_claim() in ('admin', 'member');
+  select public.role_claim() in ('admin', 'member');
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -75,28 +79,28 @@ $$;
 -- ---------------------------------------------------------------------------
 create policy accounts_admin_all on accounts
   for all to authenticated
-  using (auth.is_admin()) with check (auth.is_admin());
+  using (public.is_admin()) with check (public.is_admin());
 
 create policy clients_admin_all on clients
   for all to authenticated
-  using (auth.is_admin()) with check (auth.is_admin());
+  using (public.is_admin()) with check (public.is_admin());
 
 create policy account_activity_admin_all on account_activity
   for all to authenticated
-  using (auth.is_admin()) with check (auth.is_admin());
+  using (public.is_admin()) with check (public.is_admin());
 
 -- ---------------------------------------------------------------------------
 -- MEMBER: read everything. Postgres OR-combines permissive policies, so these
 -- union with the admin FOR ALL policies — an admin still sees everything.
 -- ---------------------------------------------------------------------------
 create policy accounts_staff_select on accounts
-  for select to authenticated using (auth.is_staff());
+  for select to authenticated using (public.is_staff());
 
 create policy clients_staff_select on clients
-  for select to authenticated using (auth.is_staff());
+  for select to authenticated using (public.is_staff());
 
 create policy account_activity_staff_select on account_activity
-  for select to authenticated using (auth.is_staff());
+  for select to authenticated using (public.is_staff());
 
 -- ---------------------------------------------------------------------------
 -- MEMBER writes: leads only. Members prospect and work the funnel, so they add
@@ -105,11 +109,11 @@ create policy account_activity_staff_select on account_activity
 -- a client pays is an admin act.
 -- ---------------------------------------------------------------------------
 create policy accounts_staff_insert on accounts
-  for insert to authenticated with check (auth.is_staff());
+  for insert to authenticated with check (public.is_staff());
 
 create policy accounts_staff_update on accounts
   for update to authenticated
-  using (auth.is_staff()) with check (auth.is_staff());
+  using (public.is_staff()) with check (public.is_staff());
 
 create policy account_activity_staff_insert on account_activity
-  for insert to authenticated with check (auth.is_staff());
+  for insert to authenticated with check (public.is_staff());
