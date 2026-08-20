@@ -1,23 +1,25 @@
-import { PRICING, formatUsd, monthlyCharge } from "@nseluga/app-core";
-import { isAiEnabled } from "@/lib/ai";
+/**
+ * page.tsx — the front door. Everything here is gated by middleware, so anyone
+ * who sees it is signed in and provisioned.
+ */
+import Link from "next/link";
+import { getViewer } from "@/lib/supabase-server";
 
-// Proves the three workspace:* deps resolve and the app renders 200 with no
-// keys set and the AI flag off.
-export default function HomePage() {
-  const aiOn = isAiEnabled();
-  const standard = monthlyCharge("standard", 20);
+export const dynamic = "force-dynamic";
 
+export default async function HomePage() {
+  const { role } = await getViewer();
   return (
     <main>
-      <h1>Hosted Web App Template</h1>
-      <p>
-        A runnable starter for a hosted client app. AI features are{" "}
-        <strong>{aiOn ? "enabled" : "disabled"}</strong> (set <code>AI_ENABLED=1</code> to opt in).
-      </p>
-      <p>
-        Standard plan base: {formatUsd(PRICING.standard.monthlyCents)}/mo. At 20 seats:{" "}
-        {formatUsd(standard.totalCents)}/mo.
-      </p>
+      <h1>bcns internal</h1>
+      <p>Signed in as <strong>{role ?? "unprovisioned"}</strong>.</p>
+      <ul>
+        <li><Link href="/clients">Clients</Link> — everyone bcns hosts</li>
+        <li><Link href="/leads">Leads</Link> — the funnel, and the actions that move it</li>
+        <li><Link href="/projects">Projects</Link> — the os project board</li>
+        <li><Link href="/files">Files</Link> — read-only browser over $OS_DIR</li>
+        <li><Link href="/graph">Graph</Link> — the knowledge graph over $OS_DIR</li>
+      </ul>
     </main>
   );
 }
