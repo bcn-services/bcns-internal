@@ -113,3 +113,19 @@ export function resolveRole(
   const raw = user?.app_metadata?.role;
   return raw === "admin" || raw === "member" ? raw : null;
 }
+
+/**
+ * Sanitize the post-login destination before redirecting to it.
+ *
+ * The middleware stashes the intended path in `?next=`, which then round-trips
+ * through the browser and the magic-link email — so by the time the callback
+ * reads it back, it is attacker-controllable. Redirecting to it unchecked
+ * turns /auth/callback into an open redirect. Only a same-origin absolute path
+ * survives; "//evil.com" and "/\evil.com" are protocol-relative URLs that most
+ * parsers resolve as another origin, despite the leading slash.
+ */
+export function safeNext(next: string | null | undefined, fallback: string = "/"): string {
+  if (!next || !next.startsWith("/")) return fallback;
+  if (next.startsWith("//") || next.startsWith("/\\")) return fallback;
+  return next;
+}

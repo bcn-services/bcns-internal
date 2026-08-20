@@ -9,9 +9,9 @@
     "start": "next start -p 3100",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/os-port.test.mjs tests/os-routes.test.mjs tests/seed.test.mjs tests/accounts-data-layer.test.mjs tests/auth-gating.test.mjs tests/core-schema-migration.test.mjs tests/rls-policies.test.mjs",
+    "test": "tsx --test tests/os-port.test.mjs tests/os-routes.test.mjs tests/seed.test.mjs tests/accounts-data-layer.test.mjs tests/auth-gating.test.mjs tests/auth-redirect.test.mjs tests/core-schema-migration.test.mjs tests/rls-policies.test.mjs",
     "clean": "rm -rf .next .turbo node_modules",
-    "test:db": "tsx --test tests/os-port.test.mjs tests/os-routes.test.mjs tests/seed.test.mjs tests/accounts-data-layer.test.mjs tests/auth-gating.test.mjs tests/core-schema-migration.test.mjs tests/rls-policies.test.mjs"
+    "test:db": "tsx --test tests/os-port.test.mjs tests/os-routes.test.mjs tests/seed.test.mjs tests/accounts-data-layer.test.mjs tests/auth-gating.test.mjs tests/auth-redirect.test.mjs tests/core-schema-migration.test.mjs tests/rls-policies.test.mjs"
   },
   "dependencies": {
     "@nseluga/app-core": "^0.2.0",

@@ -1,15 +1,24 @@
 /**
- * login/page.tsx — placeholder sign-in page.
+ * login/page.tsx — the gate's redirect target.
  *
- * Release 1 gates every other route; this page is the redirect target so the
- * gate has somewhere to send an anonymous visitor. Real email sign-in lands
- * with the Supabase Auth wiring — see docs/NEXT_STEPS.
+ * Server component: it only sanitizes the destination the middleware stashed
+ * in `?next=` and hands it to the client form.
  */
-export default function LoginPage() {
+import { safeNext } from "@/lib/auth";
+import { SignInForm } from "./sign-in-form";
+
+export default function LoginPage({
+  searchParams,
+}: {
+  searchParams?: { next?: string | string[] };
+}) {
+  const raw = searchParams?.next;
+  const next = safeNext(Array.isArray(raw) ? raw[0] : raw);
   return (
     <main>
       <h1>bcns internal</h1>
-      <p>Sign-in is not wired up yet. Ask Nate for an invite.</p>
+      <p>Sign in with your work email. No password — we email you a link.</p>
+      <SignInForm next={next} />
     </main>
   );
 }
