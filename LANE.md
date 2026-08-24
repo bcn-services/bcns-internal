@@ -87,7 +87,7 @@ figures must read visually distinct from member-visible ones.
     - Introducing a deliberate syntax error into a migration makes the harness exit non-zero and name that file
     - `supabase_migrations.schema_migrations` exists in production and lists all 8 applied versions
     - Existing passing tests remain passing
-  status: not started
+  status: done
   caution: true
 
 - task: Migration 0009 — the automation schema. Add `accounts.outreach_mode` as a
