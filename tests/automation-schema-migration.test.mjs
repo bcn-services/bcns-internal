@@ -14,6 +14,8 @@
  */
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { startClusterWithMigrations, toolsPresent } from "./helpers/pg-cluster.mjs";
 
 if (!toolsPresent) {
@@ -280,5 +282,120 @@ describe("0009 automation schema", () => {
                  values ('${ACCOUNT}','status_change')`).ok,
       true,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Independent verification (QA). The tests above were written by the author of
+// the migration; these check the guardrails his own tests were free to assume.
+// ---------------------------------------------------------------------------
+
+/** Every `create policy ... ;` statement in 0009, comments stripped. */
+function policyStatements() {
+  const src = readFileSync(
+    fileURLToPath(new URL("../supabase/migrations/0009_automation_schema.sql", import.meta.url)),
+    "utf8",
+  ).replace(/--[^\n]*/g, "");
+  return [...src.matchAll(/create\s+policy[\s\S]*?;/gi)].map((m) => m[0]);
+}
+
+describe("0009 guardrails — independent QA", { skip: !toolsPresent && "no local Postgres" }, () => {
+  test("no policy expression contains an unqualified function call", () => {
+    const stmts = policyStatements();
+    assert.equal(stmts.length, 6, `expected 6 policies in 0009, found ${stmts.length}`);
+    // Everything after `using`/`with check` is expression territory. A call is
+    // `name(` ; it is qualified only when preceded by `schema.`.
+    for (const s of stmts) {
+      for (const [, expr] of s.matchAll(/\b(?:using|with\s+check)\s*(\([\s\S]*?\))(?=\s*(?:using|with\s+check|;))/gi)) {
+        for (const m of expr.matchAll(/(\.)?\b([a-z_][a-z0-9_]*)\s*\(/gi)) {
+          assert.equal(m[1], ".", `unqualified call ${m[2]}() in policy: ${s.split("\n")[0]}`);
+        }
+      }
+    }
+  });
+
+  test("every 0009 policy call resolves under an empty search_path", () => {
+    // The behavioral half of the guardrail: if a reference were unqualified,
+    // this evaluates to an error rather than a boolean.
+    const h = startClusterWithMigrations(MIGRATIONS);
+    try {
+      for (const call of ["public.is_admin()", "public.is_staff()", "auth.uid()"]) {
+        const r = h.tryRun(`set search_path = ''; select ${call} is not distinct from ${call}`);
+        assert.equal(r.ok, true, `${call} failed with empty search_path: ${r.error}`);
+      }
+    } finally {
+      h.stop();
+    }
+  });
+
+  test("0009 is purely additive — no column dropped, retyped, or made stricter", () => {
+    const SNAP = `select string_agg(table_name||'.'||column_name||':'||data_type||':'||is_nullable, E'\\n' order by table_name, column_name)
+                  from information_schema.columns where table_schema='public'`;
+    const h = startClusterWithMigrations(MIGRATIONS.slice(0, 8));
+    try {
+      const before = h.run(SNAP).split("\n").filter(Boolean);
+      h.run(`insert into accounts (id, business_name, city, status)
+             values ('${ACCOUNT}','Pre-0009 Co','Rye','new')`);
+      for (const kind of HUMAN_KINDS) {
+        h.run(`insert into account_activity (account_id, kind) values ('${ACCOUNT}','${kind}')`);
+      }
+      const rowsBefore = h.run(`select count(*) from account_activity`);
+
+      h.runFile("0009_automation_schema.sql");
+
+      const after = new Set(h.run(SNAP).split("\n").filter(Boolean));
+      const lost = before.filter((c) => !after.has(c));
+      assert.deepEqual(lost, [], `0009 dropped or changed existing columns: ${lost.join(", ")}`);
+      assert.equal(h.run(`select count(*) from account_activity`), rowsBefore,
+        "0009 deleted existing account_activity rows");
+      // Pre-existing rows survive the CHECK swap with their values intact.
+      assert.equal(
+        h.run(`select count(distinct kind) from account_activity where account_id='${ACCOUNT}'`),
+        String(HUMAN_KINDS.length),
+      );
+    } finally {
+      h.stop();
+    }
+  });
+
+  test("inbox_items privacy holds against every non-owner claim shape", () => {
+    const h = startClusterWithMigrations(MIGRATIONS);
+    try {
+      h.run(`insert into auth.users (id, email) values
+        ('${NATE}','nate@bcn-services.com'), ('${BRANDON}','brandon@bcn-services.com')`);
+      h.run(`insert into profiles (id, email, display_name) values
+        ('${NATE}','nate@bcn-services.com','Nate'), ('${BRANDON}','brandon@bcn-services.com','Brandon')`);
+      h.run(`insert into inbox_items (profile_id, kind, title) values ('${NATE}','x','Nate only')`);
+
+      const nateRow = () => h.run(`select title from inbox_items where profile_id='${NATE}'`);
+      assert.equal(nateRow(), "Nate only");
+
+      // SELECT: admin, a member, a role-less invite and a tampered claim all see nothing.
+      // Every claim shape below is BRANDON — a different person from the owner.
+      // Only the role varies, so what is under test is the role, not the subject.
+      for (const [who, claims] of Object.entries({
+        admin: { sub: BRANDON, app_metadata: { role: "admin" } },
+        member: brandon,
+        noRole: { sub: BRANDON, app_metadata: {} },
+        fakeAdmin: { sub: BRANDON, user_metadata: { role: "admin" } },
+      })) {
+        const r = h.runClaims(claims, `select count(*) from inbox_items where profile_id='${NATE}'`);
+        assert.equal(r.ok, true, r.error);
+        assert.equal(r.out, "0", `${who} could read another profile's inbox`);
+      }
+
+      // UPDATE and DELETE: a non-owner must change nothing, silently or otherwise.
+      for (const claims of [{ sub: BRANDON, app_metadata: { role: "admin" } }, brandon]) {
+        h.runClaims(claims, `update inbox_items set title='tampered' where profile_id='${NATE}'`);
+        h.runClaims(claims, `delete from inbox_items where profile_id='${NATE}'`);
+      }
+      assert.equal(nateRow(), "Nate only", "a non-owner mutated another profile's inbox item");
+
+      // Even the owner has no DELETE policy — only jobs (service_role) remove mail.
+      h.runClaims(admin, `delete from inbox_items where profile_id='${NATE}'`);
+      assert.equal(nateRow(), "Nate only", "the owner deleted an inbox item with no delete policy");
+    } finally {
+      h.stop();
+    }
   });
 });
