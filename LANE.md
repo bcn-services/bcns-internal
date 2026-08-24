@@ -32,12 +32,14 @@ Branch: `command-center`. Repo context: `CLAUDE.md` at root.
 - Writing outside `~/bcns-internal`
 
 **Baseline — pre-existing, not regressions. Do not "fix" these by editing assertions.**
-- 217 tests passing
-- Exactly 2 lint errors: `lib/accounts.ts:141`, `lib/os/osFiles.ts:514`
+- 276 tests passing, 34 suites (was 217 before items 1–2 added tests)
+- Exactly 5 pre-existing lint errors: `lib/accounts.ts:141`, `lib/os/osFiles.ts:514`,
+  `tests/accounts-data-layer.test.mjs:13`, `tests/rls-policies.test.mjs:66` and `:100`.
+  (`pnpm lint` prints each twice — 10 problems, 5 unique. Do not "fix" them.)
 - Test count is a **floor**. It must go up. Never delete a passing test to hold a number.
 
 **Every item additionally:** `tsc --noEmit` clean · existing passing tests remain
-passing · no third lint error · `git diff --stat` confined to this repo.
+passing · no sixth lint error · `git diff --stat` confined to this repo.
 
 **Testing constraint:** a headless subagent cannot run `next dev`. Every `done when:`
 criterion must be checkable by a unit test, a direct DB query, or a `next build`.
@@ -115,7 +117,7 @@ figures must read visually distinct from member-visible ones.
     - Inserting an `account_activity` row with kind `agent_run` succeeds; kind `nonsense` is rejected
     - A test using an authenticated client scoped to profile A selecting `inbox_items` belonging to profile B returns 0 rows
     - Inserting an `accounts` row with `outreach_mode = 'invalid'` is rejected; omitting it yields `ai`
-  status: not started
+  status: done
   caution: true
 
 - task: Build the agent verb layer in `lib/agent/verbs/` — the typed tool surface
