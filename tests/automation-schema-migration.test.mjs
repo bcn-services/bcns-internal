@@ -363,21 +363,60 @@ function policyStatements() {
   return [...src.matchAll(/create\s+policy[\s\S]*?;/gi)].map((m) => m[0]);
 }
 
+/**
+ * Names called unqualified inside a policy's using/with check expressions.
+ * Everything after `using`/`with check` is expression territory; a call is
+ * `name(`, qualified only when preceded by `schema.`. SQL keywords that take a
+ * parenthesised list (`kind not in (...)`) are not calls.
+ */
+function unqualifiedCalls(stmt) {
+  const found = [];
+  for (const [, expr] of stmt.matchAll(/\b(?:using|with\s+check)\s*(\([\s\S]*?\))(?=\s*(?:using|with\s+check|;))/gi)) {
+    for (const m of expr.matchAll(/(\.)?\b([a-z_][a-z0-9_]*)\s*\(/gi)) {
+      if (m[1]) continue;
+      if (SQL_KEYWORDS.has(m[2].toLowerCase())) continue;
+      found.push(m[2]);
+    }
+  }
+  return found;
+}
+
 describe("0009 guardrails — independent QA", { skip: !toolsPresent && "no local Postgres" }, () => {
   test("no policy expression contains an unqualified function call", () => {
     const stmts = policyStatements();
     assert.equal(stmts.length, 7, `expected 7 policies in 0009, found ${stmts.length}`);
-    // Everything after `using`/`with check` is expression territory. A call is
-    // `name(` ; it is qualified only when preceded by `schema.`.
     for (const s of stmts) {
-      for (const [, expr] of s.matchAll(/\b(?:using|with\s+check)\s*(\([\s\S]*?\))(?=\s*(?:using|with\s+check|;))/gi)) {
-        for (const m of expr.matchAll(/(\.)?\b([a-z_][a-z0-9_]*)\s*\(/gi)) {
-          // `kind not in (...)` is a keyword followed by a paren, not a call.
-          if (!m[1] && SQL_KEYWORDS.has(m[2].toLowerCase())) continue;
-          assert.equal(m[1], ".", `unqualified call ${m[2]}() in policy: ${s.split("\n")[0]}`);
-        }
-      }
+      assert.deepEqual(unqualifiedCalls(s), [],
+        `unqualified call in policy: ${s.split("\n")[0]}`);
     }
+  });
+
+  test("the sweep still catches an unqualified call — mutation check", () => {
+    // The keyword exemption loosened this check; prove it exempts keywords ONLY.
+    const real = policyStatements().find((s) => /account_activity_staff_insert/i.test(s));
+    assert.ok(real, "staff-insert policy not found in 0009");
+    assert.deepEqual(unqualifiedCalls(real), []);
+
+    // Mutate the one thing the exemption sits next to: unqualify is_staff().
+    const mutated = real.replace("public.is_staff()", "is_staff()");
+    assert.notEqual(mutated, real, "mutation did not apply");
+    assert.deepEqual(unqualifiedCalls(mutated), ["is_staff"],
+      "the sweep no longer catches an unqualified is_staff() next to `kind not in (...)`");
+
+    // And the other two callees, in the policies that carry them.
+    for (const [q, u] of [["public.is_admin()", "is_admin()"], ["auth.uid()", "uid()"]]) {
+      const s = policyStatements().find((p) => p.includes(q));
+      assert.ok(s, `no policy calls ${q}`);
+      assert.ok(unqualifiedCalls(s.replaceAll(q, u)).length > 0,
+        `the sweep misses an unqualified ${u}`);
+    }
+
+    // A keyword-shaped mutation must stay exempt (no false positive).
+    assert.deepEqual(
+      unqualifiedCalls(`create policy p on t for insert to authenticated
+        with check (public.is_staff() and kind not in ('a','b') and x = any (array['c']));`),
+      [],
+    );
   });
 
   test("every 0009 policy call resolves under an empty search_path", () => {
