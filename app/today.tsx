@@ -84,17 +84,21 @@ export default async function Today() {
       {!db && <p role="alert">Supabase is not configured, so every number below reads zero.</p>}
       {readFailed && <p role="alert">Could not read the database. The numbers below are not the real ones.</p>}
 
+      {/* Every link in this block carries an explicit scope. The counts are
+          board-wide, and /leads and /tasks now default a member to their own
+          rows — so a bare link would show a member three of the forty-two they
+          just clicked. */}
       <section aria-labelledby="counts">
         <h2 id="counts">Where things stand</h2>
         <dl>
           <div>
             <dt>Leads</dt>
-            <dd><Link href="/leads">{accounts.length}</Link></dd>
+            <dd><Link href="/leads?assigned=anyone">{accounts.length}</Link></dd>
           </div>
           {OPEN_STAGES.map((s) => (
             <div key={s}>
               <dt>{s.replace(/_/g, " ")}</dt>
-              <dd><Link href={`/leads?status=${s}`}>{byStage(s)}</Link></dd>
+              <dd><Link href={`/leads?status=${s}&assigned=anyone`}>{byStage(s)}</Link></dd>
             </div>
           ))}
           <div>
@@ -103,12 +107,12 @@ export default async function Today() {
           </div>
           <div>
             <dt>Open tasks</dt>
-            <dd><Link href="/tasks">{openTasks.length}</Link></dd>
+            <dd><Link href="/tasks?mine=0">{openTasks.length}</Link></dd>
           </div>
           <div>
             <dt>Overdue</dt>
             <dd style={overdue.length > 0 ? { color: "var(--danger)" } : undefined}>
-              <Link href="/tasks">{overdue.length}</Link>
+              <Link href="/tasks?mine=0">{overdue.length}</Link>
             </dd>
           </div>
         </dl>
@@ -163,7 +167,7 @@ export default async function Today() {
           <ul>
             {unowned.slice(0, ROWS).map((a) => (
               <li key={a.id}>
-                <Link href={`/leads?status=${a.status}`}>{a.business_name}</Link> ·{" "}
+                <Link href={`/leads?status=${a.status}&assigned=unassigned`}>{a.business_name}</Link> ·{" "}
                 {a.city ?? "—"} · <span style={{ color: "var(--warn)" }}>{a.status}</span>
               </li>
             ))}

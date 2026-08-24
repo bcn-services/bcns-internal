@@ -2,8 +2,23 @@
  * clients/page.tsx — every client bcns hosts, one row each.
  *
  * Reads through the RLS-governed client, so the list is exactly what this
- * viewer is permitted to see. No role check here: middleware already proved
- * the viewer is staff, and the database is the backstop.
+ * viewer is permitted to see. Middleware already proved the viewer is staff,
+ * and the database is the backstop.
+ *
+ * THE MONTHLY COLUMN IS ADMIN-ONLY, and the whole column goes rather than its
+ * cells: a column of dashes advertises that there is a number here you are not
+ * being shown, which is worse than not raising the question. This is active
+ * income — what bcns bills, every month, forever — and it is the shape of the
+ * business rather than a fact anyone needs to do the work. A lead's deal value
+ * stays visible to everyone for exactly the opposite reason: quoting is the
+ * job.
+ *
+ * The hide is convenience and nothing more. RLS is row-level, so a member's
+ * client row still carries the rate; a determined member reading the network
+ * response would find it. Column-level grants cannot help — admin and member
+ * are both `authenticated` to Postgres, and a column grant cannot tell them
+ * apart. Making this a real boundary means a view or an RPC, which is a bigger
+ * change than the risk currently justifies.
  *
  * A table, not a list: rate is money and belongs in a column that lines up
  * under the rate above it.
@@ -16,7 +31,8 @@ import { getViewer } from "@/lib/supabase-server";
 export const dynamic = "force-dynamic";
 
 export default async function ClientsPage() {
-  const { client: db } = await getViewer();
+  const { role, client: db } = await getViewer();
+  const isAdmin = role === "admin";
   // Unconfigured environment (no Supabase keys): render the empty state
   // instead of a 500, matching the keyless contract the template holds to.
   const clients: Client[] = db ? await listClients(db) : [];
@@ -35,7 +51,7 @@ export default async function ClientsPage() {
                 <th scope="col">Business</th>
                 <th scope="col">Slug</th>
                 <th scope="col">Status</th>
-                <th scope="col">Monthly</th>
+                {isAdmin && <th scope="col">Monthly</th>}
                 <th scope="col">Domain</th>
               </tr>
             </thead>
@@ -48,11 +64,13 @@ export default async function ClientsPage() {
                   {/* A NULL rate means the number was never recorded, NOT that
                       the client is free. Rendering it as $0.00 would state a
                       commercial fact nobody entered. */}
-                  <td>
-                    {c.monthly_rate_cents == null
-                      ? "—"
-                      : `$${centsToDollars(c.monthly_rate_cents)}`}
-                  </td>
+                  {isAdmin && (
+                    <td>
+                      {c.monthly_rate_cents == null
+                        ? "—"
+                        : `$${centsToDollars(c.monthly_rate_cents)}`}
+                    </td>
+                  )}
                   <td>{c.domain ?? "—"}</td>
                 </tr>
               ))}

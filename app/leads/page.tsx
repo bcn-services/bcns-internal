@@ -9,6 +9,18 @@
  * a missing field, line up in a grid, and give money and scores tabular
  * numerals. The action forms sit in their own wrapper so controls never read
  * as part of the record.
+ *
+ * DEAL VALUE IS VISIBLE TO EVERYONE, deliberately, and it is the one money
+ * figure that is. The admin-only rule covers active income and expenses — a
+ * client's monthly rate, the revenue totals — because those are the shape of
+ * the business. A deal value on a lead is the quote, and quoting is employee
+ * work: a member who cannot see the number cannot do the job.
+ *
+ * OWNERSHIP IS ADMIN-ONLY. An admin runs the lead skill, then hands the
+ * results out; a member advances the leads they were given. That is a UI hide,
+ * not the control — `accounts` RLS still lets a member write, and the reason it
+ * does is that the same member must be able to advance a stage and log a call
+ * on the very row they own.
  */
 import Link from "next/link";
 import { listAccounts, STAGES, centsToDollars, type Stage } from "@/lib/accounts";
@@ -29,7 +41,18 @@ export default async function LeadsPage({
     : undefined;
 
   const { role, email, client: db } = await getViewer();
-  const ownerFilter = assigned === "unassigned" || assigned === "mine" ? assigned : undefined;
+  const isAdmin = role === "admin";
+  // Absent means "use my default": an admin opens the whole funnel, a member
+  // opens their own leads. `assigned=anyone` is how either asks for the other
+  // view, so the choice survives a refresh and a shared link.
+  const ownerFilter =
+    assigned === "unassigned" || assigned === "mine"
+      ? assigned
+      : assigned === "anyone"
+        ? undefined
+        : isAdmin
+          ? undefined
+          : "mine";
 
   // The WHOLE directory, not just the active half: a lead may still be owned by
   // someone who has left, and an activeOnly list would render that owner as
@@ -60,12 +83,15 @@ export default async function LeadsPage({
   const stageHref = (s?: Stage) =>
     `/leads?${new URLSearchParams({
       ...(s ? { status: s } : {}),
-      ...(ownerFilter ? { assigned: ownerFilter } : {}),
+      assigned: ownerFilter ?? "anyone",
     })}`;
-  const ownerHref = (o?: "unassigned" | "mine") =>
+  // "Anyone" is spelled out rather than omitted, because an omitted param is
+  // what triggers the role default above — a bare /leads would send a member
+  // straight back to their own list.
+  const ownerHref = (o: "anyone" | "unassigned" | "mine") =>
     `/leads?${new URLSearchParams({
       ...(filter ? { status: filter } : {}),
-      ...(o ? { assigned: o } : {}),
+      assigned: o,
     })}`;
 
   return (
@@ -82,7 +108,7 @@ export default async function LeadsPage({
       </nav>
 
       <nav aria-label="Filter by owner">
-        <Link href={ownerHref()}>Anyone</Link>
+        <Link href={ownerHref("anyone")}>Anyone</Link>
         <Link href={ownerHref("unassigned")}>Unassigned</Link>
         <Link href={ownerHref("mine")}>Mine</Link>
       </nav>
@@ -123,6 +149,7 @@ export default async function LeadsPage({
             </dl>
 
             <div>
+              {isAdmin && (
               <form action={assignLead}>
                 <input type="hidden" name="accountId" value={a.id} />
                 <label>
@@ -143,6 +170,7 @@ export default async function LeadsPage({
                 </label>
                 <button type="submit">Save owner</button>
               </form>
+              )}
 
               <form action={advanceStage}>
                 <input type="hidden" name="accountId" value={a.id} />
@@ -169,7 +197,7 @@ export default async function LeadsPage({
 
               {/* Shown to admins only. A member who forges this post is still
                   stopped by RLS — the UI hide is convenience, not the control. */}
-              {role === "admin" && a.status === "won" && (
+              {isAdmin && a.status === "won" && (
                 <form action={convertLead}>
                   <input type="hidden" name="accountId" value={a.id} />
                   <input name="slug" placeholder="slug (optional)" />

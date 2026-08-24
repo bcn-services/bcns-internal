@@ -1,7 +1,18 @@
 /**
  * tasks/page.tsx — the working board: what is outstanding, who owns it, and
- * when it is due. This is the page the team actually sits on all day, so the
- * default view is "everything", and "Mine" is one click away.
+ * when it is due. This is the page the team actually sits on all day.
+ *
+ * THE DEFAULT VIEW DEPENDS ON WHO YOU ARE. A member lands on their own queue,
+ * because "what do I do next" is the question they open this page with; an
+ * admin lands on the whole board, because "who is loaded and who is idle" is
+ * the question they open it with. Either can see the other view in one click —
+ * this is a default, not a wall, and every task stays readable to everyone.
+ *
+ * WHICH CONTROLS RENDER IS ALSO ROLE-DEPENDENT, and that hiding is convenience.
+ * The control is `tasks_staff_own_update` in 0007: a member's UPDATE matches
+ * only rows assigned to them, and its WITH CHECK stops them reassigning even
+ * those. Forging a form field against a colleague's task gets a denial from
+ * Postgres, not a save.
  *
  * Forms post to server actions in ./actions.ts. No client-side JavaScript is
  * required for any of it, which is why the buttons are plain form submits and
@@ -38,7 +49,11 @@ export default async function TasksPage({
 
   // "Mine" with no profile row would silently list everything, which reads as a
   // bug. Filter on an id that matches nothing instead, so the board is honest.
-  const mineOnly = mine === "1";
+  // Absent means "use my default", which differs by role — see the header.
+  // `?mine=0` is how either role asks for the other view, so the choice
+  // survives a refresh and a shared link.
+  const isAdmin = role === "admin";
+  const mineOnly = mine === undefined ? !isAdmin : mine === "1";
   const tasks =
     db && !(mineOnly && !me)
       ? await listTasks(db, {
@@ -58,11 +73,11 @@ export default async function TasksPage({
       {error && <p role="alert"><strong>Could not save:</strong> {error}</p>}
 
       <nav aria-label="Filter tasks">
-        <Link href="/tasks">All</Link>
+        <Link href="/tasks?mine=0">All</Link>
         <Link href="/tasks?mine=1">Mine</Link>
         <Link href="/tasks?open=1">Open</Link>
         {TASK_STATUSES.map((s) => (
-          <Link key={s} href={`/tasks?status=${s}`}>{s}</Link>
+          <Link key={s} href={`/tasks?status=${s}&mine=${mineOnly ? "1" : "0"}`}>{s}</Link>
         ))}
       </nav>
 
@@ -130,6 +145,9 @@ export default async function TasksPage({
             </dl>
             {t.details && <p>{t.details}</p>}
 
+            {/* A member sees this only on their own work. Rendering it on a
+                colleague's task would offer a save that RLS refuses. */}
+            {(isMine || isAdmin) && (
             <form action={setStatus}>
               <input type="hidden" name="taskId" value={t.id} />
               <label>
@@ -140,7 +158,11 @@ export default async function TasksPage({
               </label>
               <button type="submit">Save status</button>
             </form>
+            )}
 
+            {/* Assignment is an admin action. 0007's WITH CHECK is what makes
+                that true; this only keeps a member from being offered it. */}
+            {isAdmin && (
             <form action={setAssignee}>
               <input type="hidden" name="taskId" value={t.id} />
               <label>
@@ -154,14 +176,10 @@ export default async function TasksPage({
               </label>
               <button type="submit">Save assignee</button>
             </form>
+            )}
           </article>
         );
       })}
-
-      {/* Shown to admins only. A member who navigates there anyway is stopped by
-          the middleware gate and by RLS — the UI hide is convenience, not the
-          control. */}
-      {role === "admin" && <p><Link href="/admin">Staff directory</Link></p>}
     </main>
   );
 }
