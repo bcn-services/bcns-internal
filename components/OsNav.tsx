@@ -7,8 +7,10 @@
  * `/projects` instead. Every other section keeps its real href, so
  * `fileHrefsFor()` (which mints `/files?file=…`) needs no rewriting.
  *
- * Sections whose pages were NOT ported — chat, insights, notes — are not
- * listed: they read `~/.claude`, which a server does not have.
+ * Every section now has a page. Chat, insights and notes were the three that
+ * read a laptop; each was re-pointed at Postgres or at the model, so the
+ * PORTED gate below is now the full section list and is kept only as the one
+ * place that would narrow again if a section were removed.
  */
 import Link from "next/link";
 import { SECTIONS } from "@/lib/os/sections";
@@ -18,8 +20,8 @@ export function osHref(sectionHref: string): string {
   return sectionHref === "/" ? "/projects" : sectionHref;
 }
 
-/** Sections with a ported page. Everything else depends on unported libs. */
-const PORTED = new Set(["/graph", "/", "/files"]);
+/** Sections with a page. A section missing from here is listed nowhere. */
+const PORTED = new Set(["/graph", "/", "/chat", "/files", "/insights", "/notes"]);
 
 export default function OsNav({ current }: { current: string }) {
   return (

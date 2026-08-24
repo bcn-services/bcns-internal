@@ -13,7 +13,7 @@ import {
   STAGES, TERMINAL_STAGES, isUuid, isStage, isValidSlug, slugify,
   dollarsToCents, centsToDollars, InvalidInputError,
   listAccounts, getAccount, setAccountStatus, logActivity,
-  listClients, getClientBySlug, convertAccountToClient,
+  listClients, getClientBySlug, convertAccountToClient, assignAccount,
 } from "../lib/accounts.ts";
 
 const ID = "11111111-1111-4111-8111-111111111111";
@@ -33,6 +33,7 @@ function fakeDb(responses = {}) {
       insert: (row) => (rec.ops.push(["insert", row]), b),
       update: (row) => (rec.ops.push(["update", row]), b),
       eq: (col, val) => (rec.ops.push(["eq", col, val]), b),
+      is: (col, val) => (rec.ops.push(["is", col, val]), b),
       order: (col, o) => (rec.ops.push(["order", col, o]), settle()),
       single: () => (rec.ops.push(["single"]), settle()),
       maybeSingle: () => (rec.ops.push(["maybeSingle"]), settle()),
@@ -51,7 +52,7 @@ function fakeDb(responses = {}) {
 
 test("stage vocabulary matches the database CHECK constraint", () => {
   assert.deepEqual([...STAGES], [
-    "prospect", "attempted", "reached", "consult_scheduled",
+    "new", "attempted", "reached", "consult_scheduled",
     "consult_done", "won", "lost", "dead",
   ]);
   assert.deepEqual([...TERMINAL_STAGES], ["won", "lost", "dead"]);
@@ -138,7 +139,10 @@ test("logActivity records kind, note and actor", async () => {
   assert.equal(ins.account_id, ID);
   assert.equal(ins.kind, "call");
   assert.equal(ins.note, "left voicemail");
-  assert.equal(ins.actor, null, "actor is optional and stored as null, not undefined");
+  // The KEY is what matters here: the table column is `actor_email`, and
+  // PostgREST 400s an insert naming a column that does not exist.
+  assert.ok("actor_email" in ins, "must write actor_email, the real column name in 0001");
+  assert.equal(ins.actor_email, null, "actor is optional and stored as null, not undefined");
 });
 
 test("convert marks the account won, sets a close date, and creates the client", async () => {
@@ -189,4 +193,40 @@ test("listClients sorts by slug", async () => {
   const db = fakeDb({ clients: { data: [], error: null } });
   await listClients(db);
   assert.deepEqual(db.calls[0].ops.at(-1), ["order", "slug", { ascending: true }]);
+});
+
+/**
+ * Assignment. The filter distinguishes three states, not two: no filter at all,
+ * "owned by this person", and "owned by nobody". `null` is a real value here,
+ * so any check written as a truthiness test collapses the third into the first
+ * and quietly returns every lead when the page asked for the unassigned ones.
+ */
+test("listAccounts filters unassigned with IS NULL, not equality", async () => {
+  const db = fakeDb({ accounts: { data: [], error: null } });
+  await listAccounts(db, { assignedTo: null });
+  assert.deepEqual(db.calls[0].ops[1], ["is", "assigned_to", null]);
+});
+
+test("listAccounts with no assignee filter adds no ownership clause", async () => {
+  const db = fakeDb({ accounts: { data: [], error: null } });
+  await listAccounts(db);
+  assert.ok(!db.calls[0].ops.some((o) => o[1] === "assigned_to"));
+});
+
+test("listAccounts rejects a non-uuid assignee before querying", async () => {
+  const db = fakeDb();
+  await assert.rejects(() => listAccounts(db, { assignedTo: "nate" }), InvalidInputError);
+  assert.equal(db.calls.length, 0, "a bad filter must never reach the database");
+});
+
+test("assignAccount writes NULL to unassign", async () => {
+  const ID = "11111111-1111-4111-8111-111111111111";
+  const db = fakeDb({ "accounts.update.eq.select.single": { data: { id: ID }, error: null } });
+  await assignAccount(db, ID, null);
+  assert.deepEqual(db.calls[0].ops[0], ["update", { assigned_to: null }]);
+});
+
+test("assignAccount rejects a non-uuid assignee", async () => {
+  const ID = "11111111-1111-4111-8111-111111111111";
+  await assert.rejects(() => assignAccount(fakeDb(), ID, "brandon"), InvalidInputError);
 });

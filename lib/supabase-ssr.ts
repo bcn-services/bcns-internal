@@ -52,9 +52,20 @@ export function getSsrClient(
  * Never throws: network or parse failures degrade to "no user", which the gate
  * treats as unauthenticated (deny-by-default).
  */
+/**
+ * The narrow slice of the Supabase user this app reads. Deliberately not
+ * `User` from supabase-js: widening it invites reading user_metadata, which is
+ * user-writable and must never decide anything. `email` is a verified claim and
+ * is safe to record as an author.
+ */
+export type SessionUser = {
+  app_metadata?: { role?: unknown } & Record<string, unknown>;
+  email?: string | null;
+};
+
 export async function getSessionUser(
   client: SupabaseClient | null,
-): Promise<{ app_metadata?: { role?: unknown } & Record<string, unknown> } | null> {
+): Promise<SessionUser | null> {
   if (!client) return null;
   try {
     const { data, error } = await client.auth.getUser();

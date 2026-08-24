@@ -13,7 +13,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getViewer } from "@/lib/supabase-server";
 import {
-  setAccountStatus, logActivity, convertAccountToClient, isStage, InvalidInputError,
+  setAccountStatus, logActivity, convertAccountToClient, assignAccount,
+  isStage, isUuid, InvalidInputError,
 } from "@/lib/accounts";
 
 /**
@@ -77,6 +78,42 @@ async function addNoteImpl(formData: FormData): Promise<ActionResult> {
   }
 }
 
+/**
+ * Set or clear a lead's owner.
+ *
+ * The UPDATE is written here rather than in lib/accounts.ts because that file
+ * does not yet know about `assigned_to` and is not this change's to edit — it
+ * belongs there as `assignAccount(db, id, profileId)`.
+ *
+ * Both ids are checked as UUIDs before the query so a malformed value never
+ * reaches PostgREST, and an empty select becomes SQL NULL, never the string "".
+ * RLS still decides whether the write lands.
+ */
+async function assignLeadImpl(formData: FormData): Promise<ActionResult> {
+  try {
+    const { db } = await requireDb();
+    const id = String(formData.get("accountId") ?? "");
+    if (!isUuid(id)) throw new InvalidInputError(`bad account id: ${id}`);
+
+    // Blank means unassign, which is a real operation — assignAccount takes
+    // null for it and validates the id itself.
+    const raw = String(formData.get("assignedTo") ?? "").trim();
+    const profileId = raw === "" ? null : raw;
+    await assignAccount(db, id, profileId);
+
+    // Ownership changes are history too — the same trace a stage move leaves.
+    await logActivity(db, {
+      accountId: id,
+      kind: "assign",
+      note: profileId === null ? "unassigned" : `assigned to ${profileId}`,
+    });
+    revalidatePath("/leads");
+    return { ok: true };
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 /** Admin-only in practice; enforced by RLS, not by a check here. */
 async function convertLeadImpl(formData: FormData): Promise<ActionResult> {
   try {
@@ -106,4 +143,7 @@ export async function addNote(formData: FormData): Promise<void> {
 }
 export async function convertLead(formData: FormData): Promise<void> {
   finish(await convertLeadImpl(formData), "/leads");
+}
+export async function assignLead(formData: FormData): Promise<void> {
+  finish(await assignLeadImpl(formData), "/leads");
 }

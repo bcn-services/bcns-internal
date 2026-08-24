@@ -30,8 +30,15 @@ export async function getServerClient(): Promise<SupabaseClient | null> {
  * route; this is for rendering decisions (show the admin button or not) and
  * for the second check inside a mutating server action.
  */
-export async function getViewer(): Promise<{ role: Role | null; client: SupabaseClient | null }> {
+export async function getViewer(): Promise<{
+  role: Role | null;
+  email: string | null;
+  client: SupabaseClient | null;
+}> {
   const client = await getServerClient();
   const user = await getSessionUser(client);
-  return { role: resolveRole(user), client };
+  // email comes from the verified session, never from a form field. RLS
+  // compares the same claim, so an author recorded here matches what the
+  // database will later accept as that person's own row.
+  return { role: resolveRole(user), email: user?.email ?? null, client };
 }

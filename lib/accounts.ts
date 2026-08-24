@@ -13,7 +13,7 @@
 
 /** The eight funnel stages. Order is the funnel order; the DB CHECK matches. */
 export const STAGES = [
-  "prospect",
+  "new",
   "attempted",
   "reached",
   "consult_scheduled",
@@ -99,6 +99,8 @@ export interface Account {
   deal_value_cents: number | null;
   source_query: string | null;
   date_added: string | null;
+  /** profiles.id of the person who owns this lead, or null for unassigned. */
+  assigned_to: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -109,13 +111,26 @@ export interface Client {
   account_id: string;
   slug: string;
   status: string;
+  /** NULL means the rate was never recorded, NOT that the client is free. */
+  monthly_rate_cents: number | null;
+  domain: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * business_name of the account this client came from. Flattened here rather
+   * than left as an embed: PostgREST returns an object for a to-one join but
+   * supabase-js cannot see the FK cardinality and types it as an array, so
+   * every caller would otherwise repeat the same normalizer.
+   */
+  business_name: string | null;
 }
 
 const ACCOUNT_COLUMNS =
-  "id, place_id, business_name, business_type, city, phone, website, has_website, rating, review_count, lead_score, score_reason, status, call_count, last_contact, contact_name, last_outcome, consult_date, close_date, deal_value_cents, source_query, date_added, notes, created_at, updated_at";
-const CLIENT_COLUMNS = "id, account_id, slug, status, created_at, updated_at";
+  "id, place_id, business_name, business_type, city, phone, website, has_website, rating, review_count, lead_score, score_reason, status, call_count, last_contact, contact_name, last_outcome, consult_date, close_date, deal_value_cents, source_query, date_added, assigned_to, notes, created_at, updated_at";
+const CLIENT_COLUMNS =
+  "id, account_id, slug, status, monthly_rate_cents, domain, created_at, updated_at";
+/** CLIENT_COLUMNS plus the one account field the client views need. */
+const CLIENT_SELECT = `${CLIENT_COLUMNS}, account:accounts(business_name)`;
 
 /** Structural shape of the query builder used here — see lib/jobs.ts rationale. */
 interface Result<T> {
@@ -135,14 +150,22 @@ function unwrap<T>(res: Result<T>, what: string): T {
 /** All accounts, newest first. RLS decides which rows come back. */
 export async function listAccounts(
   db: Client_,
-  opts: { status?: Stage } = {},
+  opts: { status?: Stage; assignedTo?: string | null } = {},
 ): Promise<Account[]> {
   // Validate BEFORE touching the client, so a bad filter never issues a query.
   if (opts.status !== undefined && !isStage(opts.status)) {
     throw new InvalidInputError(`bad status: ${opts.status}`);
   }
+  // `null` is a meaningful filter here (unassigned), so absence is tested with
+  // `undefined`, never falsiness — `if (opts.assignedTo)` would silently drop
+  // the unassigned filter and return every lead instead.
+  if (opts.assignedTo !== undefined && opts.assignedTo !== null && !isUuid(opts.assignedTo)) {
+    throw new InvalidInputError(`bad assignee id: ${opts.assignedTo}`);
+  }
   let q = db.from("accounts").select(ACCOUNT_COLUMNS);
   if (opts.status !== undefined) q = q.eq("status", opts.status);
+  if (opts.assignedTo === null) q = q.is("assigned_to", null);
+  else if (opts.assignedTo !== undefined) q = q.eq("assigned_to", opts.assignedTo);
   return unwrap<Account[]>(await q.order("created_at", { ascending: false }), "listAccounts");
 }
 
@@ -171,6 +194,29 @@ export async function setAccountStatus(
   );
 }
 
+/**
+ * Give a lead an owner, or `null` to return it to the unassigned pool.
+ *
+ * Unassigning is a real operation, not a missing argument, so the parameter is
+ * required and explicitly nullable — an optional one would make a forgotten
+ * argument look like a deliberate unassign.
+ */
+export async function assignAccount(
+  db: Client_,
+  id: string,
+  profileId: string | null,
+): Promise<Account> {
+  if (!isUuid(id)) throw new InvalidInputError(`bad account id: ${id}`);
+  if (profileId !== null && !isUuid(profileId)) {
+    throw new InvalidInputError(`bad assignee id: ${profileId}`);
+  }
+  return unwrap<Account>(
+    await db.from("accounts").update({ assigned_to: profileId }).eq("id", id)
+      .select(ACCOUNT_COLUMNS).single(),
+    "assignAccount",
+  );
+}
+
 /** Append one contact record. This is the history the lead sheet could not keep. */
 export async function logActivity(
   db: Client_,
@@ -182,27 +228,42 @@ export async function logActivity(
     account_id: input.accountId,
     kind: input.kind.trim(),
     note: input.note ?? null,
-    actor: input.actor ?? null,
+    // Column is `actor_email` in 0001, not `actor` — PostgREST rejects an
+    // unknown column outright, so a mismatch here 400s every write.
+    actor_email: input.actor ?? null,
   });
   if (res.error) throw new Error(`logActivity: ${res.error.message}`);
 }
 
+/** One embedded account, in whichever shape supabase-js decided to type it. */
+type AccountEmbed = { business_name: string } | { business_name: string }[] | null;
+
+function flattenClient(row: Client & { account?: AccountEmbed }): Client {
+  const { account, ...rest } = row;
+  return {
+    ...rest,
+    business_name:
+      (Array.isArray(account) ? account[0]?.business_name : account?.business_name) ?? null,
+  };
+}
+
 export async function listClients(db: Client_): Promise<Client[]> {
-  return unwrap<Client[]>(
-    await db.from("clients").select(CLIENT_COLUMNS).order("slug", { ascending: true }),
+  const rows = unwrap<(Client & { account?: AccountEmbed })[]>(
+    await db.from("clients").select(CLIENT_SELECT).order("slug", { ascending: true }),
     "listClients",
   );
+  return rows.map(flattenClient);
 }
 
 export async function getClientBySlug(db: Client_, slug: string): Promise<Client | null> {
   if (!isValidSlug(slug)) throw new InvalidInputError(`bad slug: ${slug}`);
-  const res: Result<Client> = await db
+  const res: Result<Client & { account?: AccountEmbed }> = await db
     .from("clients")
-    .select(CLIENT_COLUMNS)
+    .select(CLIENT_SELECT)
     .eq("slug", slug)
     .maybeSingle();
   if (res.error) throw new Error(`getClientBySlug: ${res.error.message}`);
-  return res.data ?? null;
+  return res.data ? flattenClient(res.data) : null;
 }
 
 /**
@@ -235,7 +296,9 @@ export async function convertAccountToClient(
   const upd: Result<unknown> = await db.from("accounts").update(patch).eq("id", account.id);
   if (upd.error) throw new Error(`convertAccountToClient (account): ${upd.error.message}`);
 
-  return unwrap<Client>(
+  // The account's name is already in hand, so this row is completed locally
+  // rather than paying for an embed on the insert's RETURNING clause.
+  const created = unwrap<Client>(
     await db
       .from("clients")
       .insert({ account_id: account.id, slug, status: "active" })
@@ -243,4 +306,5 @@ export async function convertAccountToClient(
       .single(),
     "convertAccountToClient (client)",
   );
+  return { ...created, business_name: account.business_name };
 }
