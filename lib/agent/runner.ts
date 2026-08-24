@@ -43,7 +43,7 @@
  */
 import { execFile } from "node:child_process";
 import { accessSync, constants } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { osDir } from "../os/paths";
@@ -73,12 +73,20 @@ const AGENT_TOOLS = "Read,Edit,Write,Glob,Grep,Skill";
  *   skills/**                   → the skills the buttons run
  *   agents/**                   → subagent definitions
  *   .claude/**                  → settings.json hooks are arbitrary commands
+ *   .claude-plugin/**           → the plugin manifest can declare hooks too
  *
  * Patterns are RELATIVE to cwd, which is already the os clone. `Write(X)` and
  * `Edit(X)` match at any depth, so a nested `projects/x/CLAUDE.md` is covered
  * by the bare pattern.
  */
-const DENY_PATHS = ["CLAUDE.md", "CLAUDE.local.md", "skills/**", "agents/**", ".claude/**"];
+const DENY_PATHS = [
+  "CLAUDE.md",
+  "CLAUDE.local.md",
+  "skills/**",
+  "agents/**",
+  ".claude/**",
+  ".claude-plugin/**",
+];
 const DENY_SETTINGS = JSON.stringify({
   permissions: { deny: DENY_PATHS.flatMap((p) => [`Write(${p})`, `Edit(${p})`]) },
 });
@@ -163,7 +171,12 @@ export function timeoutMs(requested?: number): number {
  * assembling these flags itself is how a sandbox rule goes missing from one
  * path only, so the options here are the only knobs.
  */
-export function buildArgs(opts: { sessionId?: string; model?: string }): string[] {
+export function buildArgs(opts: {
+  sessionId?: string;
+  model?: string;
+  /** The os CLAUDE.md, read by the caller. See instructions(). */
+  instructions?: string;
+}): string[] {
   const args = [
     "-p",
     "--tools",
@@ -174,6 +187,21 @@ export function buildArgs(opts: { sessionId?: string; model?: string }): string[
     // keeps hooks (arbitrary commands) and inherited allow-rules out of a run.
     "--setting-sources",
     "",
+    // ...and then load the skills back, from the os clone itself. Skill
+    // discovery normally rides on the USER setting source, so the line above
+    // would leave a run with only the CLI's bundled skills. A plugin directory
+    // is read independently of setting sources, so this is the one way to have
+    // all of bcns-os and none of anyone's settings.json. Skills arrive
+    // namespaced: `bcns-os:pitch`, not `pitch`.
+    //
+    // "." because cwd IS the os clone (see runAgent). The manifest at
+    // <os>/.claude-plugin/plugin.json is what makes the directory loadable, and
+    // DENY_PATHS above keeps a run from editing it.
+    //
+    // CLAUDE.md does not travel inside a plugin — it loads because it sits at
+    // cwd, which `--setting-sources ''` does not suppress.
+    "--plugin-dir",
+    ".",
     "--settings",
     DENY_SETTINGS,
     "--output-format",
@@ -181,8 +209,29 @@ export function buildArgs(opts: { sessionId?: string; model?: string }): string[
     "--model",
     model(opts.model),
   ];
+  // CLAUDE.md is suppressed by `--setting-sources ''` — project instructions
+  // load through the project setting source, and `--add-dir` does not bring
+  // them back (both checked against the live CLI). It goes in as system prompt
+  // text instead, which keeps the no-settings.json rule whole. The file is
+  // write-denied above, so this is the same content a laptop session reads and
+  // a run cannot edit what its next run will be told.
+  if (opts.instructions?.trim()) args.push("--append-system-prompt", opts.instructions);
   if (opts.sessionId) args.push("--resume", opts.sessionId);
   return args;
+}
+
+/**
+ * The os CLAUDE.md, or "" if it is unreadable. A missing file is not fatal:
+ * the skills still run, they just run without the house rules, and failing the
+ * whole request over a doc would be worse than degrading.
+ */
+export async function instructions(dir: string): Promise<string> {
+  try {
+    return await readFile(join(dir, "CLAUDE.md"), "utf-8");
+  } catch (err) {
+    console.warn("[agent] no CLAUDE.md at", dir, err);
+    return "";
+  }
 }
 
 /**
@@ -389,7 +438,7 @@ export async function runAgent(
   }
 
   const bin = claudeBin();
-  const args = buildArgs({ sessionId, model: opts.model });
+  const args = buildArgs({ sessionId, model: opts.model, instructions: await instructions(cwd) });
   const timeout = timeoutMs(opts.timeoutMs);
 
   inFlight++;

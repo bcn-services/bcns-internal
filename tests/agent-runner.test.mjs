@@ -51,6 +51,28 @@ describe("buildArgs — the sandbox", () => {
     assert.equal(args[i + 1], "");
   });
 
+  test("loads bcns-os as a plugin, relative to cwd", () => {
+    // --setting-sources '' switches off skill discovery, which rides on the
+    // user setting source. A plugin directory is read independently of it, so
+    // this pair is what gives a run every os skill and no settings.json.
+    // Relative, because cwd is already the os clone — an absolute path here
+    // would be a second spelling of OS_DIR.
+    const args = buildArgs({});
+    const i = args.indexOf("--plugin-dir");
+    assert.notEqual(i, -1);
+    assert.equal(args[i + 1], ".");
+  });
+
+  test("carries CLAUDE.md in as system prompt text, and omits the flag when empty", () => {
+    // `--setting-sources ''` suppresses project instructions along with
+    // settings.json, so without this a run has the skills but none of the
+    // house rules that tell it how to use them.
+    const withIt = buildArgs({ instructions: "# bcns-os\nrule" });
+    assert.equal(withIt[withIt.indexOf("--append-system-prompt") + 1], "# bcns-os\nrule");
+    assert.ok(!buildArgs({}).includes("--append-system-prompt"));
+    assert.ok(!buildArgs({ instructions: "   " }).includes("--append-system-prompt"));
+  });
+
   test("fixes the tool set and does not include Bash", () => {
     const args = buildArgs({});
     const tools = args[args.indexOf("--tools") + 1].split(",");
@@ -63,7 +85,14 @@ describe("buildArgs — the sandbox", () => {
   test("denies writes to every surface that auto-loads into a later session", () => {
     const settings = JSON.parse(buildArgs({})[buildArgs({}).indexOf("--settings") + 1]);
     const deny = settings.permissions.deny;
-    for (const path of ["CLAUDE.md", "CLAUDE.local.md", "skills/**", "agents/**", ".claude/**"]) {
+    for (const path of [
+      "CLAUDE.md",
+      "CLAUDE.local.md",
+      "skills/**",
+      "agents/**",
+      ".claude/**",
+      ".claude-plugin/**",
+    ]) {
       assert.ok(deny.includes(`Write(${path})`), `missing Write(${path})`);
       assert.ok(deny.includes(`Edit(${path})`), `missing Edit(${path})`);
     }
