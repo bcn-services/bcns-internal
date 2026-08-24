@@ -1,176 +1,126 @@
 /**
- * page.tsx — the morning dashboard. It replaced a link list that duplicated the
- * sidebar verbatim: with the shell nav present, restating the routes told the
- * owner nothing, so the front door now answers "what needs me today" instead.
+ * page.tsx — the brain. The front door is the knowledge graph over $OS_DIR,
+ * with the morning board underneath it.
  *
- * Every number is derived from three list reads, not per-number queries. The
- * board is 2–6 users and a few thousand accounts, so counting in JS is cheaper
- * than a round trip per tile, and it keeps this page inside the injected-client
- * data layer rather than issuing its own PostgREST calls.
+ * The graph moved here from /graph because it is the one surface that answers
+ * "what does this company know" rather than "what is on my plate", and because
+ * it is how anyone without os cloned reaches knowledge/audience/ and
+ * knowledge/library/bcns/ — a node click opens the file in a popup.
  *
- * The reads are wrapped together: a dev environment can legitimately be missing
- * the tasks or profiles tables, and a dashboard that 500s on the front door is
- * worse than one reporting zeroes with a banner.
+ * ONE walk, reused: `buildTree` then `getGraph(root, dirs, tree)`, so the page
+ * does not walk $OS_DIR twice. An unreadable root throws out of `buildTree`
+ * rather than degrading to a successful empty graph — that is what puts the
+ * banner on screen instead of a silently empty sky.
+ *
+ * The node list below the canvas is not decoration: it is the whole page for a
+ * reader with no JavaScript or no WebGL, and it is what a screen reader walks.
  */
+import { osDir } from "@/lib/os/paths";
+import { buildTree } from "@/lib/os/osFiles";
+import type { TreeNode } from "@/lib/os/osFiles";
+import { getGraph, GRAPH_EXCLUDE_DIRS, focusClusters, fileHrefsFor } from "@/lib/os/graph";
+import type { GraphData, GraphNode } from "@/lib/os/graph";
 import Link from "next/link";
-import { listAccounts, listClients, STAGES, TERMINAL_STAGES, type Account } from "@/lib/accounts";
-import { listTasks, OPEN_STATUSES, type TaskWithRefs } from "@/lib/tasks";
-import { listProfiles } from "@/lib/profiles";
-import { getViewer } from "@/lib/supabase-server";
+import BrainGraph from "./brain-graph";
+import type { BrainNode } from "./brain-graph";
+import Today from "./today";
 
 export const dynamic = "force-dynamic";
 
-/** Stages still in play. The terminal three are history, not attention. */
-const OPEN_STAGES = STAGES.filter((s) => !TERMINAL_STAGES.includes(s));
+/**
+ * ONE rule for kind -> display text, computed here and read by the canvas
+ * tooltip and the list alike. Written twice, it drifts — that is this
+ * codebase's most expensive bug family.
+ */
+const displayLabel = (node: GraphNode): string =>
+  node.kind === "folder" ? `${node.label}/` : node.kind === "stub" ? `${node.label} (missing)` : node.label;
 
-const ROWS = 8;
-
-export default async function HomePage() {
-  const { role, email, client: db } = await getViewer();
-  // Dates are stored as YYYY-MM-DD, so a string compare is the date compare —
-  // no timezone maths, and no Date object per row.
-  const today = new Date().toISOString().slice(0, 10);
-
-  let accounts: Account[] = [];
-  let clients: { status: string }[] = [];
-  let openTasks: TaskWithRefs[] = [];
-  let me: string | null = null;
-  let readFailed = false;
-
-  if (db) {
-    try {
-      const [a, c, t, profiles] = await Promise.all([
-        listAccounts(db),
-        listClients(db),
-        listTasks(db, { openOnly: true }),
-        listProfiles(db),
-      ]);
-      accounts = a;
-      clients = c;
-      openTasks = t;
-      // getViewer() hands back the session email, but tasks point at a profile
-      // id, so the directory is the only bridge between the two.
-      me = profiles.find((p) => p.email === email)?.id ?? null;
-    } catch (err) {
-      console.error("[dashboard] read failed:", err);
-      readFailed = true;
-    }
+export default async function BrainPage() {
+  const root = osDir();
+  let graph: GraphData = { nodes: [], edges: [] };
+  let tree: TreeNode[] = [];
+  let loadError = false;
+  try {
+    tree = await buildTree(root, GRAPH_EXCLUDE_DIRS);
+    graph = await getGraph(root, GRAPH_EXCLUDE_DIRS, tree);
+  } catch (err) {
+    console.warn("[brain] getGraph failed:", err);
+    loadError = true;
   }
 
-  const isOverdue = (t: TaskWithRefs) =>
-    t.due_date != null && t.due_date < today && OPEN_STATUSES.includes(t.status);
+  // Derived from the SAME graph object loaded above, never a second call. On
+  // loadError `graph` is empty, so `clusters.total === 0` and the block omits.
+  const clusters = focusClusters(graph);
 
-  // listTasks already orders soonest-due-first with undated work last, so every
-  // slice below inherits that order for free.
-  const overdue = openTasks.filter(isOverdue);
-  const mine = me ? openTasks.filter((t) => t.assigned_to === me) : [];
-  const activeClients = clients.filter((c) => c.status === "active");
-  // An open lead with no owner is work nobody has agreed to do. Terminal stages
-  // are excluded: a won or lost lead needs no owner and would otherwise bury
-  // the live ones under history.
-  const unowned = accounts.filter(
-    (a) => a.assigned_to === null && (OPEN_STAGES as readonly string[]).includes(a.status),
-  );
+  // A NEW array, never a mutation: getGraph freezes its result and a committed
+  // test asserts a cache hit returns the identical object.
+  const nodes: BrainNode[] = graph.nodes.map((n) => ({
+    id: n.id,
+    kind: n.kind,
+    label: n.label,
+    display: displayLabel(n),
+    relPath: n.relPath ?? null,
+  }));
+  const edges = graph.edges.map((e) => ({ source: e.source, target: e.target, kind: e.kind }));
 
-  const byStage = (stage: string) => accounts.filter((a) => a.status === stage).length;
+  // The fallback list keeps real links even though the canvas opens a popup:
+  // with no JavaScript there is no popup, and an unlinked list of filenames is
+  // a table of contents for a book the reader cannot open. /files is unlinked
+  // from the nav but still served, and it is also where a wikilink inside a
+  // popup lands.
+  const hrefs = fileHrefsFor(graph.nodes);
+
+  const countOf = (kind: string) => graph.nodes.filter((n) => n.kind === kind).length;
+  const linkEdges = graph.edges.filter((e) => e.kind === "link").length;
+  const containsEdges = graph.edges.length - linkEdges;
 
   return (
     <main>
-      <h1>Today</h1>
-      <p>Signed in as <strong>{role ?? "unprovisioned"}</strong>.</p>
+      <h1>Brain</h1>
 
-      {!db && <p role="alert">Supabase is not configured, so every number below reads zero.</p>}
-      {readFailed && <p role="alert">Could not read the database. The numbers below are not the real ones.</p>}
+      {loadError ? (
+        <p role="alert">Could not read $OS_DIR.</p>
+      ) : (
+        <>
+          <BrainGraph nodes={nodes} edges={edges} />
+          {/* A fact about what is drawn, not a caption — it has to keep matching
+              the canvas aria-label in brain-graph.tsx. Change both together. */}
+          <p>
+            {countOf("note")} notes, {countOf("folder")} folders and {countOf("stub")} missing
+            link targets, connected by {linkEdges} links and {containsEdges} folder edges.
+          </p>
+        </>
+      )}
 
-      <section aria-labelledby="counts">
-        <h2 id="counts">Where things stand</h2>
-        <dl>
-          <div>
-            <dt>Leads</dt>
-            <dd><Link href="/leads">{accounts.length}</Link></dd>
-          </div>
-          {OPEN_STAGES.map((s) => (
-            <div key={s}>
-              <dt>{s.replace(/_/g, " ")}</dt>
-              <dd><Link href={`/leads?status=${s}`}>{byStage(s)}</Link></dd>
-            </div>
-          ))}
-          <div>
-            <dt>Active clients</dt>
-            <dd><Link href="/clients">{activeClients.length}</Link></dd>
-          </div>
-          <div>
-            <dt>Open tasks</dt>
-            <dd><Link href="/tasks">{openTasks.length}</Link></dd>
-          </div>
-          <div>
-            <dt>Overdue</dt>
-            <dd style={overdue.length > 0 ? { color: "var(--danger)" } : undefined}>
-              <Link href="/tasks">{overdue.length}</Link>
-            </dd>
-          </div>
-        </dl>
-      </section>
-
-      <section aria-labelledby="mine">
-        <h2 id="mine">My open work</h2>
-        {me == null ? (
-          <p>No profile matches {email ?? "this session"}, so nothing can be assigned to you yet.</p>
-        ) : mine.length === 0 ? (
-          <p>Nothing assigned to you. <Link href="/tasks">The board</Link> has {openTasks.length} open.</p>
-        ) : (
+      {clusters.total > 0 && (
+        <section aria-labelledby="focus-clusters">
+          <h2 id="focus-clusters">Focus clusters</h2>
+          <p>
+            {clusters.attributed} attributed · {clusters.unattributed} unattributed
+          </p>
           <ul>
-            {mine.slice(0, ROWS).map((t) => (
-              <li key={t.id}>
-                <Link href="/tasks">{t.title}</Link>
-                {t.account && ` · ${t.account.business_name}`}
-                {" · "}
-                <span style={isOverdue(t) ? { color: "var(--danger)" } : undefined}>
-                  {t.due_date ?? "no due date"}
-                </span>
+            {clusters.clusters.map((c) => (
+              <li key={c.project}>
+                {c.project} — {c.count} ({c.pct}%)
               </li>
             ))}
           </ul>
-        )}
-        {mine.length > ROWS && <p><Link href="/tasks">All {mine.length} of mine</Link></p>}
-      </section>
+        </section>
+      )}
 
-      <section aria-labelledby="attention">
-        <h2 id="attention">Needs attention</h2>
+      <details>
+        <summary>{graph.nodes.length} nodes</summary>
+        <ul>
+          {nodes.map((node) => {
+            const href = hrefs.get(node.id) ?? null;
+            return (
+              <li key={node.id}>{href ? <Link href={href}>{node.display}</Link> : node.display}</li>
+            );
+          })}
+        </ul>
+      </details>
 
-        <h3>Overdue tasks</h3>
-        {overdue.length === 0 ? (
-          <p>Nothing overdue.</p>
-        ) : (
-          <ul>
-            {overdue.slice(0, ROWS).map((t) => (
-              <li key={t.id}>
-                <span style={{ color: "var(--danger)" }}>{t.due_date}</span> ·{" "}
-                <Link href="/tasks">{t.title}</Link>
-                {t.assignee ? ` · ${t.assignee.display_name}` : " · unassigned"}
-              </li>
-            ))}
-          </ul>
-        )}
-        {overdue.length > ROWS && <p><Link href="/tasks">All {overdue.length} overdue</Link></p>}
-
-        <h3>Unassigned leads</h3>
-        {unowned.length === 0 ? (
-          <p>Every open lead has an owner.</p>
-        ) : (
-          <ul>
-            {unowned.slice(0, ROWS).map((a) => (
-              <li key={a.id}>
-                <Link href={`/leads?status=${a.status}`}>{a.business_name}</Link> ·{" "}
-                {a.city ?? "—"} · <span style={{ color: "var(--warn)" }}>{a.status}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {unowned.length > ROWS && (
-          <p><Link href="/leads?assigned=unassigned">All {unowned.length} unassigned</Link></p>
-        )}
-      </section>
+      <Today />
     </main>
   );
 }

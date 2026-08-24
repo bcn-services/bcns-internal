@@ -9,13 +9,14 @@
     "start": "next start -p 3100",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/os-port.test.mjs tests/os-routes.test.mjs tests/seed.test.mjs tests/accounts-data-layer.test.mjs tests/leads-import.test.mjs tests/auth-gating.test.mjs tests/auth-redirect.test.mjs tests/insights.test.mjs tests/core-schema-migration.test.mjs tests/rls-policies.test.mjs tests/project-manual-migration.test.mjs tests/staff-tasks-migration.test.mjs tests/seed-clients-migration.test.mjs tests/tasks-data-layer.test.mjs",
+    "test": "tsx --test tests/os-port.test.mjs tests/os-routes.test.mjs tests/os-note-route.test.mjs tests/seed.test.mjs tests/accounts-data-layer.test.mjs tests/leads-import.test.mjs tests/auth-gating.test.mjs tests/auth-redirect.test.mjs tests/insights.test.mjs tests/core-schema-migration.test.mjs tests/rls-policies.test.mjs tests/project-manual-migration.test.mjs tests/staff-tasks-migration.test.mjs tests/seed-clients-migration.test.mjs tests/tasks-data-layer.test.mjs",
     "clean": "rm -rf .next .turbo node_modules",
-    "test:db": "tsx --test tests/os-port.test.mjs tests/os-routes.test.mjs tests/seed.test.mjs tests/accounts-data-layer.test.mjs tests/leads-import.test.mjs tests/auth-gating.test.mjs tests/auth-redirect.test.mjs tests/insights.test.mjs tests/core-schema-migration.test.mjs tests/rls-policies.test.mjs tests/project-manual-migration.test.mjs tests/staff-tasks-migration.test.mjs tests/seed-clients-migration.test.mjs tests/tasks-data-layer.test.mjs",
+    "test:db": "tsx --test tests/os-port.test.mjs tests/os-routes.test.mjs tests/os-note-route.test.mjs tests/seed.test.mjs tests/accounts-data-layer.test.mjs tests/leads-import.test.mjs tests/auth-gating.test.mjs tests/auth-redirect.test.mjs tests/insights.test.mjs tests/core-schema-migration.test.mjs tests/rls-policies.test.mjs tests/project-manual-migration.test.mjs tests/staff-tasks-migration.test.mjs tests/seed-clients-migration.test.mjs tests/tasks-data-layer.test.mjs",
     "backfill-leads": "tsx scripts/backfill-leads.mjs",
     "provision-user": "tsx scripts/provision-user.mjs"
   },
   "dependencies": {
+    "3d-force-graph": "^1.80.0",
     "@nseluga/app-core": "^0.2.0",
     "@nseluga/ui": "^0.1.0",
     "@supabase/ssr": "^0.12.4",
@@ -25,13 +26,15 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "satteri": "^0.9.5",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@nseluga/config": "^0.1.0",
     "@types/node": "^22.20.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.185.4",
     "eslint": "^9.15.0",
     "tsx": "^4.23.1",
     "typescript": "^5.9.3"
