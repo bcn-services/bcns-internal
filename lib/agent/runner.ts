@@ -74,6 +74,7 @@ const AGENT_TOOLS = "Read,Edit,Write,Glob,Grep,Skill";
  *   agents/**                   → subagent definitions
  *   .claude/**                  → settings.json hooks are arbitrary commands
  *   .claude-plugin/**           → the plugin manifest can declare hooks too
+ *   scripts/**                  → what a hook command would point AT
  *
  * Patterns are RELATIVE to cwd, which is already the os clone. `Write(X)` and
  * `Edit(X)` match at any depth, so a nested `projects/x/CLAUDE.md` is covered
@@ -86,6 +87,7 @@ const DENY_PATHS = [
   "agents/**",
   ".claude/**",
   ".claude-plugin/**",
+  "scripts/**",
 ];
 const DENY_SETTINGS = JSON.stringify({
   permissions: { deny: DENY_PATHS.flatMap((p) => [`Write(${p})`, `Edit(${p})`]) },
@@ -221,17 +223,35 @@ export function buildArgs(opts: {
 }
 
 /**
- * The os CLAUDE.md, or "" if it is unreadable. A missing file is not fatal:
- * the skills still run, they just run without the house rules, and failing the
- * whole request over a doc would be worse than degrading.
+ * The two files a laptop session starts with, concatenated. Both are suppressed
+ * here for the same reason — `--setting-sources ''` — but by different settings:
+ * CLAUDE.md by the project source, MEMORY.md by `autoMemoryDirectory`.
+ *
+ * MEMORY.md is the INDEX, not the facts. Each of its lines names a file, and a
+ * run can already Read those files out of the same clone. On a laptop a
+ * UserPromptSubmit hook keyword-matches this index per prompt; that hook is
+ * doing a job the model does better once the index is simply in context, so it
+ * is deliberately not carried over. Declaring it as a plugin hook would work —
+ * plugin hooks do fire under `--setting-sources ''`, which is checked — but it
+ * would reopen the arbitrary-command channel the flag exists to close.
+ *
+ * A missing file is not fatal: the run degrades to no house rules and no
+ * memory rather than failing, because failing a request over a doc is worse.
  */
+const CONTEXT_FILES = ["CLAUDE.md", "knowledge/memory/MEMORY.md"];
+
 export async function instructions(dir: string): Promise<string> {
-  try {
-    return await readFile(join(dir, "CLAUDE.md"), "utf-8");
-  } catch (err) {
-    console.warn("[agent] no CLAUDE.md at", dir, err);
-    return "";
-  }
+  const parts = await Promise.all(
+    CONTEXT_FILES.map(async (rel) => {
+      try {
+        return await readFile(join(dir, rel), "utf-8");
+      } catch (err) {
+        console.warn("[agent] missing context file:", rel, "in", dir, err);
+        return "";
+      }
+    }),
+  );
+  return parts.filter((p) => p.trim()).join("\n\n");
 }
 
 /**

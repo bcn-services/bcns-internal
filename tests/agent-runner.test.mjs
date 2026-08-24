@@ -19,7 +19,10 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildArgs, buildEnv, model, timeoutMs, SESSION_ID_RE } from "../lib/agent/runner.ts";
+import { buildArgs, buildEnv, instructions, model, timeoutMs, SESSION_ID_RE } from "../lib/agent/runner.ts";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /** The flag list as a string, for "does it contain" checks. */
 const flags = (args) => args.join(" ");
@@ -92,6 +95,7 @@ describe("buildArgs — the sandbox", () => {
       "agents/**",
       ".claude/**",
       ".claude-plugin/**",
+      "scripts/**",
     ]) {
       assert.ok(deny.includes(`Write(${path})`), `missing Write(${path})`);
       assert.ok(deny.includes(`Edit(${path})`), `missing Edit(${path})`);
@@ -194,5 +198,23 @@ describe("wall clock and model", () => {
       if (saved === undefined) delete process.env.CHAT_MODEL;
       else process.env.CHAT_MODEL = saved;
     }
+  });
+});
+
+describe("instructions — what a laptop session starts with", () => {
+  test("carries CLAUDE.md and the memory index, and survives either being absent", async () => {
+    // Both are suppressed by `--setting-sources ''`, by different settings:
+    // CLAUDE.md by the project source, MEMORY.md by autoMemoryDirectory.
+    const dir = await mkdtemp(join(tmpdir(), "os-"));
+    assert.equal(await instructions(dir), "", "no files yet — degrade, do not throw");
+
+    await writeFile(join(dir, "CLAUDE.md"), "# house rules");
+    assert.equal(await instructions(dir), "# house rules");
+
+    await mkdir(join(dir, "knowledge", "memory"), { recursive: true });
+    await writeFile(join(dir, "knowledge", "memory", "MEMORY.md"), "# memory index");
+    const both = await instructions(dir);
+    assert.match(both, /# house rules/);
+    assert.match(both, /# memory index/);
   });
 });
