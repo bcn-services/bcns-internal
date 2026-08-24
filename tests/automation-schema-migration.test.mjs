@@ -465,3 +465,135 @@ describe("0009 guardrails — independent QA", { skip: !toolsPresent && "no loca
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Re-verification (QA), after the reviewer's findings were applied.
+// ---------------------------------------------------------------------------
+describe("0009 re-verification — independent QA", { skip: !toolsPresent && "no local Postgres" }, () => {
+  let h;
+  before(() => {
+    h = startClusterWithMigrations(MIGRATIONS);
+    h.run(`insert into auth.users (id, email) values
+      ('${NATE}','nate@bcn-services.com'), ('${BRANDON}','brandon@bcn-services.com')`);
+    h.run(`insert into profiles (id, email, display_name) values
+      ('${NATE}','nate@bcn-services.com','Nate'), ('${BRANDON}','brandon@bcn-services.com','Brandon')`);
+    h.run(`insert into accounts (id, business_name, city, status)
+      values ('${ACCOUNT}','Automation Test Co','Rye','new')`);
+  });
+  after(() => h?.stop());
+
+  test("the tightened staff policy still admits ALL FIVE human kinds", () => {
+    // The engineer's own version of this test checks 'call' only. The risk of a
+    // `kind not in (...)` list is a typo that also excludes a human kind.
+    for (const kind of HUMAN_KINDS) {
+      const r = h.runClaims(brandon,
+        `insert into account_activity (account_id, kind) values ('${ACCOUNT}','${kind}')`);
+      assert.equal(r.ok, true, `member rejected for human kind '${kind}': ${r.error}`);
+    }
+  });
+
+  test("NOT VALID skips only the backfill scan — new rows are still checked", () => {
+    // Proof, not assumption: the constraint really is unvalidated, and an
+    // offending INSERT is still refused on both the superuser and member paths.
+    assert.equal(
+      h.run(`select convalidated from pg_constraint where conname='account_activity_kind_check'`),
+      "f",
+      "expected the widened CHECK to be NOT VALID",
+    );
+    assert.equal(
+      h.tryRun(`insert into account_activity (account_id, kind) values ('${ACCOUNT}','nonsense')`).ok,
+      false,
+      "a NOT VALID check must still reject a bad INSERT",
+    );
+    const viaPolicy = h.runClaims(brandon,
+      `insert into account_activity (account_id, kind) values ('${ACCOUNT}','nonsense')`);
+    assert.equal(viaPolicy.ok, false);
+    // An UPDATE onto a bad value is checked too.
+    h.run(`insert into account_activity (id, account_id, kind)
+           values ('dddddddd-0000-4000-8000-0000000000f1','${ACCOUNT}','call')`);
+    assert.equal(
+      h.tryRun(`update account_activity set kind='nonsense'
+                where id='dddddddd-0000-4000-8000-0000000000f1'`).ok,
+      false,
+    );
+  });
+
+  test("the down migration restores 0002's staff insert policy verbatim", () => {
+    const inZeroTwo = readFileSync(
+      fileURLToPath(new URL("../supabase/migrations/0002_rls_policies.sql", import.meta.url)), "utf8")
+      .replace(/--[^\n]*/g, "")
+      .match(/create\s+policy\s+account_activity_staff_insert[\s\S]*?;/i)[0]
+      .replace(/\s+/g, " ").trim();
+    const inDown = readFileSync(
+      fileURLToPath(new URL("../supabase/migrations/0009_automation_schema.down.sql", import.meta.url)), "utf8")
+      .replace(/--[^\n]*/g, "")
+      .match(/create\s+policy\s+account_activity_staff_insert[\s\S]*?;/i)[0]
+      .replace(/\s+/g, " ").trim();
+    assert.equal(inDown, inZeroTwo);
+  });
+
+  test("up → down → up is clean, and down takes every 0009 index with it", () => {
+    const NEW_INDEXES = ["inbox_items_profile_idx", "inbox_items_account_idx", "inbox_items_client_idx",
+                         "lead_targets_created_by_idx", "job_runs_job_idx", "job_runs_unfinished_idx"];
+    const c = startClusterWithMigrations(MIGRATIONS);
+    try {
+      const idxCount = () => c.run(
+        `select count(*) from pg_class where relkind='i' and relname in (${
+          NEW_INDEXES.map((i) => `'${i}'`).join(",")})`);
+      assert.equal(idxCount(), String(NEW_INDEXES.length));
+
+      const down = c.tryRunFile("0009_automation_schema.down.sql");
+      assert.equal(down.ok, true, down.error);
+      // The engineer's claim: no explicit index drops needed because the tables go.
+      assert.equal(idxCount(), "0", "an index outlived the down migration");
+      assert.equal(
+        c.run(`select count(*) from pg_class where relname in ('inbox_items','lead_targets','job_runs')`),
+        "0",
+      );
+      // 0002's staff policy is back and is the permissive one again.
+      assert.match(
+        c.run(`select pg_get_expr(polwithcheck, polrelid) from pg_policy
+               where polname='account_activity_staff_insert'`),
+        /is_staff/,
+      );
+
+      const up = c.tryRunFile("0009_automation_schema.sql");
+      assert.equal(up.ok, true, `re-applying 0009 after the down failed: ${up.error}`);
+      assert.equal(idxCount(), String(NEW_INDEXES.length));
+      assert.match(
+        c.run(`select pg_get_expr(polwithcheck, polrelid) from pg_policy
+               where polname='account_activity_staff_insert'`),
+        /ai_email_sent/,
+        "the re-applied policy is not the narrowed one",
+      );
+    } finally {
+      c.stop();
+    }
+  });
+
+  test("a half-applied 0009 cannot happen — the file is one transaction", () => {
+    // The reliability claim behind `begin; ... commit;`: if a later statement
+    // fails, the CHECK swap must not be left half-done.
+    const c = startClusterWithMigrations(MIGRATIONS.slice(0, 8));
+    try {
+      const src = readFileSync(
+        fileURLToPath(new URL("../supabase/migrations/0009_automation_schema.sql", import.meta.url)), "utf8");
+      assert.match(src, /^\s*begin;/m);
+      assert.match(src, /commit;\s*$/);
+      // Simulate a failure after the CHECK swap by replaying the file's own
+      // prefix plus a deliberate error, in one transaction.
+      const boom = c.tryRun(`begin;
+        alter table account_activity drop constraint if exists account_activity_kind_check;
+        select 1/0;
+        commit;`);
+      assert.equal(boom.ok, false);
+      assert.equal(
+        c.run(`select count(*) from pg_constraint where conname='account_activity_kind_check'`),
+        "1",
+        "the CHECK was lost despite the failure rolling back",
+      );
+    } finally {
+      c.stop();
+    }
+  });
+});
