@@ -41,7 +41,13 @@ export default function Nav({ role }: { role: Role | null }) {
   return (
     <nav className="sidebar" aria-label="Main">
       <Link href="/" className="sidebar-brand">
-        bcns<span>internal</span>
+        {/* Unoptimized: next/image would want a loader config for one static
+            33KB mark that never changes size. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/bcns-mark.png" alt="" width={30} height={30} />
+        <b>
+          bcns<span>{role ?? "member"}</span>
+        </b>
       </Link>
       <div className="sidebar-links">
         {links.map(({ href, label }) => {
