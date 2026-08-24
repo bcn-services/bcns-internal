@@ -21,7 +21,14 @@
 -- Policies cannot carry `set search_path`, which is a function-level clause;
 -- the equivalent guarantee is that every call below is schema-qualified
 -- (public.*, auth.*), so an attacker-controlled search_path resolves nothing.
+--
+-- ONE TRANSACTION. The replay harness (and the Supabase CLI) apply a file with
+-- `psql -f` and no --single-transaction, so a failure partway through would
+-- otherwise leave the schema half-migrated — notably account_activity with its
+-- kind CHECK dropped and not yet re-added.
 -- ---------------------------------------------------------------------------
+
+begin;
 
 -- ---------------------------------------------------------------------------
 -- accounts.outreach_mode — the kill switch, per lead.
@@ -56,7 +63,26 @@ alter table account_activity
   add constraint account_activity_kind_check check (kind in (
     'call', 'email', 'meeting', 'note', 'status_change',
     'ai_email_sent', 'ai_email_reply', 'agent_run'
-  ));
+  )) not valid;
+
+-- ---------------------------------------------------------------------------
+-- account_activity_staff_insert — widening the CHECK also widened what a human
+-- may write, so the 0002 policy is narrowed to match.
+--
+-- 0002 let any staff member INSERT any allowed kind. With the three agent kinds
+-- now allowed, that policy would let a member forge `ai_email_sent` rows into
+-- the audit trail, or pre-write the `agent_run` marker for an account and so
+-- suppress the agent's next run on it. Agent kinds are written by the jobs,
+-- which run as service_role and bypass RLS; nobody interactive writes them.
+-- ---------------------------------------------------------------------------
+drop policy if exists account_activity_staff_insert on account_activity;
+
+create policy account_activity_staff_insert on account_activity
+  for insert to authenticated
+  with check (
+    public.is_staff()
+    and kind not in ('ai_email_sent', 'ai_email_reply', 'agent_run')
+  );
 
 -- ---------------------------------------------------------------------------
 -- profiles: what kind of work someone does, and when they were last briefed.
@@ -121,6 +147,12 @@ create table inbox_items (
 -- The only hot read: one person's unread mail, newest first.
 create index inbox_items_profile_idx on inbox_items (profile_id, created_at desc);
 
+-- Both FKs are `on delete set null`, and an unindexed one makes every account
+-- or client delete seq-scan and row-lock all of inbox_items. Partial, as in
+-- 0005: most notices reference neither.
+create index inbox_items_account_idx on inbox_items (account_id) where account_id is not null;
+create index inbox_items_client_idx  on inbox_items (client_id)  where client_id  is not null;
+
 alter table inbox_items enable row level security;
 
 create policy inbox_items_own_select on inbox_items
@@ -152,6 +184,9 @@ create table lead_targets (
   created_by uuid references profiles (id) on delete set null,
   created_at timestamptz not null default now()
 );
+
+-- Same `on delete set null` scan, on profile offboarding.
+create index lead_targets_created_by_idx on lead_targets (created_by) where created_by is not null;
 
 alter table lead_targets enable row level security;
 
@@ -193,6 +228,10 @@ create table job_runs (
 -- The dashboard read: latest runs of one job.
 create index job_runs_job_idx on job_runs (job, started_at desc);
 
+-- The "is anything stuck" read, across all jobs. job_runs_job_idx leads with
+-- `job` and cannot serve it. Partial, so it holds only live runs.
+create index job_runs_unfinished_idx on job_runs (started_at desc) where finished_at is null;
+
 alter table job_runs enable row level security;
 
 create policy job_runs_admin_all on job_runs
@@ -201,3 +240,5 @@ create policy job_runs_admin_all on job_runs
 
 create policy job_runs_staff_select on job_runs
   for select to authenticated using (public.is_staff());
+
+commit;

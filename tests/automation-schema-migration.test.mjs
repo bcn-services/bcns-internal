@@ -106,6 +106,50 @@ describe("0009 automation schema", () => {
     assert.match(r.error, /kind/i);
   });
 
+  // The widened CHECK meets 0002's staff INSERT policy, so the policy is
+  // narrowed in 0009: agent kinds are service_role-only, or a member could
+  // forge an `ai_email_sent` row, or pre-write the `agent_run` idempotency
+  // marker for an account and quietly suppress the agent's next run on it.
+  for (const kind of AGENT_KINDS) {
+    test(`a member cannot insert kind '${kind}'`, () => {
+      const r = pg.runClaims(brandon,
+        `insert into account_activity (account_id, kind) values ('${ACCOUNT}','${kind}')`);
+      assert.equal(r.ok, false);
+      assert.match(r.error, /row-level security/i);
+    });
+  }
+
+  test("a member can still insert a human kind", () => {
+    const r = pg.runClaims(brandon,
+      `insert into account_activity (account_id, kind) values ('${ACCOUNT}','call')`);
+    assert.equal(r.ok, true, r.error);
+  });
+
+  test("an admin can still insert an agent kind, via account_activity_admin_all", () => {
+    // Deliberate, and asserted so it cannot change silently: 0002's admin FOR
+    // ALL policy is permissive and OR-combines with the narrowed staff INSERT.
+    // The finding this closes is a NON-admin forging the trail; an admin who
+    // can already delete any row is not the threat being modelled.
+    const r = pg.runClaims(admin,
+      `insert into account_activity (account_id, kind) values ('${ACCOUNT}','agent_run')`);
+    assert.equal(r.ok, true, r.error);
+  });
+
+  test("service_role can insert an agent kind", () => {
+    // pg.run() is the superuser connection, which bypasses RLS exactly as
+    // Supabase's service_role does — the jobs' own path.
+    const r = pg.tryRun(
+      `insert into account_activity (account_id, kind) values ('${ACCOUNT}','agent_run')`);
+    assert.equal(r.ok, true, r.error);
+  });
+
+  test("an unprovisioned claim cannot insert any activity", () => {
+    const r = pg.runClaims({ sub: BRANDON, app_metadata: {} },
+      `insert into account_activity (account_id, kind) values ('${ACCOUNT}','call')`);
+    assert.equal(r.ok, false);
+    assert.match(r.error, /row-level security/i);
+  });
+
   // -- profiles -------------------------------------------------------------
 
   test("job_function is nullable and last_briefed_at starts null", () => {
@@ -254,6 +298,23 @@ describe("0009 automation schema", () => {
     });
   }
 
+  for (const [idx, tbl] of Object.entries({
+    inbox_items_account_idx: "inbox_items",
+    inbox_items_client_idx: "inbox_items",
+    lead_targets_created_by_idx: "lead_targets",
+    job_runs_unfinished_idx: "job_runs",
+  })) {
+    test(`${idx} exists on ${tbl}`, () => {
+      // Matched by name, not by count: a renamed or re-columned index must fail
+      // here rather than pass because the total happened to stay the same.
+      assert.equal(
+        pg.run(`select count(*) from pg_indexes
+                where tablename='${tbl}' and indexname='${idx}'`),
+        "1",
+      );
+    });
+  }
+
   test("inbox_items has no admin-override policy", () => {
     // Asserted by name, not by count: a count check would pass if someone
     // swapped an owner policy for an admin one.
@@ -290,6 +351,9 @@ describe("0009 automation schema", () => {
 // the migration; these check the guardrails his own tests were free to assume.
 // ---------------------------------------------------------------------------
 
+/** Keywords that take a parenthesised list and so look like a call to the sweep. */
+const SQL_KEYWORDS = new Set(["in", "not", "and", "or", "any", "all", "array", "exists", "values"]);
+
 /** Every `create policy ... ;` statement in 0009, comments stripped. */
 function policyStatements() {
   const src = readFileSync(
@@ -302,12 +366,14 @@ function policyStatements() {
 describe("0009 guardrails — independent QA", { skip: !toolsPresent && "no local Postgres" }, () => {
   test("no policy expression contains an unqualified function call", () => {
     const stmts = policyStatements();
-    assert.equal(stmts.length, 6, `expected 6 policies in 0009, found ${stmts.length}`);
+    assert.equal(stmts.length, 7, `expected 7 policies in 0009, found ${stmts.length}`);
     // Everything after `using`/`with check` is expression territory. A call is
     // `name(` ; it is qualified only when preceded by `schema.`.
     for (const s of stmts) {
       for (const [, expr] of s.matchAll(/\b(?:using|with\s+check)\s*(\([\s\S]*?\))(?=\s*(?:using|with\s+check|;))/gi)) {
         for (const m of expr.matchAll(/(\.)?\b([a-z_][a-z0-9_]*)\s*\(/gi)) {
+          // `kind not in (...)` is a keyword followed by a paren, not a call.
+          if (!m[1] && SQL_KEYWORDS.has(m[2].toLowerCase())) continue;
           assert.equal(m[1], ".", `unqualified call ${m[2]}() in policy: ${s.split("\n")[0]}`);
         }
       }
