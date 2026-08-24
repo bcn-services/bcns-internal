@@ -9,6 +9,7 @@
  */
 
 import "server-only";
+import { cache } from "react";
 import { cookies } from "next/headers";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSsrClient, getSessionUser } from "./supabase-ssr";
@@ -30,7 +31,17 @@ export async function getServerClient(): Promise<SupabaseClient | null> {
  * route; this is for rendering decisions (show the admin button or not) and
  * for the second check inside a mutating server action.
  */
-export async function getViewer(): Promise<{
+/*
+ * Wrapped in React cache() because a signed-in render calls this twice — once
+ * in the root layout for the sidebar, once in the page for its own gating —
+ * and getSessionUser() uses getUser(), which is a network round trip to the
+ * Supabase Auth server every time rather than a local cookie read. cache()
+ * dedupes per request render, so those two calls become one.
+ *
+ * The middleware's own check is a separate runtime and is NOT deduped by
+ * this. That is correct: it is the gate, and the gate must not be skipped.
+ */
+export const getViewer = cache(async function getViewer(): Promise<{
   role: Role | null;
   /** The auth user id — also this person's profiles.id. Null when signed out. */
   userId: string | null;
@@ -43,4 +54,4 @@ export async function getViewer(): Promise<{
   // compares the same claim, so an author recorded here matches what the
   // database will later accept as that person's own row.
   return { role: resolveRole(user), userId: user?.id ?? null, email: user?.email ?? null, client };
-}
+});

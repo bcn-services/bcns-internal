@@ -25,7 +25,7 @@ import { getSsrClient, getSessionUser } from "@/lib/supabase-ssr";
  * holding every lead and client record, the safe default is the second one.
  */
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|gif|svg|ico|webp|avif|woff2?)$).*)"],
 };
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
