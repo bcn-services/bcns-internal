@@ -3,27 +3,33 @@
 /**
  * nav.tsx — the shell sidebar. Client component only because the active row
  * needs the current pathname; nothing else here is interactive.
+ *
+ * `/admin` is rendered from the role the server layout passes in, so a member
+ * never sees a link they would only get a 403 from. That hiding is convenience,
+ * not security: the real gate is routeAccessDecision() in lib/auth.ts, and
+ * under it the RLS policies, which is what makes typing the URL useless.
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import type { Role } from "@/lib/auth";
 
 const LINKS = [
-  { href: "/", label: "Overview" },
+  { href: "/", label: "Brain" },
   { href: "/leads", label: "Leads" },
   { href: "/clients", label: "Clients" },
-  { href: "/projects", label: "Projects" },
-  { href: "/notes", label: "Notes" },
-  { href: "/insights", label: "Insights" },
-  { href: "/files", label: "Files" },
-  { href: "/graph", label: "Graph" },
+  { href: "/tasks", label: "Tasks" },
   { href: "/chat", label: "Chat" },
 ] as const;
 
-export default function Nav() {
+const ADMIN_LINK = { href: "/admin", label: "Admin" } as const;
+
+export default function Nav({ role }: { role: Role | null }) {
   const pathname = usePathname();
 
   // Signed-out page: no shell chrome, the content takes the full width.
   if (pathname === "/login") return null;
+
+  const links = role === "admin" ? [...LINKS, ADMIN_LINK] : LINKS;
 
   return (
     <nav className="sidebar" aria-label="Main">
@@ -31,7 +37,7 @@ export default function Nav() {
         bcns<span>internal</span>
       </Link>
       <div className="sidebar-links">
-        {LINKS.map(({ href, label }) => {
+        {links.map(({ href, label }) => {
           const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
           return (
             <Link key={href} href={href} aria-current={active ? "page" : undefined}>

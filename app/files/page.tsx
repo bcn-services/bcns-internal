@@ -21,7 +21,6 @@
 import { join } from "path";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import OsNav from "@/components/OsNav";
 import { osDir } from "@/lib/os/paths";
 import { getSection, resolveSource, withParam } from "@/lib/os/sections";
 import { buildTree, collectSlugs, readNote, resolveNotePath } from "@/lib/os/osFiles";
@@ -235,7 +234,6 @@ export default async function FilesPage({
 
   return (
     <main>
-      <OsNav current={SECTION_HREF} />
       <h1>{section.title}</h1>
       <ul>
         {section.panels.map((p) => (

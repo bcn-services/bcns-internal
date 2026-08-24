@@ -18,7 +18,6 @@
  * rather than rendering a box that fails on submit.
  */
 import Link from "next/link";
-import OsNav from "@/components/OsNav";
 import { getViewer } from "@/lib/supabase-server";
 import { isAiEnabled, maybeGetAiClient } from "@/lib/ai";
 import { STAGES, centsToDollars } from "@/lib/accounts";
@@ -80,7 +79,6 @@ export default async function ChatPage({
 
   return (
     <main>
-      <OsNav current="/chat" />
       <h1>Chat</h1>
 
       {!enabled ? (
@@ -114,7 +112,7 @@ export default async function ChatPage({
         </>
       )}
 
-      <p><Link href="/insights">Insights</Link> · <Link href="/leads">Leads</Link></p>
+      <p><Link href="/clients">Clients</Link> · <Link href="/leads">Leads</Link></p>
     </main>
   );
 }

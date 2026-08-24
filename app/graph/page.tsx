@@ -13,7 +13,6 @@
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import OsNav from "@/components/OsNav";
 import { osDir } from "@/lib/os/paths";
 import { getSection, resolveSource } from "@/lib/os/sections";
 import { buildTree } from "@/lib/os/osFiles";
@@ -65,7 +64,6 @@ export default async function GraphPage({ searchParams }: { searchParams: { sour
 
   return (
     <main>
-      <OsNav current={SECTION_HREF} />
       <h1>{section.title}</h1>
 
       {loadError ? (
