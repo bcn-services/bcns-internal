@@ -23,6 +23,13 @@ const LINKS = [
 
 const ADMIN_LINK = { href: "/admin", label: "Admin" } as const;
 
+/**
+ * Not one of the six. /account is where an employee connects their own Claude
+ * seat — a setting about themselves rather than a place work happens — so it
+ * sits in the footer instead of taking a row beside the work surfaces.
+ */
+const ACCOUNT_LINK = { href: "/account", label: "Account" } as const;
+
 export default function Nav({ role }: { role: Role | null }) {
   const pathname = usePathname();
 
@@ -45,6 +52,14 @@ export default function Nav({ role }: { role: Role | null }) {
             </Link>
           );
         })}
+      </div>
+      <div className="sidebar-foot">
+        <Link
+          href={ACCOUNT_LINK.href}
+          aria-current={pathname.startsWith(ACCOUNT_LINK.href) ? "page" : undefined}
+        >
+          {ACCOUNT_LINK.label}
+        </Link>
       </div>
     </nav>
   );

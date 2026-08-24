@@ -167,6 +167,38 @@ body {
   font-weight: 600;
 }
 
+/*
+ * Pushed to the bottom of the rail by `margin-top: auto` rather than by a
+ * spacer element — the sidebar is already a column flexbox, so the space is
+ * free. In the narrow top-bar layout below, the same rule would push it off
+ * the right edge, so it is undone there.
+ */
+.sidebar-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-foot a {
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+}
+
+.sidebar-foot a:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.sidebar-foot a[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .content {
   flex: 1 1 auto;
   min-width: 0;
@@ -204,6 +236,17 @@ body {
   }
 
   .sidebar-links a {
+    white-space: nowrap;
+  }
+
+  .sidebar-foot {
+    margin-top: 0;
+    margin-left: auto;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .sidebar-foot a {
     white-space: nowrap;
   }
 

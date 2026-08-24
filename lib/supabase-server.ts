@@ -32,6 +32,8 @@ export async function getServerClient(): Promise<SupabaseClient | null> {
  */
 export async function getViewer(): Promise<{
   role: Role | null;
+  /** The auth user id — also this person's profiles.id. Null when signed out. */
+  userId: string | null;
   email: string | null;
   client: SupabaseClient | null;
 }> {
@@ -40,5 +42,5 @@ export async function getViewer(): Promise<{
   // email comes from the verified session, never from a form field. RLS
   // compares the same claim, so an author recorded here matches what the
   // database will later accept as that person's own row.
-  return { role: resolveRole(user), email: user?.email ?? null, client };
+  return { role: resolveRole(user), userId: user?.id ?? null, email: user?.email ?? null, client };
 }

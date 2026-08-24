@@ -12,6 +12,7 @@
  */
 import { getViewer } from "@/lib/supabase-server";
 import { listProfiles } from "@/lib/profiles";
+import { allEnrollments, daysUntilExpiry, EXPIRY_WARNING_DAYS } from "@/lib/agent/tokens";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,28 @@ export default async function AdminPage() {
 
   const profiles = db ? await listProfiles(db) : [];
 
+  // Who has connected a Claude seat. Read through the service role because
+  // `agent_tokens` has no RLS policies at all — see 0008_agent_tokens.sql. An
+  // admin sees exactly what an employee sees about their own enrollment: that
+  // it exists, when it was last used, when it lapses. Never the token.
+  //
+  // A failure here degrades the column to "unknown" rather than taking the
+  // staff directory down with it; the directory is the older, more important
+  // half of this page.
+  let seats = new Map<string, { lastUsedAt: string | null; days: number }>();
+  let seatError = false;
+  try {
+    seats = new Map(
+      (await allEnrollments()).map((e) => [
+        e.profileId,
+        { lastUsedAt: e.lastUsedAt, days: daysUntilExpiry(e) },
+      ]),
+    );
+  } catch (err) {
+    console.error("[admin] could not read agent seats:", err);
+    seatError = true;
+  }
+
   return (
     <main>
       <h1>Admin</h1>
@@ -42,6 +65,7 @@ export default async function AdminPage() {
               <th>Name</th>
               <th>Email</th>
               <th>Active</th>
+              <th>Agent seat</th>
             </tr>
           </thead>
           <tbody>
@@ -50,12 +74,23 @@ export default async function AdminPage() {
                 <td>{p.display_name}</td>
                 <td>{p.email}</td>
                 <td>{p.active ? "yes" : "no"}</td>
+                <td>{seatCell(seatError, seats.get(p.id))}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </section>
       {profiles.length === 0 && <p>Nobody is provisioned yet.</p>}
+
+      <p>
+        <small>
+          An <strong>agent seat</strong> is that person&rsquo;s own Claude
+          token, which every skill button and scheduled job runs under. Only
+          they can connect it, from <code>/account</code> — a seat cannot be
+          set up on someone else&rsquo;s behalf, because the token comes from
+          their own <code>claude setup-token</code>.
+        </small>
+      </p>
 
       <h2>Adding someone</h2>
       <p>Run this from the repo, then send them the sign-in link it prints:</p>
@@ -66,4 +101,16 @@ export default async function AdminPage() {
       </p>
     </main>
   );
+}
+
+/** One cell of the agent-seat column. Kept out of the table body for legibility. */
+function seatCell(
+  failed: boolean,
+  seat: { lastUsedAt: string | null; days: number } | undefined,
+): string {
+  if (failed) return "unknown";
+  if (!seat) return "not connected";
+  if (seat.days < 0) return "expired";
+  const life = seat.days <= EXPIRY_WARNING_DAYS ? ` · expires in ${seat.days}d` : "";
+  return (seat.lastUsedAt ? `used ${new Date(seat.lastUsedAt).toLocaleDateString()}` : "never used") + life;
 }

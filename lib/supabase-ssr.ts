@@ -59,6 +59,13 @@ export function getSsrClient(
  * is safe to record as an author.
  */
 export type SessionUser = {
+  /**
+   * The auth user id. Same value as profiles.id (0004 declares the profile's
+   * primary key as a reference to auth.users), which is why `assigned_to =
+   * auth.uid()` in the RLS policies needs no join — and why a server action can
+   * key a row on this id without looking a profile up first.
+   */
+  id?: string;
   app_metadata?: { role?: unknown } & Record<string, unknown>;
   email?: string | null;
 };
