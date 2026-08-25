@@ -10,8 +10,9 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { readdirSync, writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { startClusterWithMigrations, toolsPresent } from "./helpers/pg-cluster.mjs";
 
@@ -45,17 +46,22 @@ describe("migration replay — the whole directory, end to end", { skip: !toolsP
   });
 
   test("a broken migration fails the replay and names the offending file", () => {
-    const bad = "9999_deliberately_broken.sql";
-    writeFileSync(join(migrationsDir, bad), "this is not valid sql;\n");
+    // The bad file lives in a temp dir, never in `migrationsDir`. Writing it into
+    // the real migrations directory raced every other suite that boots a cluster:
+    // they glob that directory, so whichever one started while this test held the
+    // file applied it and died. Passing the path explicitly keeps it private here.
+    const badDir = mkdtempSync(join(tmpdir(), "bcns-badmig-"));
+    const bad = join(badDir, "9999_deliberately_broken.sql");
+    writeFileSync(bad, "this is not valid sql;\n");
     let err;
     let h;
     try {
-      h = startClusterWithMigrations([...upMigrations()]);
+      h = startClusterWithMigrations([...upMigrations(), bad]);
     } catch (e) {
       err = e;
     } finally {
       if (h) h.stop();
-      unlinkSync(join(migrationsDir, bad));
+      unlinkSync(bad);
     }
     assert.ok(err, "a syntactically invalid migration must fail the replay, not pass silently");
     const detail = String(err.stderr ?? err.message ?? err);
