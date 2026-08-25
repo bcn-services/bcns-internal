@@ -11,7 +11,7 @@ Nothing here has been deployed, pushed, or applied to production.
 
 | Gate | Result |
 |---|---|
-| `corepack pnpm test` | **907 pass · 0 fail · 0 skipped · 150 suites** (was 217 at the start) |
+| `corepack pnpm test` | **845 pass · 0 fail · 0 skipped · 139 suites** (907/150 before Phase 0 removed five surfaces; 217 at the start) |
 | `corepack pnpm typecheck` | clean |
 | `corepack pnpm lint` | exactly **5** unique errors, all pre-existing — see below |
 | `corepack pnpm build` | compiled successfully, 13 pages |
@@ -212,32 +212,31 @@ first sign-in, or the person holds a roleless token.
 
 ## What to click, in order
 
-1. **Sign in** with your bcns Google account. The home page should appear immediately
-   with a briefing card marked as building, then fill itself in. It covers everything
-   since your *last* briefing, not "since yesterday".
-2. **Look at the sidebar** — the inbox should show an unread count. That count is
+> Two steps are gone since this list was written. **Signing in and waiting for a
+> briefing to build** is not a check any more: Phase 3 moves briefing generation
+> to a scheduled job, and login only reads the newest row. **Running a skill from
+> a button** tested a surface Phase 0 deleted. Eight checks remain, renumbered.
+
+1. **Look at the sidebar** — the inbox should show an unread count. That count is
    cached, so it should not re-query on every page you open.
-3. **Open `/inbox`.** Newest first, unread marked. Click an item; it should link to
+2. **Open `/inbox`.** Newest first, unread marked. Click an item; it should link to
    whatever it is about. Reply to one — it should log the contact through the same
    review-before-saving step as the capture box.
-4. **Open `/leads`.** Check the lane column: leads should be spread across `ai`,
+3. **Open `/leads`.** Check the lane column: leads should be spread across `ai`,
    `human`, `paused` and `no_response`. Use the lane override buttons to move one by
    hand.
-5. **Log an activity in plain English** on a lead — e.g. "called Mike at Coventry
+4. **Log an activity in plain English** on a lead — e.g. "called Mike at Coventry
    Tuesday, wants a quote by Friday". It should show you a parsed record for correction
    *before* saving anything. Check the date resolved against your own local date.
-6. **Watch that lead's lane flip to `paused`.** Logging human contact on an `ai` lead
+5. **Watch that lead's lane flip to `paused`.** Logging human contact on an `ai` lead
    stops the bot — enforced by the database, so it holds however the record was written.
-7. **Run a skill from a button** — pitch or quote on a lead or client. Sales and admins
-   see the client-facing buttons; developers see none, on purpose, because every
-   developer skill needs a cloned repo.
-8. **Open `/admin`** (as an admin). Four panels: lead targets, job functions, job
+6. **Open `/admin`** (as an admin). Four panels: lead targets, job functions, job
    history, seat status. Confirm the job history shows *attention* as visually distinct
    from *failed*, and that the token panel shows expiry dates and **never** a token value.
-9. **Sign in as a member and request `/admin`.** You must get a **403, not a redirect**.
+7. **Sign in as a member and request `/admin`.** You must get a **403, not a redirect**.
    Also confirm a member cannot change a task they do not own — check that against the
    database, not the UI.
-10. **Retire a lead target** in `/admin`, then confirm the leads previously found
+8. **Retire a lead target** in `/admin`, then confirm the leads previously found
     through it are still there. It is a flag flip, never a delete.
 
 ---
