@@ -50,16 +50,36 @@ $fn$;
 create function auth.uid() returns uuid language sql stable as $fn$
   select nullif(auth.jwt() ->> 'sub', '')::uuid
 $fn$;
+-- auth.users, minimal. Supabase provisions this before any migration, and 0004
+-- takes a foreign key on it. Only the columns a migration may reference are
+-- modelled — this is a stand-in for the FK target, not a copy of Supabase's
+-- real table, which carries dozens of auth-internal columns we never touch.
+create table auth.users (
+  id    uuid primary key,
+  email text unique
+);
 create role anon;
 create role authenticated;
-create role service_role;
+-- service_role is BYPASSRLS in Supabase: the jobs are the writers RLS is not
+-- consulted for. Without it here a test of "service_role can still do X" would
+-- be testing a role Supabase does not ship.
+create role service_role bypassrls;
 grant usage on schema auth, public to anon, authenticated, service_role;
 `;
 
 // Supabase grants `authenticated` ALL on public tables by default; RLS, not
 // missing grants, is what restricts rows. Applied AFTER the keyless schema
 // migration and BEFORE the policy migration, to match production ordering.
-const SUPABASE_DEFAULT_GRANTS = `grant all on all tables in schema public to authenticated;`;
+//
+// The second statement is what makes this hold for migrations that come LATER.
+// Supabase sets default privileges on the public schema, so a table created by
+// 0003 or 0009 is granted the moment it exists. Without it the one-shot `grant
+// on all tables` covers only what existed when it ran, and every table added
+// after 0002 is invisible to `authenticated` here while working in production —
+// the harness would report a policy failure that is really a harness gap.
+const SUPABASE_DEFAULT_GRANTS =
+  `grant all on all tables in schema public to authenticated, service_role;` +
+  `alter default privileges in schema public grant all on tables to authenticated, service_role;`;
 
 export function startClusterWithMigrations(migrations = UP, { emulateAuth = true } = {}) {
   const port = String(50000 + Math.floor(Math.random() * 10000));
@@ -141,13 +161,17 @@ export function startClusterWithMigrations(migrations = UP, { emulateAuth = true
      * CRITICAL: the data-returning statement must be LAST and there is NO trailing
      * rollback — a single-string simple query returns only the LAST command's rows,
      * so `; rollback` would swallow the SELECT output. Session end rolls it back.
+     *
+     * `role` exists for the one case that is not a browser session: the jobs run
+     * as `service_role`, which bypasses RLS, and "the policy denies a person but
+     * not the automation" is only provable by running as both.
      */
-    const runClaims = (claims, query) => {
+    const runClaims = (claims, query, role = "authenticated") => {
       const claimsJson = JSON.stringify(claims).replace(/'/g, "''");
       const sql =
         `begin;` +
         `select set_config('request.jwt.claims', '${claimsJson}', true);` +
-        `set local role authenticated;` +
+        `set local role ${role};` +
         `${query}`;
       try {
         const out = execFileSync(psqlBin, psqlArgs(["-q", "-tAc", sql]), {

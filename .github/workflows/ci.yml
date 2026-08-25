@@ -1,0 +1,50 @@
+name: ci
+
+# One gate: replay every migration from zero on a throwaway local stack and run
+# the full test suite against it. Nothing here deploys — Vercel deploys on push
+# to main through its GitHub integration.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest # pin to the exact version after the first green run
+      - name: Authenticate GitHub Packages
+        run: pnpm config set "//npm.pkg.github.com/:_authToken" "${{ secrets.GH_PACKAGES_TOKEN }}"
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Shadow stack + replay migrations
+        run: |
+          supabase start
+          supabase db reset
+      - name: Tests against shadow stack
+        run: |
+          eval "$(supabase status -o env \
+            --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
+            --override-name auth.anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
+            --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY)"
+          export NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY
+          pnpm test
+      - name: Typecheck
+        run: pnpm typecheck

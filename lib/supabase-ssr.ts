@@ -52,9 +52,27 @@ export function getSsrClient(
  * Never throws: network or parse failures degrade to "no user", which the gate
  * treats as unauthenticated (deny-by-default).
  */
+/**
+ * The narrow slice of the Supabase user this app reads. Deliberately not
+ * `User` from supabase-js: widening it invites reading user_metadata, which is
+ * user-writable and must never decide anything. `email` is a verified claim and
+ * is safe to record as an author.
+ */
+export type SessionUser = {
+  /**
+   * The auth user id. Same value as profiles.id (0004 declares the profile's
+   * primary key as a reference to auth.users), which is why `assigned_to =
+   * auth.uid()` in the RLS policies needs no join — and why a server action can
+   * key a row on this id without looking a profile up first.
+   */
+  id?: string;
+  app_metadata?: { role?: unknown } & Record<string, unknown>;
+  email?: string | null;
+};
+
 export async function getSessionUser(
   client: SupabaseClient | null,
-): Promise<{ app_metadata?: { role?: unknown } & Record<string, unknown> } | null> {
+): Promise<SessionUser | null> {
   if (!client) return null;
   try {
     const { data, error } = await client.auth.getUser();
