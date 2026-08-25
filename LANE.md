@@ -32,10 +32,10 @@ Branch: `command-center`. Repo context: `CLAUDE.md` at root.
 - Writing outside `~/bcns-internal`
 
 **Baseline — pre-existing, not regressions. Do not "fix" these by editing assertions.**
-- 362 tests passing, 44 suites (was 217 at the start of the run)
+- 500 tests passing, 70 suites (was 217 at the start of the run)
 - Exactly 5 pre-existing lint errors: `lib/accounts.ts:141`, `lib/os/osFiles.ts:514`,
   `tests/accounts-data-layer.test.mjs:13`, `tests/rls-policies.test.mjs:66` and `:100`.
-  (`pnpm lint` prints each twice — 10 problems, 5 unique. Do not "fix" them.)
+  (`pnpm lint` reports 5 problems. Do not "fix" them.)
 - Test count is a **floor**. It must go up. Never delete a passing test to hold a number.
 
 **Every item additionally:** `tsc --noEmit` clean · existing passing tests remain
@@ -163,7 +163,7 @@ figures must read visually distinct from member-visible ones.
     - Given text with no recognisable event, the verb returns a typed parse-failure and writes no row
     - Moving a task to completed creates exactly one `inbox_items` row addressed to its `assigned_to` profile
     - Submitting the confirmation step writes exactly one `account_activity` row with the edited values, not the parsed ones
-  status: not started
+  status: done
   caution: true
 
 - task: Skill buttons and job-function gating. Add a run-skill control to the pages
