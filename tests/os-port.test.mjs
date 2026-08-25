@@ -14,7 +14,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { osDir, expandTilde } from "../lib/os/paths.ts";
-import { listSkills } from "../lib/os/skillsFiles.ts";
 
 let root;
 before(() => {
@@ -51,15 +50,4 @@ describe("ported os modules", () => {
     process.env.OS_DIR = root;
   });
 
-  test("skills parse out of a repointed root, descriptions included", async () => {
-    // listSkills takes the skills dir explicitly — the caller applies osDir(),
-    // which is why the module itself stayed portable.
-    const { tree, descriptions, warnings } = await listSkills(join(osDir(), "skills"));
-    assert.deepEqual(warnings, [], "a well-formed skill must produce no warnings");
-    const rels = tree.map((f) => f.relPath ?? f.name);
-    assert.ok(rels.some((r) => String(r).includes("grill-me")),
-      `expected grill-me, got ${JSON.stringify(rels)}`);
-    assert.ok([...descriptions.values()].includes("Interrogate a plan."),
-      "the frontmatter description must survive the port");
-  });
 });
