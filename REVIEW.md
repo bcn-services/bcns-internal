@@ -13,14 +13,26 @@ Nothing here has been deployed, pushed, or applied to production.
 |---|---|
 | `corepack pnpm test` | **893 pass · 0 fail · 0 skipped · 147 suites** (was 217 at the start) |
 | `corepack pnpm typecheck` | clean |
-| `corepack pnpm lint` | exactly **5** errors, all pre-existing — see below |
+| `corepack pnpm lint` | exactly **5** unique errors, all pre-existing — see below |
 | `corepack pnpm build` | compiled successfully, 13 pages |
 
-The 5 lint errors predate this work and were deliberately not "fixed":
+The 5 lint errors predate this work and were deliberately not "fixed". Note the
+raw count differs by checkout: this one prints each error twice, so it reports
+"10 problems" for the same 5 unique errors. There is no sixth.
+
+They are:
 `lib/accounts.ts:145`, `lib/os/osFiles.ts:514`, `tests/accounts-data-layer.test.mjs:13`,
 `tests/rls-policies.test.mjs:66` and `:100`.
 
 0 skipped matters: a skipped test is one that silently did not run.
+
+**One flaky test was found and fixed at the end of the run.** The migration-replay
+test wrote a deliberately-broken migration into the real `supabase/migrations/`
+directory to prove replay catches it. Every other suite discovers migrations by
+globbing that directory, so any suite that happened to boot a cluster during that
+window applied the broken file and died — roughly one run in three. The bad file now
+lives in a temp directory and is passed explicitly. Five consecutive full-suite runs
+are green.
 
 ---
 
