@@ -18,12 +18,31 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PG_BIN = "/opt/homebrew/bin";
+// Where initdb/pg_ctl/psql live. Homebrew on a Mac, a versioned directory on
+// Debian/Ubuntu (the GitHub runner ships PostgreSQL there, and it is NOT on
+// PATH). $PG_BIN overrides both. Highest version first so a machine with
+// several installed uses the newest.
+const debianBins = () => {
+  try {
+    return readdirSync("/usr/lib/postgresql")
+      .sort((a, b) => Number(b) - Number(a))
+      .map((v) => `/usr/lib/postgresql/${v}/bin`);
+  } catch {
+    return [];
+  }
+};
+const PG_BIN =
+  process.env.PG_BIN ??
+  ["/opt/homebrew/bin", ...debianBins(), "/usr/local/bin", "/usr/bin"].find((d) =>
+    existsSync(join(d, "initdb")),
+  ) ??
+  "/opt/homebrew/bin";
+
 export const initdb = join(PG_BIN, "initdb");
 export const pgCtl = join(PG_BIN, "pg_ctl");
 export const psqlBin = join(PG_BIN, "psql");
