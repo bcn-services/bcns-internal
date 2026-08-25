@@ -132,6 +132,33 @@ describe("read_site", () => {
     assert.ok(r.data.text.length <= 512 * 1024);
   });
 
+  // The test above passes on MAX_TEXT_CHARS alone: 2MB of plain text is sliced
+  // to 40k characters whether or not the BYTE cap works. This one isolates the
+  // byte cap by counting what is actually pulled off the wire — it fails if
+  // MAX_BYTES is raised, which the truncation test above does not.
+  test("the byte cap stops reading the stream — not just the text slice", async () => {
+    const CHUNK = 64 * 1024;
+    let pulled = 0;
+    const fetchImpl = async () =>
+      new Response(
+        new ReadableStream({
+          pull(c) {
+            pulled += CHUNK;
+            if (pulled > 8 * 1024 * 1024) return c.close();
+            c.enqueue(new Uint8Array(CHUNK).fill(0x79));
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/plain" } },
+      );
+    const r = await read_site.run({ ...ctx(), fetchImpl }, { url: `${base}/stream` });
+    assert.equal(r.ok, true, JSON.stringify(r.error));
+    assert.equal(r.data.truncated, true);
+    assert.ok(
+      pulled <= 1024 * 1024,
+      `read_site drained ${pulled} bytes; the 512KB cap did not stop the stream`,
+    );
+  });
+
   test("a loopback host is REFUSED by default — the opt-in is what makes the tests above work", async () => {
     const r = await read_site.run({ caller: MEMBER }, { url: `${base}/page` });
     assert.equal(r.ok, false);
@@ -321,6 +348,15 @@ describe("os_publish", () => {
     const argv = src.match(/"[^"]*"/g) ?? [];
     for (const bad of ["--force", "--force-with-lease", "-f", "+HEAD", "--mirror"]) {
       assert.ok(!argv.includes(`"${bad}"`), `os_publish passes ${bad} to git`);
+    }
+    // A literal flag list misses refspec syntax: `git push origin +main:main`
+    // force-updates the remote with no flag at all. Reject a leading `+` in any
+    // string literal in this file, and any --force spelling as a substring.
+    for (const lit of argv) {
+      const v = lit.slice(1, -1);
+      assert.ok(!/^\+\S*:/.test(v), `os_publish uses a force refspec: ${v}`);
+      assert.ok(!/--force|--mirror/.test(v) || v.includes("nothing was force-pushed"),
+        `os_publish argv contains ${v}`);
     }
   });
 });
