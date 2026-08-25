@@ -343,4 +343,4 @@ figures must read visually distinct from member-visible ones.
     - `pnpm test` passes with a count above 217, `tsc --noEmit` is clean, lint shows exactly the 5 known errors, and `next build` succeeds
     - REVIEW.md lists every item with its final status and a reason for each non-done one
     - Every new route renders with seeded content, verified by build output rather than a live server
-  status: not started
+  status: done
