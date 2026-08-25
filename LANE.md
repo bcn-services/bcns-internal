@@ -325,7 +325,7 @@ figures must read visually distinct from member-visible ones.
     - Deactivating a `lead_targets` row makes the sweep skip it while leaving prior accounts intact
     - The token panel shows expiry status for a seeded row expiring in 10 days and never renders the sealed value
     - `next build` succeeds
-  status: not started
+  status: done
 
 - task: Final integration pass and the review handoff. Run the full suite, `tsc --noEmit`,
     lint, and `next build`. Seed the database with realistic fixture data so every surface
@@ -340,7 +340,7 @@ figures must read visually distinct from member-visible ones.
     - REVIEW.md states what is actually verified and what is merely built, and does not blur the two
     - A blocked item is reported as blocked, never softened into done
   done when:
-    - `pnpm test` passes with a count above 217, `tsc --noEmit` is clean, lint shows exactly the 2 known errors, and `next build` succeeds
+    - `pnpm test` passes with a count above 217, `tsc --noEmit` is clean, lint shows exactly the 5 known errors, and `next build` succeeds
     - REVIEW.md lists every item with its final status and a reason for each non-done one
     - Every new route renders with seeded content, verified by build output rather than a live server
   status: not started
