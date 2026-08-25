@@ -1,16 +1,14 @@
 /**
  * mailer.ts — the ONE adapter behind which sending lives, and its no-op.
  *
- * THE SEND HALF OF ITEM 7 IS BLOCKED. Configuring Resend needs an interactive
- * signup, which the run that built this was not permitted to do, so no provider
- * exists: no dependency, no key, nothing in any env file. See
- * docs/NOTIFICATIONS.md for the numbered steps a human follows to unblock it —
- * the only file that has to change is this one, and only the marked place.
+ * Two implementations: `nullMailer` (no provider configured) and `smtpMailer`
+ * (the bot mailbox on Google Workspace). `getMailer` picks between them from
+ * the environment. Sending stays off until the four SMTP_* vars and MAIL_FROM
+ * are all set — see docs/NOTIFICATIONS.md.
  *
- * WHY AN INTERFACE WITH ONE IMPLEMENTATION, which is normally a smell: the one
- * implementation is a NULL one. The interface is not speculative flexibility,
- * it is the seam that lets the routing layer be finished and tested while the
- * transport does not exist, and it is what the blocked half plugs into.
+ * The interface is the seam that let the routing layer be finished and tested
+ * while no transport existed, and it is what a second transport plugs into if
+ * cold outreach ever needs its own.
  *
  * Nothing here reads a key at import time — lib/env.ts's rule — so the app
  * builds and every test runs with no mail configuration at all.
@@ -50,19 +48,82 @@ export const nullMailer: Mailer = {
 };
 
 /**
- * Whichever adapter the environment has. Today that is always `nullMailer`.
+ * SMTP, for the bot mailbox on Google Workspace.
  *
- * WHEN RESEND IS CONFIGURED this is the only function that changes: read
- * `config.resendApiKey`, and when it is present return an adapter whose `send`
- * POSTs to https://api.resend.com/emails with `from: config.mailFrom`. Do not
- * add a second entry point — `deliverNotification` calls this and nothing else,
- * so one adapter is the whole send surface.
+ * WHY SMTP AND NOT RESEND: every notice this system sends goes to a bcns
+ * employee — a failed job, an assigned task, a lead asking for a meeting. None
+ * goes to a lead. A Workspace mailbox carries that volume without a third-party
+ * provider. Resend's separate subdomain and DKIM are for cold outreach, which
+ * nothing here sends; keeping the transports apart is the point of that split.
+ *
+ * The transporter is built per call rather than cached at module scope. Sends
+ * are rare and a cached transporter would pin one credential for the process's
+ * life, so a rotated app password would not take effect until a restart.
+ */
+export function smtpMailer(opts: {
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+  from: string;
+}): Mailer {
+  return {
+    name: "smtp",
+    async send(payload: EmailPayload): Promise<SendResult> {
+      try {
+        // Imported here, not at module top level, so the module stays loadable
+        // (and every test that never sends stays fast) without nodemailer.
+        const nodemailer = await import("nodemailer");
+        const transport = nodemailer.createTransport({
+          host: opts.host,
+          port: opts.port,
+          // 465 is implicit TLS. Any other port starts plaintext and upgrades
+          // via STARTTLS, which nodemailer requires by default.
+          secure: opts.port === 465,
+          auth: { user: opts.user, pass: opts.pass },
+        });
+        const info = await transport.sendMail({
+          from: opts.from,
+          to: payload.to,
+          subject: payload.subject,
+          text: payload.body,
+        });
+        return { ok: true, id: info.messageId };
+      } catch (err) {
+        // `configured: true` — a provider exists and refused. That records the
+        // row as `failed`, not `pending`, because a retry against the same
+        // broken configuration will fail the same way.
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+          configured: true,
+        };
+      }
+    },
+  };
+}
+
+/**
+ * Whichever adapter the environment has.
+ *
+ * SMTP wins if it is completely configured. A partial configuration is treated
+ * as no configuration: a missing password must park the email as `pending`, not
+ * hand nodemailer an empty credential and record a `failed` row that looks like
+ * the provider rejected it.
+ *
+ * `deliverNotification` calls this and nothing else, so one adapter is the
+ * whole send surface. Do not add a second entry point.
  */
 export function getMailer(): Mailer {
-  const { resendApiKey } = getConfig();
-  if (!resendApiKey) return nullMailer;
-  // Deliberately still the no-op: the adapter is not written, and a key alone
-  // must not turn into a silent real send from a half-finished item. Replacing
-  // this line is step 5 of docs/NOTIFICATIONS.md.
+  const { smtpHost, smtpPort, smtpUser, smtpPass, mailFrom } = getConfig();
+  if (smtpHost && smtpPort && smtpUser && smtpPass && mailFrom) {
+    return smtpMailer({
+      host: smtpHost,
+      port: smtpPort,
+      user: smtpUser,
+      pass: smtpPass,
+      from: mailFrom,
+    });
+  }
   return nullMailer;
 }

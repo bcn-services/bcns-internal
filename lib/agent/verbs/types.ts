@@ -90,7 +90,14 @@ export function fail(code: VerbErrorCode, message: string): { ok: false; error: 
 /** Remove any literal occurrence of a server-side secret from a message. */
 export function scrub(message: string): string {
   let out = message;
-  for (const name of ["SUPABASE_SERVICE_ROLE_KEY", "AGENT_TOKEN_KEY", "ANTHROPIC_API_KEY"]) {
+  for (const name of [
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "AGENT_TOKEN_KEY",
+    "ANTHROPIC_API_KEY",
+    // The bot mailbox's app password. An SMTP auth failure quotes the
+    // credential back in some server responses, and that message reaches a log.
+    "SMTP_PASS",
+  ]) {
     const secret = process.env[name]?.trim();
     // A short/blank value would match everywhere; only redact a real-looking one.
     if (secret && secret.length >= 8) out = out.split(secret).join(`[${name} redacted]`);

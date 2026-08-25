@@ -1,15 +1,26 @@
-# Notifications — routing, and the blocked send half
+# Notifications — routing and sending
 
-The routing layer is built and tested. **Sending is blocked** and will stay
-blocked until a human does the twelve steps below, because configuring Resend
-needs an interactive signup that an unattended agent is not permitted to do.
+The routing layer is built and tested. **Sending is built and needs one setup
+step**: a bot mailbox on Google Workspace, and its credentials in the env file.
 
-Nothing in this repo sends mail today. No provider, no dependency, no key in any
-env file. Every email this system decides to send is **rendered in full and
-recorded in the `email_outbox` table with status `pending`** — which is why
-unblocking the send half is a configuration job, not a rewrite.
+Until those are set, every email this system decides to send is **rendered in
+full and recorded in the `email_outbox` table with status `pending`** — nothing
+is lost, and finishing the setup is a configuration job, not a rewrite.
 
----
+## Why a mailbox and not Resend
+
+Every notice this system sends goes to a **bcns employee**: a failed scheduled
+run, a task assigned, a lead asking for a meeting. None goes to a lead. A
+Workspace mailbox carries that volume — a handful of messages a day against a
+2,000-recipient daily limit — with no third-party provider and no new account.
+
+Resend still has a job, and it is a different one. **Cold outreach to leads must
+never go through the bot mailbox.** Google's terms prohibit unsolicited bulk
+mail, and a complaint spiral against `bcn-services.com` would take down the
+mailbox that carries these internal notices along with it. When outreach sending
+is built, it gets its own subdomain and its own DKIM, exactly so the two
+reputations cannot touch. `lib/mailer.ts` already has the seam for a second
+transport.
 
 ## What is already built
 
@@ -61,111 +72,63 @@ an adapter.
 
 ---
 
-## Configuring Resend — what a human must do
+## Setting up the bot mailbox — what a human must do
 
-1. Go to <https://resend.com> and sign up (or sign in). The free tier sends 100
-   emails a day, which is more than this system will produce.
-2. **Add and verify a domain.** Resend → *Domains* → *Add Domain* →
-   `bcn-services.com`. Resend prints DKIM, SPF, and a return-path record; add
-   all of them at the registrar and wait for the domain to read *Verified*.
-   Skipping this and sending from `onboarding@resend.dev` works only to your own
-   account's address and will not do for employee mail.
-3. **Create an API key.** Resend → *API Keys* → *Create API Key*, permission
-   **Sending access**, restricted to the domain from step 2. Copy it once —
-   Resend never shows it again.
-4. **Set the environment variables.** Four, all server-side; none is
-   `NEXT_PUBLIC_*` and none may ever be:
+An unattended agent cannot do steps 1–4: they need an interactive Google Admin
+sign-in, and step 3 produces a credential no agent may handle.
 
-   | Variable | Value | Notes |
-   |---|---|---|
-   | `RESEND_API_KEY` | the key from step 3 | Secret. Never commit it. |
-   | `MAIL_FROM` | e.g. `bcns <notices@bcn-services.com>` | Must be on the verified domain. |
-   | `NOTIFY_ADMIN_EMAIL` | Nate's address | Defaults to `nseluga@g.hmc.edu` (`DEFAULT_ADMIN_EMAIL` in `lib/env.ts`). Whatever it is set to is looked up in `profiles` by email; that profile is who "the admin" means. |
-   | `NOTIFY_ALLOWED_RECIPIENTS` | comma-separated addresses | **The safety catch.** Any address not on this list is rendered and recorded but never handed to the adapter. Defaults to `nseluga@g.hmc.edu` alone. |
+1. **Create the mailbox.** Google Admin (admin.google.com, signed in as an
+   admin of `bcn-services.com`) → *Directory* → *Users* → *Add new user*.
+   Name it something a recipient will understand — `bcns bot`, address
+   `bot@bcn-services.com`. A full user seat is billable; a **group** with the
+   same address is free but cannot authenticate to SMTP, so it has to be a user.
 
-   Where to set them: `.env.local` for local development, and the Vercel
-   project's *Settings → Environment Variables* (Production **and** Preview) for
-   the deployment. Never stage a `.env` file.
+2. **Turn on 2-Step Verification** for that account. Sign in as the bot once at
+   myaccount.google.com and enable it. Google will not issue an app password
+   without it.
 
-5. **Write the adapter.** In `lib/mailer.ts`, `getMailer()` currently returns
-   `nullMailer` even when a key is present — deliberately, so a key alone cannot
-   turn into a silent real send. Replace the marked line with an adapter that
-   POSTs to `https://api.resend.com/emails`:
+3. **Create an app password.** myaccount.google.com → *Security* → *App
+   passwords* → name it `bcns-internal`. Google shows a 16-character string
+   **once**. This is a credential: do not paste it into a chat, a commit, or an
+   issue. It is scoped to this one app and can be revoked on its own without
+   touching the account password.
 
-   ```ts
-   const resendMailer = (key: string, from: string): Mailer => ({
-     name: "resend",
-     async send({ to, subject, body }) {
-       const res = await fetch("https://api.resend.com/emails", {
-         method: "POST",
-         headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-         body: JSON.stringify({ from, to, subject, text: body }),
-       });
-       if (!res.ok) return { ok: false, error: `resend ${res.status}: ${await res.text()}`, configured: true };
-       return { ok: true, id: (await res.json())?.id };
-     },
-   });
+4. **Put it in `.env.local`** (gitignored; never `.env.example`):
+
+   ```
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=465
+   SMTP_USER=bot@bcn-services.com
+   SMTP_PASS=<the 16-character app password, no spaces>
+   MAIL_FROM=bcns <bot@bcn-services.com>
    ```
 
-   Use `fetchWithTimeout` from `lib/fetch-timeout.ts` rather than bare `fetch`; a
-   hung provider must not hold a request open. Return `configured: true` on every
-   failure from here — the provider exists, it simply said no.
+   All five must be present. A partial configuration is deliberately treated as
+   no configuration, so a missing password parks mail as `pending` rather than
+   recording it as permanently `failed`.
 
-   Do **not** add the `resend` npm package. The REST call is six lines and a
-   dependency is a supply chain.
+5. **Send one test message.** `NOTIFY_ALLOWED_RECIPIENTS` defaults to
+   `nseluga@g.hmc.edu`, so that is the only address a send can reach until you
+   widen it. Trigger a `task_assigned` notice to yourself and confirm it lands.
+   This is the step the test suite cannot do — `tests/mailer-smtp.test.mjs`
+   proves the transport selection and the failure path, never a real delivery.
 
-6. **Apply migration 0012** to production if it is not applied yet:
-   `supabase/migrations/0012_email_outbox.sql`. It is purely additive.
+6. **Check where it landed.** First message from a new sender often goes to
+   spam. If it does, the SPF record for `bcn-services.com` must include Google:
+   `v=spf1 include:_spf.google.com ~all`. DKIM for Workspace is enabled in
+   Google Admin → *Apps* → *Google Workspace* → *Gmail* → *Authenticate email*.
 
-7. **Verify a first real send.** With `NOTIFY_ALLOWED_RECIPIENTS` still holding
-   only your own address, run one failing job — or from a `tsx` shell:
+7. **Widen the allowlist** to the real employee addresses once a message
+   arrives, via `NOTIFY_ALLOWED_RECIPIENTS` (comma-separated).
 
-   ```ts
-   import { deliverNotification } from "./lib/notify";
-   import { getServiceClient } from "./lib/supabase-admin";
-   await deliverNotification(
-     { serviceDb: getServiceClient(), caller: { profileId: "<your profile id>", email: "<you>", role: "admin" } },
-     { kind: "job_run_failed", inboxProfileId: "<your profile id>", title: "smoke test", body: "ignore me" },
-   );
-   ```
-
-8. **Check the three places it should show up**, in this order:
-   - the return value: `delivered: true` and a non-null `outboxId`;
-   - the database: `select status, sent_at, error from email_outbox order by created_at desc limit 1`
-     must read `sent`, a timestamp, and `null`;
-   - your mailbox.
-
-   If the row says `pending` with an error mentioning
-   `NOTIFY_ALLOWED_RECIPIENTS`, the address is not on the allowlist — that is the
-   guard working, not a bug. If it says `failed`, the `error` column holds the
-   provider's own words.
-
-9. **Widen the allowlist** to the real employees only once step 8 is green:
-   `NOTIFY_ALLOWED_RECIPIENTS=nseluga@g.hmc.edu,brandon@bcn-services.com,…`.
-   Widen it deliberately. Every address on this list can receive real mail from
-   an unattended job.
-
-10. **Drain what accumulated while sending was blocked**, if you want it:
-    `select * from email_outbox where status = 'pending' order by created_at`.
-    These are real decisions the system made and could not act on. Send them by
-    hand, or write the retry job — the `attempts` column exists so a retry can be
-    bounded instead of looping.
-
-11. **Never** put any of these keys in `NEXT_PUBLIC_*`, in a client component, or
-    in a committed file. `lib/agent/verbs/types.ts#scrub` redacts the Supabase and
-    Anthropic keys from error messages; add `RESEND_API_KEY` to that list in the
-    same change.
-
-12. **Update this document** to say sending is live, and delete the "blocked"
-    header.
-
----
+`SMTP_PASS` is already in the redaction list in `lib/agent/verbs/types.ts#scrub`,
+so it cannot surface in a logged error message.
 
 ## Failure behaviour, as built
 
 | Situation | Inbox item | Email payload | `email_outbox.status` |
 |---|---|---|---|
-| No provider (today) | written | rendered | `pending`, error `no mail provider is configured` |
+| No provider, or a partial one | written | rendered | `pending`, error `no mail provider is configured` |
 | Recipient not on the allowlist | written | rendered | `pending`, error names `NOTIFY_ALLOWED_RECIPIENTS` |
 | Provider refuses | written | rendered | `failed`, with the provider's reason |
 | Adapter throws | written | rendered | `failed`, with the exception message |
