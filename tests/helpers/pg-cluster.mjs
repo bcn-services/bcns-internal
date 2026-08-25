@@ -181,9 +181,12 @@ export function startClusterWithMigrations(migrations = UP, { emulateAuth = true
      * Run `query` as the `authenticated` role with the given JWT claims, inside a
      * transaction discarded when psql disconnects.
      *
-     * CRITICAL: the data-returning statement must be LAST and there is NO trailing
-     * rollback — a single-string simple query returns only the LAST command's rows,
-     * so `; rollback` would swallow the SELECT output. Session end rolls it back.
+     * CRITICAL: `query` must be the ONLY statement here that returns rows, and
+     * there is NO trailing rollback. psql 17 prints the result of every command
+     * in a multi-statement -c string (psql 16 and older printed just the last),
+     * so the setup statements are written to return nothing at all — hence the
+     * DO block rather than `select set_config(...)`. A trailing `rollback` would
+     * still be fine for output, but session end rolls the transaction back anyway.
      *
      * `role` exists for the one case that is not a browser session: the jobs run
      * as `service_role`, which bypasses RLS, and "the policy denies a person but
@@ -193,7 +196,7 @@ export function startClusterWithMigrations(migrations = UP, { emulateAuth = true
       const claimsJson = JSON.stringify(claims).replace(/'/g, "''");
       const sql =
         `begin;` +
-        `select set_config('request.jwt.claims', '${claimsJson}', true);` +
+        `do $harness$ begin perform set_config('request.jwt.claims', '${claimsJson}', true); end $harness$;` +
         `set local role ${role};` +
         `${query}`;
       try {
