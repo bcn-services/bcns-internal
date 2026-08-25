@@ -6,16 +6,21 @@
  * `inbox_post` and nothing else — there is exactly one insert path into an
  * inbox in this codebase and this file does not become a second one.
  *
- * EMAIL IS THE EXCEPTION AND THE RULE IS SETTLED. Three events send one:
+ * EMAIL IS THE EXCEPTION AND THE RULE IS SETTLED. Four events send one:
  *
  *   job_run_failed      → the admin (a scheduled run that died)
+ *   job_run_attention   → the admin (a run that came back with findings)
  *   task_assigned       → the assignee, whoever they are
  *   lead_reply_meeting  → the admin (a lead asking for a meeting)
  *
  * and three deliberately do not: `job_run_ok`, `daily_briefing`,
  * `agent_proposal`. That list is `EMAIL_EVENTS` below and it is the whole
  * policy — do not re-derive it at a call site, and do not add an `if` next to
- * one. A seventh event kind is a line in the table, not a branch.
+ * one. `job_run_attention` was added by item 12 exactly that way: a line in
+ * the table, not a branch. It does not widen the settled rule — a run that did
+ * not come back clean already emailed the admin, and item 9 was folding these
+ * into `job_run_failed` to get that. It only stops the row from lying about
+ * which of the two happened.
  *
  * NOTE THAT THE TWO RECIPIENTS ARE NOT THE SAME PERSON. A member's skill run
  * that fails puts the notice in THEIR inbox (they are the one waiting on it)
@@ -52,6 +57,11 @@ import { getMailer, type EmailPayload, type Mailer } from "./mailer";
 
 export type NotifyEventKind =
   | "job_run_failed"
+  // The seventh kind, added by item 12. Item 9 folded "the sweep found a site
+  // down" into `job_run_failed` because a seventh kind was the thing it did
+  // not want to add; the cost was that a healthy run reads as a broken one
+  // wherever the status is shown. Same audience, different sentence.
+  | "job_run_attention"
   | "job_run_ok"
   | "task_assigned"
   | "lead_reply_meeting"
@@ -61,12 +71,15 @@ export type NotifyEventKind =
 /** Who the EMAIL goes to. Absence from this table means: no email, ever. */
 const EMAIL_AUDIENCE: Partial<Record<NotifyEventKind, "admin" | "subject">> = {
   job_run_failed: "admin",
+  // Same audience as a failure on purpose: a client's site being down is the
+  // admin's problem whether or not the job that noticed it was healthy.
+  job_run_attention: "admin",
   lead_reply_meeting: "admin",
   // "all employees get this one" — the assignee, not the admin.
   task_assigned: "subject",
 };
 
-/** The three that send. Derived from the table above so the two cannot drift. */
+/** The ones that send. Derived from the table above so the two cannot drift. */
 export const EMAIL_EVENTS: readonly NotifyEventKind[] = Object.keys(
   EMAIL_AUDIENCE,
 ) as NotifyEventKind[];
@@ -422,9 +435,13 @@ export async function notifyJobRun(
   row: JobRunRow,
   inboxProfileId?: string,
 ): Promise<NotifyOutcome | null> {
+  // THREE OUTCOMES, NOT TWO. `attention` is a run that came back and found
+  // something; `failed` is a run that did not come back. Both reach the admin,
+  // and the difference is the sentence, not the audience — see the kind table.
   const failed = row.status === "error" || row.status === "failed";
+  const attention = row.status === "attention";
   const succeeded = row.status === "ok";
-  if (!failed && !succeeded) return null;
+  if (!failed && !attention && !succeeded) return null;
 
   const admin = await (deps.admin?.() ?? resolveAdmin(deps.serviceDb));
   const profileId = inboxProfileId ?? admin.profileId;
@@ -437,10 +454,20 @@ export async function notifyJobRun(
     // per run rather than once per half.
     { ...deps, admin: async () => admin },
     {
-      kind: failed ? "job_run_failed" : "job_run_ok",
+      kind: failed ? "job_run_failed" : attention ? "job_run_attention" : "job_run_ok",
       inboxProfileId: profileId ?? "",
-      title: failed ? `${row.job} failed` : `${row.job} finished`,
-      body: row.log ?? (failed ? `${row.job} did not finish.` : `${row.job} finished cleanly.`),
+      title: failed
+        ? `${row.job} failed`
+        : attention
+          ? `${row.job} needs attention`
+          : `${row.job} finished`,
+      body:
+        row.log ??
+        (failed
+          ? `${row.job} did not finish.`
+          : attention
+            ? `${row.job} ran and found something to look at.`
+            : `${row.job} finished cleanly.`),
       sourceJob: row.job,
       facts: { job: row.job, status: row.status, actor: row.actor ?? null },
     },

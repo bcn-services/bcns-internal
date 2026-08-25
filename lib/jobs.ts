@@ -26,14 +26,17 @@
  *    `finished_at` is what `job_runs_unfinished_idx` exists to make visible,
  *    and this framework's job is to never produce one.
  *
- * 3. `failed` MEANS "DID NOT COME BACK CLEAN", NOT ONLY "THREW". A sweep that
- *    ran perfectly and found a client's site down has FAILED, because the only
- *    lever item 7's settled rule table gives a job is its own status:
- *    `job_run_failed` emails the admin and `job_run_ok` emails nobody. Rather
- *    than add a seventh event kind (the rule table is settled and this file
- *    does not touch it) or invent a second notification path, a job returns
- *    FINDINGS and a non-empty findings list is a failed run. A clean run still
- *    posts its inbox item, because everything reaches the inbox.
+ * 3. A FINDING IS `attention`, NOT `failed` — CORRECTED FROM ITEM 9. A sweep
+ *    that ran perfectly and found a client's site down did not fail: the
+ *    automation is fine and the world is not. Item 9 wrote `failed` for both
+ *    because the only lever the rule table gave it was its own status, and
+ *    said so in this comment; the fix is the seventh event kind it declined to
+ *    add (`job_run_attention`, lib/notify.ts), which emails the admin exactly
+ *    as `job_run_failed` does while letting the row say which happened. `failed`
+ *    now means only "did not come back" — a throw, a timeout, or a run row that
+ *    could never be opened, where the findings are UNKNOWN rather than empty.
+ *    A clean run still posts its inbox item, because everything reaches the
+ *    inbox.
  *
  * 4. NOTHING REACHES A NETWORK EXCEPT THROUGH AN INJECTED FUNCTION. The health
  *    sweep takes a `SiteFetcher`; the quiet detector takes a `CommitReader`.
@@ -214,9 +217,12 @@ export async function runJob(def: JobDefinition, deps: JobRunDeps): Promise<JobO
     findings = result.findings;
     log = result.log;
     facts = result.facts;
-    // The job never sets its own status. A finding is a failure, always.
-    if (findings.length > 0) status = "failed";
+    // The job never sets its own status. A finding is `attention`, always —
+    // the run came back, so its findings are known and complete.
+    if (findings.length > 0) status = "attention";
   } catch (err) {
+    // It did NOT come back. Whatever it had found is lost with it, which is
+    // why this is a different word from the branch above.
     status = "failed";
     log = err instanceof Error ? err.message : String(err);
     findings = [log];

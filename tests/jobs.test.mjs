@@ -210,14 +210,30 @@ describe("the row always closes — a throw, a timeout and a rejected promise", 
     assert.equal(clean.tables.inbox_items[0].kind, "job_run_ok");
   });
 
-  test("a job that finds something has failed, even though it ran perfectly", async () => {
+  test("a job that finds something is `attention`, NOT `failed` — it ran perfectly", async () => {
+    // Item 9 wrote `failed` here and item 12 corrected it: a sweep that came
+    // back and found a site down is a healthy job and an unhealthy world, and
+    // /admin's job history is unreadable if the two share a word. The email
+    // still goes to the admin — only the sentence changed.
     const h = harness();
     const out = await runJob(
       jobOf("t_finding", async () => ({ findings: ["one thing"], log: "looked" })),
       h.deps,
     );
-    assert.equal(out.status, "failed", "findings are the only thing that decides status");
-    assert.equal(h.tables.email_outbox.length, 1);
+    assert.equal(out.status, "attention", "findings are the only thing that decides status");
+    assert.equal(h.tables.job_runs[0].status, "attention", "and the ROW says so, not just the return");
+    assert.ok(h.tables.job_runs[0].finished_at, "it still closed");
+    assert.equal(h.tables.email_outbox.length, 1, "and it still reaches the admin");
+    assert.equal(h.tables.email_outbox[0].kind, "job_run_attention");
+    assert.match(h.tables.inbox_items[0].title, /needs attention/);
+  });
+
+  test("`failed` is now reserved for a run that did not come back", async () => {
+    const h = harness();
+    const out = await runJob(jobOf("t_threw", async () => { throw new Error("boom"); }), h.deps);
+    assert.equal(out.status, "failed");
+    assert.equal(h.tables.email_outbox[0].kind, "job_run_failed", "still the admin, different sentence");
+    assert.match(h.tables.inbox_items[0].title, /failed/);
   });
 
   test("with no service client the job refuses rather than running unguarded", async () => {
@@ -346,7 +362,7 @@ describe("credential expiry — 29 days warns, 31 days is silent", () => {
   test("a token expiring in 29 days warns", async () => {
     const h = harness(withTokens([{ profile_id: NATE, expires_at: daysFromNow(29) }]));
     const out = await runJob(credentialExpiryJob(), h.deps);
-    assert.equal(out.status, "failed", "a warning is a finding");
+    assert.equal(out.status, "attention", "a warning is a finding, and a finding is not a failure");
     assert.equal(out.findings.length, 1);
     assert.match(out.findings[0], /Nate's Claude Code token expires in 29d/);
     assert.equal(h.tables.email_outbox.length, 1, "and it reaches the admin by email");

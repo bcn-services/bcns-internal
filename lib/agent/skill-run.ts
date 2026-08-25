@@ -38,14 +38,29 @@ import { scrub } from "./verbs/types";
  * Terminal states written into `job_runs.status`. `running` is the opening
  * value.
  *
- * `error` is what an interactive skill run writes when the runner said no.
- * `failed` is what a SCHEDULED job writes (lib/jobs.ts) — item 9's word, and
- * the one `notifyJobRun` in lib/notify.ts was already written to accept
- * alongside `error`. They are not merged because they mean different things to
- * a person reading the log: `error` is "this one press did not work", `failed`
- * is "the sweep did not come back clean".
+ * FOUR OUTCOMES, AND `attention` IS THE ONE ITEM 9 GOT WRONG. Item 9 wrote
+ * `failed` for two different things — the job threw, and the job ran perfectly
+ * but found a client's site down — because the only lever the notification
+ * rule table gave it was its own status. That made a healthy nightly sweep
+ * read as a broken one on every surface that shows the status, which is
+ * exactly what item 12's job-history panel is. The two are now separate
+ * values, and the extra lever is a seventh notification kind
+ * (`job_run_attention` in lib/notify.ts) rather than an `if` at a call site:
+ *
+ *   ok        — ran, found nothing. Nobody has to do anything.
+ *   attention — RAN FINE. Found something a human must look at (a site down,
+ *               a token lapsing). The automation is healthy; the world is not.
+ *   failed    — did not come back. It threw, hung, or could not open its row.
+ *               The automation itself is broken and its findings are unknown.
+ *   error     — an interactive skill run the runner refused. One press, one
+ *               person waiting. Kept distinct from `failed` because "this
+ *               button did not work" is not "the 6am sweep is down".
+ *   cancelled — stopped by the person who started it. Not an outcome.
+ *
+ * `attention` and `failed` both still email the admin: something is wrong
+ * either way. What changed is that the row no longer lies about which.
  */
-export type JobRunStatus = "ok" | "error" | "failed" | "cancelled";
+export type JobRunStatus = "ok" | "attention" | "error" | "failed" | "cancelled";
 
 /**
  * The outcome of trying to open a WINDOWED run — see 0014_job_windows.sql.

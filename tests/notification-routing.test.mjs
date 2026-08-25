@@ -161,7 +161,23 @@ describe("2. a SUCCESSFUL job_runs row: an inbox item and zero emails", () => {
     assert.equal(out.email, null);
   });
 
-  test("a run that is neither ok nor failed notifies nobody", async () => {
+  test("an `attention` run emails the admin but does not call itself a failure", async () => {
+    const db = service();
+    await notifyJobRun({ serviceDb: db, caller: adminCaller }, {
+      job: "site_health",
+      status: "attention",
+      log: "coventrycontracting.com is down",
+    });
+    const inbox = await all(db, "inbox_items");
+    const outbox = await all(db, "email_outbox");
+    assert.equal(outbox.length, 1, "findings still reach the admin by email");
+    assert.equal(outbox[0].kind, "job_run_attention");
+    assert.equal(inbox[0].kind, "job_run_attention");
+    assert.match(inbox[0].title, /needs attention/);
+    assert.doesNotMatch(inbox[0].title, /failed/);
+  });
+
+  test("a run that is neither ok, attention, nor failed notifies nobody", async () => {
     for (const status of ["running", "cancelled"]) {
       const db = service();
       assert.equal(
@@ -327,7 +343,13 @@ describe("4. with no provider: the inbox item is written and the email recorded"
 
 describe("the rule table — three email, three do not, all six reach the inbox", () => {
   test("EMAIL_EVENTS and INBOX_ONLY_EVENTS are exactly the settled lists", () => {
-    assert.deepEqual([...EMAIL_EVENTS].sort(), ["job_run_failed", "lead_reply_meeting", "task_assigned"]);
+    // job_run_attention joined the table in item 12. Same audience as
+    // job_run_failed on purpose — a client's site being down is the admin's
+    // problem whether or not the job that noticed it was healthy.
+    assert.deepEqual(
+      [...EMAIL_EVENTS].sort(),
+      ["job_run_attention", "job_run_failed", "lead_reply_meeting", "task_assigned"],
+    );
     assert.deepEqual([...INBOX_ONLY_EVENTS].sort(), ["agent_proposal", "daily_briefing", "job_run_ok"]);
     for (const k of EMAIL_EVENTS) assert.equal(emailsFor(k), true, `${k} must email`);
     for (const k of INBOX_ONLY_EVENTS) assert.equal(emailsFor(k), false, `${k} must NOT email`);
