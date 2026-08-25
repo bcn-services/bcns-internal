@@ -4,8 +4,8 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
-- Status: items 1–7 done (7 partly blocked), items 8–13 pending
-- Next: item 8 — the daily briefing
+- Status: items 1–8 done (7 partly blocked), items 9–13 pending
+- Next: item 9 — the job runner and its first three jobs
 - Blockers: item 7's send half — no mail provider is configured. Configuring Resend needs an interactive signup. See docs/NOTIFICATIONS.md.
 - Last updated: 2026-08-24
 
@@ -18,7 +18,7 @@ LANE.md wins for scope.
 | 5. Skill buttons and job-function gating | done — employees can now run a skill straight from the page where that work happens: pitch and quote on a lead or client, intake on a client, lead generation and system-improvement for admins only. Which buttons a person sees follows their job: sales and admins see the client-facing ones, developers see none, because every developer skill needs a cloned repo. Hiding a button is only tidiness — the server still refuses a run the person is not allowed to make, whatever the browser claims. Every run is recorded with who started it and how it ended. |
 | 6. Inbox | done — every employee now has a private inbox in the app, newest first, with unread marks and a count in the sidebar. Items link to whatever they are about, and replying to one logs the contact through the same review-before-saving step as the capture box. Privacy is enforced by the database itself, not by the page: nobody, admin included, can read or alter anyone else's inbox. The count in the sidebar is cached, so it does not query on every page you open. |
 | 7. Notification routing | done, except sending — the system now decides on its own whether something belongs in your inbox, your email, or both. Email goes out for exactly three things: a scheduled run that failed, a task assigned to you, and a lead saying they want to meet. Briefings, successful runs and agent proposals stay in the inbox only. Everything reaches the inbox no matter what. No mail provider is set up yet, so emails are written out in full and parked in a queue rather than lost — once Resend is configured they can be sent. docs/NOTIFICATIONS.md has the 12 steps. |
-| 8. Daily briefing | not started |
+| 8. Daily briefing | done — signing in kicks off a briefing in the background: the page appears at once with the card marked as building, and it fills itself in when ready, so nothing waits on a run that takes up to a minute. It covers everything since your last briefing rather than 'since yesterday', so a week away gives you one briefing for the week instead of seven stale ones. It runs at most once per 20 hours, proven safe against two sign-ins at the same moment, and a failed run leaves your window intact rather than silently eating it. The skill file itself is staged in the repo for you to install into ~/os. |
 | 9. Job runner and first three jobs | not started |
 | 10. Lead outreach lanes and sweep | not started |
 | 11. README export generator | not started |

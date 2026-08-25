@@ -32,7 +32,7 @@ Branch: `command-center`. Repo context: `CLAUDE.md` at root.
 - Writing outside `~/bcns-internal`
 
 **Baseline — pre-existing, not regressions. Do not "fix" these by editing assertions.**
-- 644 tests passing, 101 suites (was 217 at the start of the run)
+- 679 tests passing, 108 suites (was 217 at the start of the run)
 - Exactly 5 pre-existing lint errors: `lib/accounts.ts:141`, `lib/os/osFiles.ts:514`,
   `tests/accounts-data-layer.test.mjs:13`, `tests/rls-policies.test.mjs:66` and `:100`.
   (`pnpm lint` reports 5 problems. Do not "fix" them.)
@@ -243,7 +243,7 @@ figures must read visually distinct from member-visible ones.
     - Two login triggers inside 20 hours produce exactly one `job_runs` row
     - A briefing run that throws leaves `last_briefed_at` unchanged
     - The route returns in under 200ms with a briefing still building, proven by measurement not inspection
-  status: not started
+  status: done (skill file staged in os-staging/, not installed into ~/os)
 
 - task: Build the job runner framework and the three jobs that need no new data.
     A job is a script invoked by an external scheduler — never an inline timer — that
