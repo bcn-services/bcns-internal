@@ -238,7 +238,16 @@ export async function assignAccount(
 /** Append one contact record. This is the history the lead sheet could not keep. */
 export async function logActivity(
   db: Client_,
-  input: { accountId: string; kind: string; note?: string | null; actor?: string | null },
+  input: {
+    accountId: string;
+    kind: string;
+    note?: string | null;
+    actor?: string | null;
+    /** How it went. Free text; `outcome` has no CHECK in 0001. */
+    outcome?: string | null;
+    /** ISO instant. Omitted lets the column default to now(). */
+    occurredAt?: string | null;
+  },
 ): Promise<void> {
   if (!isUuid(input.accountId)) throw new InvalidInputError(`bad account id: ${input.accountId}`);
   if (!input.kind?.trim()) throw new InvalidInputError("activity kind is required");
@@ -246,6 +255,11 @@ export async function logActivity(
     account_id: input.accountId,
     kind: input.kind.trim(),
     note: input.note ?? null,
+    outcome: input.outcome ?? null,
+    // Only sent when the caller has one. Sending an explicit null would
+    // override the column's own `default now()` with NULL, and the column is
+    // NOT NULL — so the write would fail rather than fall back.
+    ...(input.occurredAt ? { occurred_at: input.occurredAt } : {}),
     // Column is `actor_email` in 0001, not `actor` — PostgREST rejects an
     // unknown column outright, so a mismatch here 400s every write.
     actor_email: input.actor ?? null,

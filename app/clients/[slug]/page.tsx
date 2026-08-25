@@ -17,6 +17,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getClientBySlug, getAccount, isValidSlug, centsToDollars } from "@/lib/accounts";
 import { getViewer } from "@/lib/supabase-server";
+import ActivityCapture from "../../activity-capture";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +73,10 @@ export default async function ClientDetailPage({
         )}
         <dt>Closed</dt><dd>{account?.close_date ?? "—"}</dd>
       </dl>
+      {/* Targeted by CLIENT id — the verb resolves it to the account, so
+          nobody on this page has to know the two tables are joined. */}
+      <ActivityCapture target={{ clientId: client.id }} />
+
       <p><Link href="/clients">Back to clients</Link></p>
     </main>
   );

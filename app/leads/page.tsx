@@ -27,6 +27,7 @@ import { listAccounts, STAGES, centsToDollars, type Stage } from "@/lib/accounts
 import { listProfiles } from "@/lib/profiles";
 import { getViewer } from "@/lib/supabase-server";
 import { advanceStage, addNote, convertLead, assignLead } from "./actions";
+import ActivityCapture from "../activity-capture";
 
 export const dynamic = "force-dynamic";
 
@@ -182,6 +183,11 @@ export default async function LeadsPage({
                 </label>
                 <button type="submit">Save stage</button>
               </form>
+
+              {/* Free text first, structured fallback second. The old
+                  kind+note form stays: it works with JavaScript off, and the
+                  capture box does not. */}
+              <ActivityCapture target={{ accountId: a.id }} />
 
               <form action={addNote}>
                 <input type="hidden" name="accountId" value={a.id} />

@@ -52,6 +52,11 @@ export type VerbErrorCode =
   | "not_found"
   | "not_configured"
   | "not_implemented"
+  // The free-text parser could not turn a person's words into a row. Its own
+  // code, not `invalid_input`: the input was fine, the reading of it failed,
+  // and the UI answers the two differently — a parse failure keeps the raw
+  // text on screen for manual entry rather than blaming the typist.
+  | "parse_failure"
   | "db_error"
   | "timeout"
   | "network_error"
@@ -164,6 +169,20 @@ export interface VerbContext {
   caller: Caller;
   /** RLS-scoped client for most verbs; service-role for `inbox_post`. */
   db?: DbClient;
+  /**
+   * Service-role client, for the one write RLS deliberately has no policy for:
+   * posting into somebody's `inbox_items`. Kept SEPARATE from `db` so a verb
+   * has to name the escalation to get it — an RLS-scoped client that could be
+   * quietly swapped for a service-role one is not a boundary.
+   */
+  serviceDb?: DbClient;
+  /**
+   * `log_activity`'s free-text path only. One call to lib/agent/runner.ts,
+   * narrowed to prompt-in / reply-out. Injected for the same reason `db` is:
+   * a test supplies a canned reply, and nothing in this directory spawns the
+   * CLI or reaches the network.
+   */
+  runParse?: (prompt: string) => Promise<{ ok: true; reply: string } | { ok: false; error: string }>;
   /** `read_site` only. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
   /**

@@ -18,6 +18,8 @@ import { getViewer } from "@/lib/supabase-server";
 import { InvalidInputError } from "@/lib/accounts";
 import { createTask, updateTaskStatus, assignTask, isTaskStatus } from "@/lib/tasks";
 import { listProfiles } from "@/lib/profiles";
+import { getServiceClient } from "@/lib/supabase-admin";
+import { isCompletedStatus, nudgeTaskClose, previousTaskStatus } from "@/lib/agent/task-nudge";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -82,12 +84,34 @@ async function addTaskImpl(formData: FormData): Promise<ActionResult> {
   }
 }
 
+/**
+ * Moving a task. The one interesting case is a CLOSE: it also asks the
+ * assignee to log what happened, through the same lib/agent/task-nudge.ts the
+ * tasks_write verb uses, so the board and the agent cannot drift on when a
+ * nudge fires or what it says.
+ */
 async function setStatusImpl(formData: FormData): Promise<ActionResult> {
   try {
-    const { db } = await requireDb();
+    const { db, role, email } = await requireDb();
     const status = String(formData.get("status") ?? "");
     if (!isTaskStatus(status)) return { ok: false, error: `Unknown status: ${status}` };
-    await updateTaskStatus(db, String(formData.get("taskId") ?? ""), status);
+    const taskId = String(formData.get("taskId") ?? "");
+
+    const before = isCompletedStatus(status) ? await previousTaskStatus(db, taskId) : null;
+    const task = await updateTaskStatus(db, taskId, status);
+
+    // The caller identity the nudge is posted UNDER — inbox_post still applies
+    // its own rule (a member may only post to their own inbox), which is why
+    // this passes the real viewer rather than inventing a system identity.
+    const { userId } = await getViewer();
+    if (userId && email) {
+      await nudgeTaskClose({
+        serviceDb: getServiceClient() ?? undefined,
+        caller: { profileId: userId, email, role },
+        task,
+        previousStatus: before,
+      });
+    }
     revalidatePath("/tasks");
     return { ok: true };
   } catch (e) {

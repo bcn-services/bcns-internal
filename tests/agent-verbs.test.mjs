@@ -359,7 +359,11 @@ describe("profiles_query open-task load", () => {
 /* ---------------------------------------------------------- log_activity -- */
 
 describe("log_activity", () => {
-  test("free text with no kind is not_implemented AND writes no row", async () => {
+  // The free-text path is implemented in lib/agent/activity-parse.ts and
+  // exercised in tests/activity-parse.test.mjs, where the runner can be stubbed.
+  // What stays asserted HERE is the property that survived the change: with no
+  // parser reachable, the verb still writes nothing rather than guessing.
+  test("free text with no parser injected is not_configured AND writes no row", async () => {
     const tables = fixture();
     const before = tables.account_activity.length;
     const r = await log_activity.run(
@@ -367,9 +371,9 @@ describe("log_activity", () => {
       { accountId: ACCT, text: "called Mike at Coventry Tuesday, wants a quote by Friday" },
     );
     assert.equal(r.ok, false);
-    assert.equal(r.error.code, "not_implemented");
+    assert.equal(r.error.code, "not_configured");
     // The negative side effect, checked on the real store the verb writes to.
-    assert.equal(tables.account_activity.length, before, "the parse stub wrote a row anyway");
+    assert.equal(tables.account_activity.length, before, "the parse path wrote a row anyway");
   });
 
   test("an explicit human kind writes exactly one row, stamped with the CALLER's email", async () => {

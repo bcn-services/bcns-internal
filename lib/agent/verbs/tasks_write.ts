@@ -14,6 +14,7 @@ import {
   type TaskStatus,
 } from "../../tasks";
 import { isUuid } from "../../accounts";
+import { isCompletedStatus, nudgeTaskClose, previousTaskStatus } from "../task-nudge";
 import { defineVerb, fail, ok, requireDb, type VerbResult } from "./types";
 
 export interface TasksWriteInput {
@@ -90,6 +91,17 @@ export const tasks_write = defineVerb<TasksWriteInput, Task>({
     const patch: { status?: TaskStatus; assigned_to?: string | null } = {};
     if (input.status !== undefined) patch.status = input.status;
     if (assignee !== undefined) patch.assigned_to = assignee;
-    return ok(await updateTask(db, input.id, patch));
+
+    // Read BEFORE the write, and only on the close path: re-saving a task that
+    // is already done must not send a second nudge, and that is the only fact
+    // the update's own return value cannot supply.
+    const before = isCompletedStatus(input.status)
+      ? await previousTaskStatus(db, input.id)
+      : null;
+
+    const task = await updateTask(db, input.id, patch);
+    // Best effort by design — the move landed, and a failed notice may not undo it.
+    await nudgeTaskClose({ serviceDb: ctx.serviceDb, caller: ctx.caller, task, previousStatus: before });
+    return ok(task);
   },
 });
