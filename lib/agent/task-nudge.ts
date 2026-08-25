@@ -13,8 +13,7 @@
  * bounded. A second insert path here would be a second set of rules.
  *
  * BEST EFFORT, ALWAYS. The task move already succeeded by the time this runs.
- * A missing service client, a member closing somebody else's task (inbox_post
- * refuses that, correctly), a database hiccup — none of them may turn a
+ * A missing service client, a database hiccup — none of them may turn a
  * completed task into an error the person has to re-do.
  *
  * EXACTLY ONE ROW. The callers read the prior status before the update and
@@ -60,10 +59,21 @@ export async function nudgeTaskClose(args: {
   if (!task.assigned_to) return false;
   if (!serviceDb) return false;
 
+  // POSTED AS THE ASSIGNEE, THROUGH THE SERVICE CLIENT.
+  //
+  // inbox_post's own rule is "a member may only post to their own inbox", and
+  // the closer is very often NOT the assignee — which made this nudge fail
+  // `forbidden` and vanish into a console.warn for the most common case in the
+  // app. The recipient here is `task.assigned_to` and can be nothing else (the
+  // literal below is the same expression), so posting under that identity
+  // widens nothing: there is no argument a caller can pass that reaches a third
+  // person's inbox. `caller` stays a parameter because it is who CLOSED the
+  // task, which is not who is being asked.
+  const recipient = task.assigned_to;
   const res = await inbox_post.run(
-    { caller, db: serviceDb },
+    { caller: { ...caller, profileId: recipient }, db: serviceDb },
     {
-      profileId: task.assigned_to,
+      profileId: recipient,
       kind: TASK_CLOSE_NUDGE_KIND,
       title: `Log what happened: ${task.title}`,
       body:

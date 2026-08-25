@@ -16,7 +16,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getViewer } from "@/lib/supabase-server";
 import { InvalidInputError } from "@/lib/accounts";
-import { createTask, updateTaskStatus, assignTask, isTaskStatus } from "@/lib/tasks";
+import {
+  createTask, updateTaskStatus, updateTaskStatusIfNot, assignTask, isTaskStatus,
+} from "@/lib/tasks";
 import { listProfiles } from "@/lib/profiles";
 import { getServiceClient } from "@/lib/supabase-admin";
 import { isCompletedStatus, nudgeTaskClose, previousTaskStatus } from "@/lib/agent/task-nudge";
@@ -97,19 +99,38 @@ async function setStatusImpl(formData: FormData): Promise<ActionResult> {
     if (!isTaskStatus(status)) return { ok: false, error: `Unknown status: ${status}` };
     const taskId = String(formData.get("taskId") ?? "");
 
-    const before = isCompletedStatus(status) ? await previousTaskStatus(db, taskId) : null;
-    const task = await updateTaskStatus(db, taskId, status);
+    // THE CLOSE IS THE CONDITIONAL WRITE. Reading the status first and then
+    // updating leaves a gap two concurrent closes both walk through, and both
+    // would nudge. `neq('status','done')` makes "was it still open?" the same
+    // statement as the move: whoever gets a row back did the closing.
+    let task;
+    let alreadyClosed = false;
+    if (isCompletedStatus(status)) {
+      const closed = await updateTaskStatusIfNot(db, taskId, status, "done");
+      if (closed) {
+        task = closed;
+      } else {
+        // No row matched: someone else closed it first, or the id is not a task.
+        // The second is a real error; the first is a no-op, not a failure.
+        if ((await previousTaskStatus(db, taskId)) === null) {
+          throw new InvalidInputError(`no such task: ${taskId}`);
+        }
+        alreadyClosed = true;
+      }
+    } else {
+      task = await updateTaskStatus(db, taskId, status);
+    }
 
-    // The caller identity the nudge is posted UNDER — inbox_post still applies
-    // its own rule (a member may only post to their own inbox), which is why
-    // this passes the real viewer rather than inventing a system identity.
+    // `previousStatus: null` is honest here — the conditional write above has
+    // already proven the task was NOT done, which is the only thing the prior
+    // status was ever read for.
     const { userId } = await getViewer();
-    if (userId && email) {
+    if (task && !alreadyClosed && userId && email) {
       await nudgeTaskClose({
         serviceDb: getServiceClient() ?? undefined,
         caller: { profileId: userId, email, role },
         task,
-        previousStatus: before,
+        previousStatus: null,
       });
     }
     revalidatePath("/tasks");

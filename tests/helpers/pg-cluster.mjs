@@ -60,7 +60,10 @@ create table auth.users (
 );
 create role anon;
 create role authenticated;
-create role service_role;
+-- service_role is BYPASSRLS in Supabase: the jobs are the writers RLS is not
+-- consulted for. Without it here a test of "service_role can still do X" would
+-- be testing a role Supabase does not ship.
+create role service_role bypassrls;
 grant usage on schema auth, public to anon, authenticated, service_role;
 `;
 
@@ -75,8 +78,8 @@ grant usage on schema auth, public to anon, authenticated, service_role;
 // after 0002 is invisible to `authenticated` here while working in production —
 // the harness would report a policy failure that is really a harness gap.
 const SUPABASE_DEFAULT_GRANTS =
-  `grant all on all tables in schema public to authenticated;` +
-  `alter default privileges in schema public grant all on tables to authenticated;`;
+  `grant all on all tables in schema public to authenticated, service_role;` +
+  `alter default privileges in schema public grant all on tables to authenticated, service_role;`;
 
 export function startClusterWithMigrations(migrations = UP, { emulateAuth = true } = {}) {
   const port = String(50000 + Math.floor(Math.random() * 10000));
@@ -158,13 +161,17 @@ export function startClusterWithMigrations(migrations = UP, { emulateAuth = true
      * CRITICAL: the data-returning statement must be LAST and there is NO trailing
      * rollback — a single-string simple query returns only the LAST command's rows,
      * so `; rollback` would swallow the SELECT output. Session end rolls it back.
+     *
+     * `role` exists for the one case that is not a browser session: the jobs run
+     * as `service_role`, which bypasses RLS, and "the policy denies a person but
+     * not the automation" is only provable by running as both.
      */
-    const runClaims = (claims, query) => {
+    const runClaims = (claims, query, role = "authenticated") => {
       const claimsJson = JSON.stringify(claims).replace(/'/g, "''");
       const sql =
         `begin;` +
         `select set_config('request.jwt.claims', '${claimsJson}', true);` +
-        `set local role authenticated;` +
+        `set local role ${role};` +
         `${query}`;
       try {
         const out = execFileSync(psqlBin, psqlArgs(["-q", "-tAc", sql]), {

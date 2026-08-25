@@ -57,6 +57,10 @@ export type VerbErrorCode =
   // and the UI answers the two differently — a parse failure keeps the raw
   // text on screen for manual entry rather than blaming the typist.
   | "parse_failure"
+  // The runner refused the work: every slot is in flight. A capacity answer,
+  // distinct from `parse_failure` so the UI can say "try again in a moment"
+  // rather than telling someone their words could not be read.
+  | "busy"
   | "db_error"
   | "timeout"
   | "network_error"
@@ -182,7 +186,15 @@ export interface VerbContext {
    * a test supplies a canned reply, and nothing in this directory spawns the
    * CLI or reaches the network.
    */
-  runParse?: (prompt: string) => Promise<{ ok: true; reply: string } | { ok: false; error: string }>;
+  runParse?: (
+    prompt: string,
+  ) => Promise<
+    | { ok: true; reply: string }
+    // `busy` and `timedOut` come straight off the runner. They are a CAPACITY
+    // answer, not a reading of the person's words, and the UI has to be able to
+    // say so instead of blaming the typist for a full queue.
+    | { ok: false; error: string; busy?: boolean; timedOut?: boolean }
+  >;
   /** `read_site` only. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
   /**

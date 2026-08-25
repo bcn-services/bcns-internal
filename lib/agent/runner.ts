@@ -63,6 +63,15 @@ const execFileAsync = promisify(execFile);
 const AGENT_TOOLS = "Read,Edit,Write,Glob,Grep,Skill";
 
 /**
+ * The CLI's own spelling for "no tools at all" (`--tools ""`). For a run that
+ * is a pure text→JSON transformation of somebody's free text: the text is
+ * untrusted, so an injected instruction inside it must not reach a tool-capable
+ * agent sitting in a writable clone of the os. NO_TOOLS is what that caller
+ * passes, and it is enforced by the argv builder below rather than by trust.
+ */
+export const NO_TOOLS = "";
+
+/**
  * Write paths denied inside the os clone. Each one auto-loads into future
  * Claude Code sessions, so a write there escapes the sandbox in TIME rather
  * than in space: the run ends, the instruction stays, and the next session
@@ -150,6 +159,8 @@ export interface AgentRunOptions {
   timeoutMs?: number;
   /** Model slug override; falls back to CHAT_MODEL then `sonnet`. */
   model?: string;
+  /** Tool set for this run. `NO_TOOLS` disables every tool; omitted = AGENT_TOOLS. */
+  tools?: string;
 }
 
 /** Model slug, tunable without a redeploy. */
@@ -178,11 +189,13 @@ export function buildArgs(opts: {
   model?: string;
   /** The os CLAUDE.md, read by the caller. See instructions(). */
   instructions?: string;
+  /** See AgentRunOptions.tools. `""` is a real value here, not "unset". */
+  tools?: string;
 }): string[] {
   const args = [
     "-p",
     "--tools",
-    AGENT_TOOLS,
+    opts.tools ?? AGENT_TOOLS,
     "--permission-mode",
     "acceptEdits",
     // Refuse every settings.json — user, project and local alike. This is what
@@ -458,7 +471,12 @@ export async function runAgent(
   }
 
   const bin = claudeBin();
-  const args = buildArgs({ sessionId, model: opts.model, instructions: await instructions(cwd) });
+  const args = buildArgs({
+    sessionId,
+    model: opts.model,
+    tools: opts.tools,
+    instructions: await instructions(cwd),
+  });
   const timeout = timeoutMs(opts.timeoutMs);
 
   inFlight++;

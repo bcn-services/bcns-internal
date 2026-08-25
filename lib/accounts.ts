@@ -11,6 +11,8 @@
  * at the database, not here — proven in tests/rls-policies.test.mjs.
  */
 
+import { HUMAN_KINDS } from "./agent/verbs/activity_query";
+
 /** The eight funnel stages. Order is the funnel order; the DB CHECK matches. */
 export const STAGES = [
   "new",
@@ -251,6 +253,16 @@ export async function logActivity(
 ): Promise<void> {
   if (!isUuid(input.accountId)) throw new InvalidInputError(`bad account id: ${input.accountId}`);
   if (!input.kind?.trim()) throw new InvalidInputError("activity kind is required");
+  // THE READABLE ERROR, NOT THE BOUNDARY. Every activity write in this app —
+  // the verb, the note box, a stage move, an assignment — comes through here,
+  // so one guard covers all of them instead of one per caller. The boundary is
+  // 0009's staff INSERT policy plus 0010's trigger, both of which refuse the
+  // agent kinds at the database whatever this layer does.
+  if (!(HUMAN_KINDS as readonly string[]).includes(input.kind.trim())) {
+    throw new InvalidInputError(
+      `activity kind not writable by a person: ${input.kind.trim()}`,
+    );
+  }
   const res: Result<unknown> = await db.from("account_activity").insert({
     account_id: input.accountId,
     kind: input.kind.trim(),

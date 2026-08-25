@@ -206,9 +206,10 @@ describe("the nudge never costs you the close", () => {
     assert.equal(tables.inbox_items.length, 1);
   });
 
-  test("a member closing SOMEONE ELSE's task is refused by inbox_post, and the move stands", async () => {
-    // inbox_post's own rule: a member may post only to their own inbox. The
-    // nudge does not get to bypass it, and the task move must not be undone.
+  test("a member closing SOMEONE ELSE's task nudges the ASSIGNEE, and the move stands", async () => {
+    // The nudge is posted under the assignee's identity through the service
+    // client, so inbox_post's "only your own inbox" rule is satisfied without
+    // being widened: the recipient is task.assigned_to and can be nothing else.
     const tables = fixture();
     const r = await tasks_write.run(
       { caller: MEMBER, db: fakeDb(tables), serviceDb: fakeDb(tables) },
@@ -216,7 +217,10 @@ describe("the nudge never costs you the close", () => {
     );
     assert.equal(r.ok, true, JSON.stringify(r.error));
     assert.equal(tables.tasks.find((t) => t.id === TASK_OTHER).status, "done");
-    assert.equal(nudges(tables).length, 0);
+    const posted = nudges(tables);
+    assert.equal(posted.length, 1, "the most common close in the app still posts nothing");
+    assert.equal(posted[0].profile_id, ADMIN.profileId);
+    assert.notEqual(posted[0].profile_id, MEMBER.profileId);
   });
 
   test("an inbox insert that errors still leaves the task closed", async () => {

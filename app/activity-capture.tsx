@@ -21,7 +21,7 @@
  */
 "use client";
 
-import { useReducer, useState } from "react";
+import { useReducer, useRef, useState } from "react";
 import { HUMAN_KINDS, type ActivityKind } from "@/lib/agent/verbs/activity_query";
 import {
   captureReducer,
@@ -30,6 +30,23 @@ import {
   emptyCapture,
 } from "@/lib/activity-capture";
 import { commitActivity, parseActivity, type CaptureTarget } from "./activity/actions";
+import type { VerbError } from "@/lib/agent/verbs/types";
+
+/**
+ * What to SAY about a failed parse. A full queue or a blown clock is the
+ * server's capacity, not a judgement on somebody's words — telling a person
+ * "could not read that text" when the real answer is "come back in a minute"
+ * sends them off rewriting a note that was fine.
+ */
+function parseMessage(err: VerbError): string {
+  if (err.code === "busy") {
+    return "The reader is busy right now. Your words are still here — file it by hand, or try again in a moment.";
+  }
+  if (err.code === "timeout") {
+    return "The reader took too long. Your words are still here — file it by hand, or try again.";
+  }
+  return err.message;
+}
 
 /** Resolved per render, not at module load: it is a browser fact. */
 function browserZone(): string {
@@ -50,39 +67,57 @@ export default function ActivityCapture({
   const [state, dispatch] = useReducer(captureReducer, undefined, emptyCapture);
   const [done, setDone] = useState<string | null>(null);
   const timeZone = browserZone();
+  /**
+   * The submit latch. `state.busy` is read from the render's closure, so an
+   * Enter-key resubmit before React re-renders sees the OLD false and both
+   * handlers run — which on the commit path writes the row twice. A ref is the
+   * same value without the closure, updated the instant the first submit starts.
+   */
+  const inFlight = useRef(false);
 
   async function onParse(e: React.FormEvent) {
     e.preventDefault();
-    if (!state.text.trim() || state.busy) return;
+    if (!state.text.trim() || state.busy || inFlight.current) return;
+    inFlight.current = true;
     setDone(null);
     dispatch({ type: "parsing" });
-    const res = await parseActivity(target, state.text, timeZone);
-    // A failure NEVER drops the text — it opens the same confirmation step
-    // with the raw words in the note, ready to file by hand.
-    if (!res.ok || res.data.written !== false) {
-      const message = res.ok ? "the parser returned no proposal" : res.error.message;
-      dispatch({ type: "parse_failed", message, now: new Date() });
-      return;
+    try {
+      const res = await parseActivity(target, state.text, timeZone);
+      // A failure NEVER drops the text — it opens the same confirmation step
+      // with the raw words in the note, ready to file by hand.
+      if (!res.ok || res.data.written !== false) {
+        const message = res.ok ? "the parser returned no proposal" : parseMessage(res.error);
+        dispatch({ type: "parse_failed", message, now: new Date() });
+        return;
+      }
+      dispatch({ type: "parsed", proposal: res.data.proposal });
+    } finally {
+      inFlight.current = false;
     }
-    dispatch({ type: "parsed", proposal: res.data.proposal });
   }
 
   async function onCommit(e: React.FormEvent) {
     e.preventDefault();
     const payload = commitPayload(state, target);
-    if (!payload || state.busy) return;
+    // The latch is checked BEFORE anything async: this is the double-write path.
+    if (!payload || state.busy || inFlight.current) return;
     if (!payload.note) {
       dispatch({ type: "commit_failed", message: "The note is empty." });
       return;
     }
+    inFlight.current = true;
     dispatch({ type: "committing" });
-    const res = await commitActivity({ ...payload, ...target });
-    if (!res.ok) {
-      dispatch({ type: "commit_failed", message: res.error.message });
-      return;
+    try {
+      const res = await commitActivity({ ...payload, ...target });
+      if (!res.ok) {
+        dispatch({ type: "commit_failed", message: res.error.message });
+        return;
+      }
+      setDone(`Logged: ${payload.kind}.`);
+      dispatch({ type: "committed" });
+    } finally {
+      inFlight.current = false;
     }
-    setDone(`Logged: ${payload.kind}.`);
-    dispatch({ type: "committed" });
   }
 
   const draft = state.draft;

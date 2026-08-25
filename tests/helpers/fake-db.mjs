@@ -46,6 +46,7 @@ export function fakeDb(tables, opts = {}) {
         if (f.op === "eq") rows = rows.filter((r) => r[f.col] === f.val);
         else if (f.op === "in") rows = rows.filter((r) => f.val.includes(r[f.col]));
         else if (f.op === "is") rows = rows.filter((r) => r[f.col] === f.val);
+        else if (f.op === "neq") rows = rows.filter((r) => r[f.col] !== f.val);
       }
       for (const o of [...st.orders].reverse()) {
         rows.sort((a, b) => {
@@ -77,9 +78,11 @@ export function fakeDb(tables, opts = {}) {
         const before = st.filters;
         let touched = [];
         for (const row of rowsOf()) {
-          const match = before.every((f) =>
-            f.op === "in" ? f.val.includes(row[f.col]) : row[f.col] === f.val,
-          );
+          const match = before.every((f) => {
+            if (f.op === "in") return f.val.includes(row[f.col]);
+            if (f.op === "neq") return row[f.col] !== f.val;
+            return row[f.col] === f.val;
+          });
           if (match) {
             Object.assign(row, st.payload);
             touched.push(clone(row));
@@ -105,6 +108,7 @@ export function fakeDb(tables, opts = {}) {
       insert: (row) => ((st.mode = "insert"), (st.payload = row), rec.ops.push(["insert", row]), b),
       update: (row) => ((st.mode = "update"), (st.payload = row), rec.ops.push(["update", row]), b),
       eq: (col, val) => (st.filters.push({ op: "eq", col, val }), rec.ops.push(["eq", col, val]), b),
+      neq: (col, val) => (st.filters.push({ op: "neq", col, val }), rec.ops.push(["neq", col, val]), b),
       in: (col, val) => (st.filters.push({ op: "in", col, val }), rec.ops.push(["in", col, val]), b),
       is: (col, val) => (st.filters.push({ op: "is", col, val }), rec.ops.push(["is", col, val]), b),
       order: (col, o = {}) => (st.orders.push({ col, ...o }), rec.ops.push(["order", col, o]), b),

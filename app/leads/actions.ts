@@ -47,6 +47,32 @@ function toResult(e: unknown): ActionResult {
   return { ok: false, error: msg };
 }
 
+/**
+ * Log the trace a completed change leaves, WITHOUT undoing the change.
+ *
+ * The change is already committed by the time this runs, so a failed log may
+ * not come back as a bare driver string on a page that has in fact moved on —
+ * the person re-clicks and changes an already-changed lead. It says what
+ * happened and what did not.
+ */
+async function logAfterChange(
+  db: Awaited<ReturnType<typeof requireDb>>["db"],
+  input: Parameters<typeof logActivity>[1],
+  applied: string,
+): Promise<ActionResult> {
+  try {
+    await logActivity(db, input);
+    return { ok: true };
+  } catch (e) {
+    console.warn("[leads] change applied but activity log failed:", e);
+    const why = toResult(e);
+    return {
+      ok: false,
+      error: `${applied}, but it could not be logged: ${why.ok ? "unknown error" : why.error}`,
+    };
+  }
+}
+
 async function advanceStageImpl(formData: FormData): Promise<ActionResult> {
   try {
     const { db } = await requireDb();
@@ -55,9 +81,15 @@ async function advanceStageImpl(formData: FormData): Promise<ActionResult> {
     if (!isStage(status)) return { ok: false, error: `Unknown stage: ${status}` };
     await setAccountStatus(db, id, status);
     // Every stage change leaves a trace — this is the history the sheet lost.
-    await logActivity(db, { accountId: id, kind: "stage", note: `moved to ${status}` });
+    // `status_change`, not "stage": the permitted kinds are the eight in
+    // account_activity_kind_check, and "stage" violated it on every move.
+    const logged = await logAfterChange(
+      db,
+      { accountId: id, kind: "status_change", note: `moved to ${status}` },
+      `The lead moved to ${status}`,
+    );
     revalidatePath("/leads");
-    return { ok: true };
+    return logged;
   } catch (e) {
     return toResult(e);
   }
@@ -102,13 +134,19 @@ async function assignLeadImpl(formData: FormData): Promise<ActionResult> {
     await assignAccount(db, id, profileId);
 
     // Ownership changes are history too — the same trace a stage move leaves.
-    await logActivity(db, {
-      accountId: id,
-      kind: "assign",
-      note: profileId === null ? "unassigned" : `assigned to ${profileId}`,
-    });
+    // `note`, not "assign": there is no `assign` kind, and widening the CHECK
+    // to invent one would add a member-writable kind for a bookkeeping line.
+    const logged = await logAfterChange(
+      db,
+      {
+        accountId: id,
+        kind: "note",
+        note: profileId === null ? "unassigned" : `assigned to ${profileId}`,
+      },
+      profileId === null ? "The lead was unassigned" : "The lead was reassigned",
+    );
     revalidatePath("/leads");
-    return { ok: true };
+    return logged;
   } catch (e) {
     return toResult(e);
   }

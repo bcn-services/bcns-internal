@@ -86,9 +86,12 @@ async function accountForClient(db: DbClient, clientId: string): Promise<string 
 export const log_activity = defineVerb<LogActivityInput, LogActivityResult>({
   name: "log_activity",
   description:
-    "Record one contact event on an account. Give an explicit kind to write it. Give only " +
-    "`text` to have it parsed into a proposed row, which is returned for confirmation and " +
-    "is NOT written until it comes back with a kind.",
+    "Record one contact event on an account. REQUIRED: exactly one of `accountId` or " +
+    "`clientId` to say which account, AND one of `kind` or `text` — an explicit `kind` " +
+    "writes the row, while `text` alone is parsed into a proposed row that is returned " +
+    "for confirmation and is NOT written until it comes back with a kind. (JSON Schema " +
+    "cannot express either/or in `required`, so the rule is stated here and enforced " +
+    "in the handler.)",
   roles: ["admin", "member"],
   properties: {
     accountId: { type: "string", description: "Account uuid the event happened on." },
@@ -151,7 +154,13 @@ export const log_activity = defineVerb<LogActivityInput, LogActivityResult>({
       });
 
       const run = await ctx.runParse(prompt);
-      if (!run.ok) return fail("parse_failure", `could not read that text: ${run.error}`);
+      if (!run.ok) {
+        // A queue that is full and a clock that ran out are not parse failures:
+        // nothing was wrong with the text, and the honest answer is "try again".
+        if (run.busy) return fail("busy", run.error);
+        if (run.timedOut) return fail("timeout", run.error);
+        return fail("parse_failure", `could not read that text: ${run.error}`);
+      }
 
       // LAYER B. Pure from here down.
       const outcome = resolveActivity(run.reply, { now, timeZone, rawText: input.text });

@@ -380,10 +380,13 @@ describe("QA: account_activity_kind_check against real Postgres",
         assert.equal(r.ok, false, `${k} was accepted; the CHECK no longer matches this test`);
         assert.match(r.error, /account_activity_kind_check/);
       }
-      // And those two kinds really are what that file writes today.
+      // And that file no longer writes either one: the stage move logs
+      // `status_change` and the reassignment logs `note`, both in the CHECK.
       const leads = src("app/leads/actions.ts");
-      assert.match(leads, /kind: "stage"/);
-      assert.match(leads, /kind: "assign"/);
+      assert.doesNotMatch(leads, /kind: "stage"/);
+      assert.doesNotMatch(leads, /kind: "assign"/);
+      assert.match(leads, /kind: "status_change"/);
+      assert.match(leads, /kind: "note"/);
     });
 
     test("the CHECK is the constraint 0009 named, and it is still enforced for new rows", () => {

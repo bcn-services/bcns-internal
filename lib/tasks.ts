@@ -179,6 +179,37 @@ export async function updateTaskStatus(db: Client_, id: string, status: TaskStat
   return updateTask(db, id, { status });
 }
 
+/**
+ * Move a task's status ONLY if it does not already hold `unless`, and say
+ * whether the move was this call's.
+ *
+ * The close path needs this. Read-the-status-then-update is two round trips
+ * with a gap in the middle: two people (or two clicks) closing the same task
+ * both read "doing", both update, and both send the nudge. The filter makes the
+ * decision and the write one statement, so exactly one caller gets a row back.
+ *
+ * `null` means no row matched — already `unless`, or gone. The caller decides
+ * which of those is an error; this function does not guess.
+ */
+export async function updateTaskStatusIfNot(
+  db: Client_,
+  id: string,
+  status: TaskStatus,
+  unless: TaskStatus,
+): Promise<Task | null> {
+  if (!isUuid(id)) throw new InvalidInputError(`bad task id: ${id}`);
+  if (!isTaskStatus(status)) throw new InvalidInputError(`bad status: ${status}`);
+  const res: Result<Task> = await db
+    .from("tasks")
+    .update({ status })
+    .eq("id", id)
+    .neq("status", unless)
+    .select(TASK_COLUMNS)
+    .maybeSingle();
+  if (res.error) throw new Error(`updateTaskStatusIfNot: ${res.error.message}`);
+  return res.data ?? null;
+}
+
 /** Reassign, or hand the work back to the pool with null. */
 export async function assignTask(db: Client_, id: string, profileId: string | null): Promise<Task> {
   return updateTask(db, id, { assigned_to: profileId });
