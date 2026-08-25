@@ -16,7 +16,7 @@ import {
   setAccountStatus, logActivity, convertAccountToClient, assignAccount, updateAccount,
   isStage, isUuid, InvalidInputError,
 } from "@/lib/accounts";
-import { isManualLaneMode } from "@/lib/outreach";
+import { isManualLaneMode } from "@/lib/lanes";
 
 /**
  * Shape returned by the internal implementations: either it worked, or here is

@@ -34,6 +34,7 @@ const MIGRATIONS = [
   "0013_briefing_claim.sql",
   "0014_job_windows.sql",
   "0015_outreach_lanes.sql",
+  "0016_pause_on_authenticated.sql",
 ];
 
 const AI = "cccccccc-0000-4000-8000-000000000001";
@@ -77,13 +78,51 @@ describe("0015 outreach lanes", { skip: !toolsPresent && "no local Postgres" }, 
 
   // -- the pause trigger, both directions ------------------------------------
 
+  // 0016: the pause is keyed on the WRITER'S ROLE. So every one of these goes
+  // in as `authenticated`, which is what a person logging a call actually is —
+  // a superuser insert is neither a person nor the automation and is nobody's
+  // production path. The assertion is inside the impersonated transaction for
+  // the reason spelled out in the MEMBER test below.
+  const asMember = (id, kind) =>
+    pg.runClaims(
+      CLAIMS.member,
+      `insert into account_activity (account_id, kind) values ('${id}', '${kind}');
+       select outreach_mode from accounts where id='${id}';`,
+    );
+
   for (const kind of ["call", "email", "meeting", "note", "status_change"]) {
     test(`a human '${kind}' row on an ai lead pauses it`, () => {
       reset();
-      pg.run(`insert into account_activity (account_id, kind) values ('${AI}', '${kind}')`);
-      assert.equal(modeOf(AI), "paused");
+      const r = asMember(AI, kind);
+      assert.ok(r.ok, `a member may log a '${kind}': ${r.error}`);
+      assert.equal(r.out, "paused");
     });
   }
+
+  test("0016: the same human kind written by the AUTOMATION does not pause a lane", () => {
+    // A bulk import or a backfill runs as service_role. It is not a person
+    // picking up the phone, and it must not switch the bot off on every lead
+    // it touches.
+    reset();
+    const r = pg.runClaims(
+      CLAIMS.admin,
+      `insert into account_activity (account_id, kind, note) values ('${AI}', 'note', 'imported');
+       select outreach_mode from accounts where id='${AI}';`,
+      "service_role",
+    );
+    assert.ok(r.ok, `service_role may write a human kind: ${r.error}`);
+    assert.equal(r.out, "ai", "a service_role write is the automation, not a human touch");
+  });
+
+  test("0016: a fourth agent kind would not pause the lane either — the condition names no kind", () => {
+    const when = pg.run(
+      `select pg_get_triggerdef(oid) from pg_trigger where tgname='account_activity_pause_outreach'`,
+    );
+    for (const kind of ["ai_email_sent", "ai_email_reply", "agent_run"]) {
+      assert.ok(!when.includes(kind), `the trigger condition must not hardcode '${kind}': ${when}`);
+    }
+    assert.match(when, /current_user/i, "it keys on the writer's role instead");
+  });
 
   for (const kind of ["ai_email_sent", "ai_email_reply", "agent_run"]) {
     test(`a bot '${kind}' row does NOT pause the lane`, () => {
@@ -95,12 +134,10 @@ describe("0015 outreach lanes", { skip: !toolsPresent && "no local Postgres" }, 
 
   test("a human row does not downgrade a 'human' lane or revive a parked one", () => {
     pg.run(`update accounts set outreach_mode='human' where id='${HUMAN}'`);
-    pg.run(`insert into account_activity (account_id, kind) values ('${HUMAN}', 'call')`);
-    assert.equal(modeOf(HUMAN), "human");
+    assert.equal(asMember(HUMAN, "call").out, "human");
 
     pg.run(`update accounts set outreach_mode='no_response' where id='${PARKED}'`);
-    pg.run(`insert into account_activity (account_id, kind) values ('${PARKED}', 'call')`);
-    assert.equal(modeOf(PARKED), "no_response");
+    assert.equal(asMember(PARKED, "call").out, "no_response");
   });
 
   test("the pause holds for a MEMBER's own write, through RLS", () => {

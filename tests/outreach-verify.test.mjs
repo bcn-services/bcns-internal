@@ -506,7 +506,7 @@ const MIGRATIONS = [
   "0004_profiles.sql", "0005_tasks.sql", "0006_seed_clients.sql", "0007_own_tasks_only.sql",
   "0008_agent_tokens.sql", "0009_automation_schema.sql", "0010_activity_audit_trail.sql",
   "0011_inbox_unread_index.sql", "0012_email_outbox.sql", "0013_briefing_claim.sql",
-  "0014_job_windows.sql", "0015_outreach_lanes.sql",
+  "0014_job_windows.sql", "0015_outreach_lanes.sql", "0016_pause_on_authenticated.sql",
 ];
 
 const A = { ai: "dddddddd-0000-4000-8000-000000000001", won: "dddddddd-0000-4000-8000-000000000002" };
@@ -537,8 +537,15 @@ describe("C1a — the pause trigger, against real Postgres", { skip: !toolsPrese
     assert.ok(human.length >= 4, `expected several human kinds, got ${human}`);
     for (const kind of human) {
       pg.run(`update accounts set outreach_mode='ai' where id='${A.ai}'; select 1`);
-      pg.run(`insert into account_activity (account_id, kind) values ('${A.ai}', '${kind}')`);
-      assert.equal(modeOf(A.ai), "paused", `a '${kind}' row must pause the lane`);
+      // As `authenticated`, which is what 0016 keys the pause on and what a
+      // person writing this row actually is.
+      const r = pg.runClaims(
+        CLAIMS.member,
+        `insert into account_activity (account_id, kind) values ('${A.ai}', '${kind}');
+         select outreach_mode from accounts where id='${A.ai}';`,
+      );
+      assert.ok(r.ok, `a member may write a '${kind}' row: ${r.error}`);
+      assert.equal(r.out, "paused", `a '${kind}' row must pause the lane`);
     }
   });
 
@@ -588,8 +595,13 @@ describe("C1a — the pause trigger, against real Postgres", { skip: !toolsPrese
   });
 
   test("a 'won' account in the ai lane pauses like any other — and is still never selectable by the job", () => {
-    pg.run(`insert into account_activity (account_id, kind) values ('${A.won}', 'note')`);
-    assert.equal(modeOf(A.won), "paused");
+    const r = pg.runClaims(
+      CLAIMS.member,
+      `insert into account_activity (account_id, kind) values ('${A.won}', 'note');
+       select outreach_mode from accounts where id='${A.won}';`,
+    );
+    assert.ok(r.ok, `a member may log a note: ${r.error}`);
+    assert.equal(r.out, "paused");
     // And the job's own predicate, run as SQL: no won/human/paused/no_response row.
     pg.run(`update accounts set outreach_mode='ai' where id='${A.won}'; select 1`);
     const selectable = pg.run(

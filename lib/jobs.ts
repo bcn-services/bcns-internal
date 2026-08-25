@@ -65,35 +65,21 @@
  */
 
 import { claimRun, closeRun, type JobRunStatus } from "./agent/skill-run";
-// Item 10's two jobs. This import and lib/outreach.ts's import of `dailyWindow`
-// form a module cycle, and it is harmless BECAUSE every reference across it is
-// inside a function body: nothing here reads `outreachJob` until `jobRegistry`
-// is called, and nothing there reads `dailyWindow` until the factory runs.
+// Item 10's two jobs. This import used to be half of a module cycle, because
+// lib/outreach.ts imported `dailyWindow` back out of this file; the windows now
+// live in the leaf module below, so the arrow points one way and no reference
+// across the boundary depends on being deferred to call time.
 import { leadSweepJob, outreachJob, type Evaluator, type SiteReader } from "./outreach";
+import { dailyWindow, weeklyWindow, type WindowKey } from "./job-windows";
 import { timeoutFetch } from "./fetch-timeout";
 import { notifyJobRun, resolveAdmin, type NotifyOutcome, type Recipient } from "./notify";
 import { scrub, type Caller, type DbClient } from "./agent/verbs/types";
 
 /* ----------------------------------------------------------------- windows -- */
 
-/**
- * The label a job gives to "this occurrence". Two invocations that should
- * collapse into one MUST produce the same string; see 0014_job_windows.sql.
- */
-export type WindowKey = (now: Date) => string;
-
-/** UTC calendar day. Two runs on the same date are the same run. */
-export const dailyWindow: WindowKey = (now) => now.toISOString().slice(0, 10);
-
-/**
- * A fixed seven-day bucket counted from the Unix epoch.
- *
- * Deliberately NOT the ISO week: ISO weeks have a year-boundary rule that is
- * easy to get subtly wrong, and nothing here needs a window a human recognises
- * — it needs a string two invocations agree on. Epoch weeks are one expression
- * with no edge cases.
- */
-export const weeklyWindow: WindowKey = (now) => `w${Math.floor(now.getTime() / 604_800_000)}`;
+// Defined in lib/job-windows.ts and re-exported here, which is where every
+// caller already imports them from. See that file for why they moved.
+export { dailyWindow, weeklyWindow, type WindowKey };
 
 /* -------------------------------------------------------------- definition -- */
 

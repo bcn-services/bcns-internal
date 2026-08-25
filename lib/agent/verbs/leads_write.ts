@@ -12,10 +12,14 @@
  */
 
 import { updateAccount, STAGES, isStage, isUuid, type Account, type Stage } from "../../accounts";
+import { MANUAL_LANE_MODES, type ManualLaneMode } from "../../lanes";
 import { defineVerb, fail, ok, requireDb, type VerbResult } from "./types";
 
-export const OUTREACH_MODES = ["ai", "human", "paused"] as const;
-export type OutreachMode = (typeof OUTREACH_MODES)[number];
+// The lanes a person may pick, and this IS that list — not a second copy of it.
+// It is the model-facing JSON-schema `enum` as well as the guard below, so a
+// divergence from the database CHECK would be a tool description that lies.
+export const OUTREACH_MODES = MANUAL_LANE_MODES;
+export type OutreachMode = ManualLaneMode;
 
 export interface LeadsWriteInput {
   id: string;

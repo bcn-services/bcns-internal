@@ -27,7 +27,7 @@ import { listAccounts, STAGES, centsToDollars, type Stage } from "@/lib/accounts
 import { listProfiles } from "@/lib/profiles";
 import { getViewer } from "@/lib/supabase-server";
 import { asJobFunction, skillButtonsFor } from "@/lib/agent/skills";
-import { MANUAL_LANE_MODES } from "@/lib/outreach";
+import { MANUAL_LANE_MODES } from "@/lib/lanes";
 import { advanceStage, addNote, convertLead, assignLead, setLane } from "./actions";
 import ActivityCapture from "../activity-capture";
 import SkillButtons from "../skill-buttons";
