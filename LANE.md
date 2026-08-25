@@ -32,7 +32,7 @@ Branch: `command-center`. Repo context: `CLAUDE.md` at root.
 - Writing outside `~/bcns-internal`
 
 **Baseline — pre-existing, not regressions. Do not "fix" these by editing assertions.**
-- 609 tests passing, 93 suites (was 217 at the start of the run)
+- 644 tests passing, 101 suites (was 217 at the start of the run)
 - Exactly 5 pre-existing lint errors: `lib/accounts.ts:141`, `lib/os/osFiles.ts:514`,
   `tests/accounts-data-layer.test.mjs:13`, `tests/rls-policies.test.mjs:66` and `:100`.
   (`pnpm lint` reports 5 problems. Do not "fix" them.)
@@ -223,7 +223,7 @@ figures must read visually distinct from member-visible ones.
     - A successful `job_runs` row produces an inbox item and zero email payloads
     - A task assigned to any profile produces an email payload for that assignee
     - With no provider configured, every one of the above still writes its inbox item and records the undelivered email
-  status: not started
+  status: done (send half blocked — no mail provider configured)
 
 - task: Build the daily briefing skill and its delivery. Write a new
     `~/os/skills/briefing/SKILL.md` — it does not exist yet — that reads a person's
