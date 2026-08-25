@@ -85,3 +85,9 @@ monorepo under `infra/` — one copy per droplet, not per client repo.
   bucket (30-day retention) via `infra/backup.sh` — server-side cron, nothing
   to configure per repo. Signed contracts, when this app grows an e-sign
   flow, must be dual-written to that bucket at signing time.
+- Three scheduled jobs (`site_health`, `credential_expiry`, `quiet_clients`)
+  ship with this repo but NOTHING installs a schedule for them — there is no
+  droplet yet. `docs/JOBS.md` carries the crontab lines to install by hand once
+  there is, plus the env each line needs. Running one twice in the same window
+  is safe: the second invocation loses on `job_runs_window_idx` and does
+  nothing.

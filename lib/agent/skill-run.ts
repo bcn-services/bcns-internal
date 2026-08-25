@@ -34,8 +34,30 @@ import { mayRunSkill, skillPrompt } from "./skills";
 import type { CallerRole, DbClient } from "./verbs/types";
 import { scrub } from "./verbs/types";
 
-/** Terminal states this route writes. `running` is the opening value. */
-export type JobRunStatus = "ok" | "error" | "cancelled";
+/**
+ * Terminal states written into `job_runs.status`. `running` is the opening
+ * value.
+ *
+ * `error` is what an interactive skill run writes when the runner said no.
+ * `failed` is what a SCHEDULED job writes (lib/jobs.ts) — item 9's word, and
+ * the one `notifyJobRun` in lib/notify.ts was already written to accept
+ * alongside `error`. They are not merged because they mean different things to
+ * a person reading the log: `error` is "this one press did not work", `failed`
+ * is "the sweep did not come back clean".
+ */
+export type JobRunStatus = "ok" | "error" | "failed" | "cancelled";
+
+/**
+ * The outcome of trying to open a WINDOWED run — see 0014_job_windows.sql.
+ *
+ * `taken` is the only benign failure: another process already owns this job's
+ * window and the caller must do nothing at all, notification included. Every
+ * other failure is a real fault and must not be mistaken for "already done",
+ * or a broken database would look exactly like a job that had nothing to do.
+ */
+export type RunClaim =
+  | { claimed: true; id: string }
+  | { claimed: false; taken: boolean; error: string };
 
 /** The runner, narrowed to what one button needs. See VerbContext.runParse. */
 export type SkillRunner = (
@@ -74,22 +96,54 @@ export async function openRun(
   actor: string,
 ): Promise<string | null> {
   if (!db) return null;
+  // windowKey null: an interactive press is meant to run every time it is
+  // pressed. The partial unique index in 0014 ignores nulls entirely.
+  const claim = await claimRun(db, skill, actor, null);
+  return claim.claimed ? claim.id : null;
+}
+
+/**
+ * THE ONLY INSERT INTO `job_runs` IN THIS CODEBASE.
+ *
+ * With a `windowKey` this is also the idempotency primitive for every
+ * scheduled job: `job_runs_window_idx` (0014) is unique on (job, window_key),
+ * so two invocations of the same daily sweep on the same day race on the index
+ * and exactly one of them gets a row back. The loser gets SQLSTATE 23505 and
+ * is told `taken`, which lib/jobs.ts turns into "do nothing, notify nobody".
+ *
+ * This is the same shape as lib/briefing.ts's claim and for the same reason: a
+ * `select` to check whether today's run exists, followed by an `insert`, lets
+ * both callers pass the check. The check and the write have to be one
+ * statement, and here the database supplies the check.
+ */
+export async function claimRun(
+  db: DbClient,
+  job: string,
+  actor: string,
+  windowKey: string | null,
+): Promise<RunClaim> {
   try {
     const { data, error } = await db
       .from("job_runs")
-      .insert({ job: skill, actor, status: "running" })
+      .insert({ job, actor, status: "running", window_key: windowKey })
       .select("id")
       .single();
     if (error) {
-      console.warn("[skills] could not open job_runs row:", error.message);
-      return null;
+      const taken = (error as { code?: string }).code === UNIQUE_VIOLATION;
+      if (!taken) console.warn("[skills] could not open job_runs row:", error.message);
+      return { claimed: false, taken, error: error.message };
     }
-    return (data as { id: string } | null)?.id ?? null;
+    const id = (data as { id: string } | null)?.id ?? null;
+    if (id) return { claimed: true, id };
+    return { claimed: false, taken: false, error: "job_runs insert returned no id" };
   } catch (err) {
     console.warn("[skills] could not open job_runs row:", err);
-    return null;
+    return { claimed: false, taken: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+/** Postgres' `unique_violation`. The one error that means "already claimed". */
+export const UNIQUE_VIOLATION = "23505";
 
 export async function closeRun(
   db: DbClient | null,

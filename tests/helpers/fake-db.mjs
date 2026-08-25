@@ -25,6 +25,9 @@ const clone = (row) => (row === null || typeof row !== "object" ? row : { ...row
  * @param opts.maxRows {number} PostgREST's server-side row cap (default 1000 in
  *   a real deployment). Set it to make a SELECT truncate the way the real one
  *   silently does, so an unpaginated reader is caught.
+ * @param opts.unique {Record<string, string[][]>} table -> list of unique
+ *   column tuples. A colliding INSERT comes back as SQLSTATE 23505 exactly as
+ *   PostgREST reports it. Nulls never collide, matching a partial index.
  */
 export function fakeDb(tables, opts = {}) {
   const calls = [];
@@ -64,6 +67,26 @@ export function fakeDb(tables, opts = {}) {
       if (fail) return Promise.resolve({ data: null, error: { message: fail } });
 
       if (st.mode === "insert") {
+        // Unique constraints, because item 9's whole idempotency guarantee is
+        // one (job_runs_window_idx, 0014) and a fake that let both inserts
+        // succeed would prove the opposite of what the test claims. Partial in
+        // the same way the real index is: a null in any of the columns is
+        // never a collision, which is how the unwindowed interactive skill runs
+        // stay exempt.
+        for (const cols of opts.unique?.[table] ?? []) {
+          const key = cols.map((c) => st.payload[c]);
+          if (key.some((v) => v === null || v === undefined)) continue;
+          const clash = rowsOf().some((r) => cols.every((c, i) => r[c] === key[i]));
+          if (clash) {
+            return Promise.resolve({
+              data: null,
+              error: {
+                code: "23505",
+                message: `duplicate key value violates unique constraint on (${cols.join(", ")})`,
+              },
+            });
+          }
+        }
         const row = { id: `fake-${table}-${rowsOf().length + 1}`, created_at: "2026-01-01T00:00:00Z", ...st.payload };
         rowsOf().push(row);
         return Promise.resolve({ data: clone(row), error: null });
