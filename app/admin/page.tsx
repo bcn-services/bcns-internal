@@ -13,6 +13,8 @@
 import { getViewer } from "@/lib/supabase-server";
 import { listProfiles } from "@/lib/profiles";
 import { allEnrollments, daysUntilExpiry, EXPIRY_WARNING_DAYS } from "@/lib/agent/tokens";
+import { skillButtonsFor } from "@/lib/agent/skills";
+import SkillButtons from "../skill-buttons";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +57,12 @@ export default async function AdminPage() {
   return (
     <main>
       <h1>Admin</h1>
+
+      {/* Admin-only by role, so job_function is not consulted: a null or
+          `developer` job_function must not strip an admin of their own
+          controls. Role grants these; job_function only ever narrows the
+          member-visible sets. */}
+      <SkillButtons buttons={skillButtonsFor("admin", role, null)} />
 
       <h2>Staff</h2>
       <p>{profiles.length} {profiles.length === 1 ? "person" : "people"}.</p>

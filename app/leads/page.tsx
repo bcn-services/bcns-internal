@@ -26,8 +26,10 @@ import Link from "next/link";
 import { listAccounts, STAGES, centsToDollars, type Stage } from "@/lib/accounts";
 import { listProfiles } from "@/lib/profiles";
 import { getViewer } from "@/lib/supabase-server";
+import { asJobFunction, skillButtonsFor } from "@/lib/agent/skills";
 import { advanceStage, addNote, convertLead, assignLead } from "./actions";
 import ActivityCapture from "../activity-capture";
+import SkillButtons from "../skill-buttons";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +43,7 @@ export default async function LeadsPage({
     ? (status as Stage)
     : undefined;
 
-  const { role, email, client: db } = await getViewer();
+  const { role, email, userId, client: db } = await getViewer();
   const isAdmin = role === "admin";
   // Absent means "use my default": an admin opens the whole funnel, a member
   // opens their own leads. `assigned=anyone` is how either asks for the other
@@ -65,6 +67,14 @@ export default async function LeadsPage({
   // profiles.id IS that id, so the directory is the bridge between the two.
   const viewerId =
     staff.find((p) => p.email.toLowerCase() === (email ?? "").toLowerCase())?.id ?? null;
+
+  // The button sets. Both come out of lib/agent/skills.ts and are not
+  // re-derived here — the route re-checks the role anyway, so this is purely
+  // about not showing a developer five buttons none of their work uses.
+  // Read off the directory row that is already loaded; no extra query.
+  const jobFunction = asJobFunction(staff.find((p) => p.id === userId)?.job_function);
+  const pageSkills = skillButtonsFor("leads", role, jobFunction);
+  const leadSkills = skillButtonsFor("lead", role, jobFunction);
 
   // "Mine" with no directory row of your own is not "everyone" — filtering by
   // an absent id would silently widen to every lead, so the page says so and
@@ -98,6 +108,10 @@ export default async function LeadsPage({
   return (
     <main>
       <h1>Leads</h1>
+
+      {/* Prospecting is admin work, so this set is normally just `leads`. */}
+      <SkillButtons buttons={pageSkills} />
+
       {/* Set by a server action that failed — a permission denial, usually. */}
       {error && <p role="alert"><strong>Could not save:</strong> {error}</p>}
 
@@ -183,6 +197,11 @@ export default async function LeadsPage({
                 </label>
                 <button type="submit">Save stage</button>
               </form>
+
+              {/* Runs as THIS employee, on their own Claude seat, about this
+                  lead. Empty for a developer and for anyone with no
+                  job_function, in which case it renders nothing at all. */}
+              <SkillButtons buttons={leadSkills} accountId={a.id} />
 
               {/* Free text first, structured fallback second. The old
                   kind+note form stays: it works with JavaScript off, and the
