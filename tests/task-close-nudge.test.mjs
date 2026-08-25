@@ -187,6 +187,7 @@ describe("moves that are not a close", () => {
     const tables = fixture();
     const nudges = () => tables.inbox_items.filter((i) => i.kind === TASK_CLOSE_NUDGE_KIND).length;
     const before = nudges();
+    const beforeAll = tables.inbox_items.length;
     const r = await tasks_write.run(
       { caller: ADMIN, db: fakeDb(tables), serviceDb: fakeDb(tables) },
       { title: "Backfilled record", assignedTo: MEMBER.profileId, status: "done" },
@@ -200,6 +201,10 @@ describe("moves that are not a close", () => {
       tables.inbox_items.filter((i) => i.kind === TASK_ASSIGNED_KIND).map((i) => i.profile_id),
       [MEMBER.profileId],
     );
+    // QA: narrowing the count to close-nudges alone would have let a THIRD kind
+    // of stray notice through unnoticed. The original strict claim is restored
+    // on top of the specific one: exactly one new row, and it is that notice.
+    assert.equal(tables.inbox_items.length, beforeAll + 1, "a create posted a notice nobody asked for");
   });
 });
 
