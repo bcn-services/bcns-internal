@@ -32,7 +32,7 @@ Branch: `command-center`. Repo context: `CLAUDE.md` at root.
 - Writing outside `~/bcns-internal`
 
 **Baseline — pre-existing, not regressions. Do not "fix" these by editing assertions.**
-- 537 tests passing, 77 suites (was 217 at the start of the run)
+- 609 tests passing, 93 suites (was 217 at the start of the run)
 - Exactly 5 pre-existing lint errors: `lib/accounts.ts:141`, `lib/os/osFiles.ts:514`,
   `tests/accounts-data-layer.test.mjs:13`, `tests/rls-policies.test.mjs:66` and `:100`.
   (`pnpm lint` reports 5 problems. Do not "fix" them.)
@@ -202,7 +202,7 @@ figures must read visually distinct from member-visible ones.
     - Replying to an item creates exactly one `account_activity` row linked to that item's account
     - The unread count matches a seeded fixture of read and unread rows
     - `next build` succeeds
-  status: not started
+  status: done
   caution: true
 
 - task: Notification routing. Build the decision layer that turns an event into an

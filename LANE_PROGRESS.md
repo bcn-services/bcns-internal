@@ -4,8 +4,8 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
-- Status: items 1–5 done, items 6–13 pending
-- Next: item 6 — the inbox
+- Status: items 1–6 done, items 7–13 pending
+- Next: item 7 — notification routing
 - Blockers: none
 - Last updated: 2026-08-24
 
@@ -16,7 +16,7 @@ LANE.md wins for scope.
 | 3. Agent verb layer | done — an agent can now look up and change leads, clients, tasks and activity through a fixed set of typed commands instead of a shell, and each command checks who is asking before it touches anything. Money figures are removed automatically for anyone who is not an admin. Two serious holes were found and closed: a crafted web address could have made the site-reader fetch private internal servers. |
 | 4. Activity capture and parsing | done — a person can now type what happened in plain English ("called Mike at Coventry Tuesday, wants a quote by Friday") and the system turns it into a proper logged record, showing it for correction before anything is saved. Relative dates resolve against the person's own local date, not UTC. Closing a task now asks its assignee to log what happened. The review also found the activity history was not trustworthy: an admin could quietly edit or delete any past record, agent-written ones included, and most records had no author at all. It is now append-only and stamps the author itself, so history cannot be rewritten. Two lead actions that had been failing at runtime were fixed. |
 | 5. Skill buttons and job-function gating | done — employees can now run a skill straight from the page where that work happens: pitch and quote on a lead or client, intake on a client, lead generation and system-improvement for admins only. Which buttons a person sees follows their job: sales and admins see the client-facing ones, developers see none, because every developer skill needs a cloned repo. Hiding a button is only tidiness — the server still refuses a run the person is not allowed to make, whatever the browser claims. Every run is recorded with who started it and how it ended. |
-| 6. Inbox | not started |
+| 6. Inbox | done — every employee now has a private inbox in the app, newest first, with unread marks and a count in the sidebar. Items link to whatever they are about, and replying to one logs the contact through the same review-before-saving step as the capture box. Privacy is enforced by the database itself, not by the page: nobody, admin included, can read or alter anyone else's inbox. The count in the sidebar is cached, so it does not query on every page you open. |
 | 7. Notification routing | not started |
 | 8. Daily briefing | not started |
 | 9. Job runner and first three jobs | not started |
