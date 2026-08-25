@@ -5,7 +5,7 @@ Project-specific conventions observed in this repo. Global standards live in
 
 ## Migrations
 - **One transaction per file**: every `supabase/migrations/NNNN_*.sql` opens with `begin;` and ends with `commit;`, because the replay harness and the Supabase CLI apply with `psql -f` and no `--single-transaction`. See 0009, 0010, 0015.
-- **Every up migration ships a `.down.sql`**: and a down that must narrow a CHECK moves offending rows to the *safer* value first (0015 moves `no_response` → `paused`, never → `ai`).
+- **Every up migration ships a `.down.sql` in `supabase/rollbacks/`**: never beside the up file — the Supabase CLI reads every `.sql` under `supabase/migrations/` as a migration and would record the same version twice. A down that must narrow a CHECK moves offending rows to the *safer* value first (0015 moves `no_response` → `paused`, never → `ai`).
 - **`security definer` functions pin `set search_path = ''`**: and schema-qualify every reference. See 0002, 0010, 0015.
 
 ## Jobs

@@ -18,12 +18,31 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PG_BIN = "/opt/homebrew/bin";
+// Where initdb/pg_ctl/psql live. Homebrew on a Mac, a versioned directory on
+// Debian/Ubuntu (the GitHub runner ships PostgreSQL there, and it is NOT on
+// PATH). $PG_BIN overrides both. Highest version first so a machine with
+// several installed uses the newest.
+const debianBins = () => {
+  try {
+    return readdirSync("/usr/lib/postgresql")
+      .sort((a, b) => Number(b) - Number(a))
+      .map((v) => `/usr/lib/postgresql/${v}/bin`);
+  } catch {
+    return [];
+  }
+};
+const PG_BIN =
+  process.env.PG_BIN ??
+  ["/opt/homebrew/bin", ...debianBins(), "/usr/local/bin", "/usr/bin"].find((d) =>
+    existsSync(join(d, "initdb")),
+  ) ??
+  "/opt/homebrew/bin";
+
 export const initdb = join(PG_BIN, "initdb");
 export const pgCtl = join(PG_BIN, "pg_ctl");
 export const psqlBin = join(PG_BIN, "psql");
@@ -35,7 +54,11 @@ const DB_NAME = "bcns_internal_test";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const migrationsDir = resolve(here, "../../supabase/migrations");
-const mig = (n) => join(migrationsDir, n);
+// Rollbacks live in their own directory: the Supabase CLI reads every .sql under
+// supabase/migrations/ as a migration, and a `0001_x.down.sql` sitting next to
+// `0001_x.sql` makes it record version 0001 twice.
+const rollbacksDir = resolve(here, "../../supabase/rollbacks");
+const mig = (n) => join(n.endsWith(".down.sql") ? rollbacksDir : migrationsDir, n);
 
 export const UP = ["0001_core_schema.sql", "0002_rls_policies.sql"];
 
@@ -158,9 +181,12 @@ export function startClusterWithMigrations(migrations = UP, { emulateAuth = true
      * Run `query` as the `authenticated` role with the given JWT claims, inside a
      * transaction discarded when psql disconnects.
      *
-     * CRITICAL: the data-returning statement must be LAST and there is NO trailing
-     * rollback — a single-string simple query returns only the LAST command's rows,
-     * so `; rollback` would swallow the SELECT output. Session end rolls it back.
+     * CRITICAL: `query` must be the ONLY statement here that returns rows, and
+     * there is NO trailing rollback. psql 17 prints the result of every command
+     * in a multi-statement -c string (psql 16 and older printed just the last),
+     * so the setup statements are written to return nothing at all — hence the
+     * DO block rather than `select set_config(...)`. A trailing `rollback` would
+     * still be fine for output, but session end rolls the transaction back anyway.
      *
      * `role` exists for the one case that is not a browser session: the jobs run
      * as `service_role`, which bypasses RLS, and "the policy denies a person but
@@ -170,7 +196,7 @@ export function startClusterWithMigrations(migrations = UP, { emulateAuth = true
       const claimsJson = JSON.stringify(claims).replace(/'/g, "''");
       const sql =
         `begin;` +
-        `select set_config('request.jwt.claims', '${claimsJson}', true);` +
+        `do $harness$ begin perform set_config('request.jwt.claims', '${claimsJson}', true); end $harness$;` +
         `set local role ${role};` +
         `${query}`;
       try {

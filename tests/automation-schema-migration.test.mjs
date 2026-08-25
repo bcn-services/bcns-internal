@@ -564,7 +564,7 @@ describe("0009 re-verification — independent QA", { skip: !toolsPresent && "no
       .match(/create\s+policy\s+account_activity_staff_insert[\s\S]*?;/i)[0]
       .replace(/\s+/g, " ").trim();
     const inDown = readFileSync(
-      fileURLToPath(new URL("../supabase/migrations/0009_automation_schema.down.sql", import.meta.url)), "utf8")
+      fileURLToPath(new URL("../supabase/rollbacks/0009_automation_schema.down.sql", import.meta.url)), "utf8")
       .replace(/--[^\n]*/g, "")
       .match(/create\s+policy\s+account_activity_staff_insert[\s\S]*?;/i)[0]
       .replace(/\s+/g, " ").trim();
