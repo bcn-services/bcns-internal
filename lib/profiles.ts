@@ -30,12 +30,12 @@ export interface Profile {
   /**
    * What kind of work this person does — 0009's `developer` | `sales` | `ops`,
    * or null when nobody has set one. It is NOT a role: role lives in the JWT
-   * and decides what anybody may do. This decides only which skill buttons a
-   * page bothers to render (lib/agent/skills.ts), which is why it is safe for
-   * it to sit in an API-readable column while role deliberately does not.
+   * and decides what anybody may do. Nothing security-critical reads this one,
+   * which is why it is safe for it to sit in an API-readable column while role
+   * deliberately does not.
    *
-   * Typed as a plain string so the data layer stays free of the skills module;
-   * `asJobFunction` narrows it at the one place that cares.
+   * Typed as a plain string so the data layer states no opinion; `JOB_FUNCTIONS`
+   * in lib/admin.ts is the list, and 0009's CHECK is the authority.
    */
   job_function: string | null;
   created_at: string;

@@ -28,8 +28,8 @@
  *
  * The sandbox boundary lives in the CLI's own permission layer, configured
  * here and nowhere else. Do not add a second path check in this file: two
- * rules deciding one thing is how the lister-vs-guard drift in lib/os/osFiles.ts
- * shipped four times.
+ * rules deciding one thing is how the lister-vs-guard drift in the deleted
+ * os file browser shipped four times.
  */
 
 /*

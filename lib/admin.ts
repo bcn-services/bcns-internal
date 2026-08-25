@@ -136,10 +136,9 @@ export type JobFunction = (typeof JOB_FUNCTIONS)[number];
  * Narrow a form field to a job function, or null.
  *
  * "" is what an unselected <select> posts, and it means null — the same thing
- * 0009 means by a null column, and the thing lib/agent/skills.ts reads as "no
- * function, so no member-gated buttons". Anything else is rejected rather than
- * coerced, because coercing an unknown value to a real function would GRANT
- * buttons on bad input.
+ * 0009 means by a null column. Anything else is rejected rather than coerced:
+ * coercing an unknown value to a real function would GRANT on bad input, and
+ * this column is API-writable.
  */
 export function asJobFunctionInput(raw: unknown): JobFunction | null {
   if (raw === "" || raw === null || raw === undefined) return null;

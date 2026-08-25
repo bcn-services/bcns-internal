@@ -199,9 +199,9 @@ export async function gatherContext(
 }
 
 /**
- * The prompt. Built HERE from database rows and a registry name — the same rule
- * lib/agent/skills.ts states: the runner's agent sits in a writable clone of
- * the os, so nothing a browser typed is interpolated into it.
+ * The prompt. Built HERE from database rows and a fixed job name: the runner's
+ * agent sits in a writable clone of the os, so nothing a browser typed is ever
+ * interpolated into it.
  *
  * The data is INLINE rather than fetched by the agent, because the runner gives
  * a run no Bash and no database (lib/agent/runner.ts) — the verb layer is

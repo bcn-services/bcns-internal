@@ -14,7 +14,7 @@ import { usePathname } from "next/navigation";
 import type { Role } from "@/lib/auth";
 
 const LINKS = [
-  { href: "/", label: "Brain" },
+  { href: "/", label: "Home" },
   { href: "/leads", label: "Leads" },
   { href: "/clients", label: "Clients" },
   { href: "/tasks", label: "Tasks" },
@@ -24,7 +24,7 @@ const LINKS = [
 const ADMIN_LINK = { href: "/admin", label: "Admin" } as const;
 
 /**
- * Not one of the six. /account is where an employee connects their own Claude
+ * Not one of the five. /account is where an employee connects their own Claude
  * seat — a setting about themselves rather than a place work happens — so it
  * sits in the footer instead of taking a row beside the work surfaces.
  */
