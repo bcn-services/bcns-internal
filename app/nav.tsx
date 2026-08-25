@@ -18,6 +18,7 @@ const LINKS = [
   { href: "/leads", label: "Leads" },
   { href: "/clients", label: "Clients" },
   { href: "/tasks", label: "Tasks" },
+  { href: "/inbox", label: "Inbox" },
   { href: "/chat", label: "Chat" },
 ] as const;
 
@@ -30,7 +31,7 @@ const ADMIN_LINK = { href: "/admin", label: "Admin" } as const;
  */
 const ACCOUNT_LINK = { href: "/account", label: "Account" } as const;
 
-export default function Nav({ role }: { role: Role | null }) {
+export default function Nav({ role, unread = 0 }: { role: Role | null; unread?: number }) {
   const pathname = usePathname();
 
   // Signed-out page: no shell chrome, the content takes the full width.
@@ -52,9 +53,17 @@ export default function Nav({ role }: { role: Role | null }) {
       <div className="sidebar-links">
         {links.map(({ href, label }) => {
           const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+          // The count is passed in from the layout, already cached — this
+          // component never fetches. See lib/inbox-badge.ts.
+          const badge = href === "/inbox" && unread > 0 ? unread : 0;
           return (
             <Link key={href} href={href} aria-current={active ? "page" : undefined}>
               {label}
+              {badge > 0 && (
+                <span className="nav-badge" aria-label={`${badge} unread`}>
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              )}
             </Link>
           );
         })}

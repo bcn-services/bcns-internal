@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { tasks_write } from "../lib/agent/verbs/index.ts";
 import {
   COMPLETED_TASK_STATUSES,
+  TASK_ASSIGNED_KIND,
   TASK_CLOSE_NUDGE_KIND,
   isCompletedStatus,
 } from "../lib/agent/task-nudge.ts";
@@ -184,13 +185,21 @@ describe("moves that are not a close", () => {
 
   test("creating a task that is already done does not nudge — nothing was closed", async () => {
     const tables = fixture();
-    const before = tables.inbox_items.length;
+    const nudges = () => tables.inbox_items.filter((i) => i.kind === TASK_CLOSE_NUDGE_KIND).length;
+    const before = nudges();
     const r = await tasks_write.run(
       { caller: ADMIN, db: fakeDb(tables), serviceDb: fakeDb(tables) },
       { title: "Backfilled record", assignedTo: MEMBER.profileId, status: "done" },
     );
     assert.equal(r.ok, true, JSON.stringify(r.error));
-    assert.equal(tables.inbox_items.length, before);
+    assert.equal(nudges(), before, "a create posted a close nudge");
+    // Item 6 DOES post here, and it is a different notice: the task landed on
+    // somebody's plate. Asserted rather than merely tolerated, so the two
+    // notices can never be confused for one another.
+    assert.deepEqual(
+      tables.inbox_items.filter((i) => i.kind === TASK_ASSIGNED_KIND).map((i) => i.profile_id),
+      [MEMBER.profileId],
+    );
   });
 });
 

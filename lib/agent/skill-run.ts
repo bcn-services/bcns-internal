@@ -30,6 +30,7 @@
 
 import { getAccount, isUuid } from "../accounts";
 import { mayRunSkill, skillPrompt } from "./skills";
+import { inbox_post } from "./verbs/inbox_post";
 import type { CallerRole, DbClient } from "./verbs/types";
 import { scrub } from "./verbs/types";
 
@@ -102,6 +103,41 @@ async function closeRun(
 }
 
 const json = (body: unknown, status: number) => Response.json(body, { status });
+
+/** The machine label on the notice a failed run leaves behind. */
+export const SKILL_RUN_FAILED_KIND = "skill_run_failed";
+
+/**
+ * Tell the person their run died.
+ *
+ * Only on FAILURE, and only to the person who started it. A run takes up to a
+ * minute; the browser that started it may be closed or on another page by the
+ * time it ends, and then the `job_runs` row is the only record — and job
+ * history is admin-only (0009) and does not exist as a page until item 12. A
+ * SUCCESSFUL run needs nothing here: its reply is in the response, on screen.
+ *
+ * Best effort, like every other notice: bookkeeping must never fail a run that
+ * already happened and already cost money.
+ */
+async function notifyRunFailed(
+  deps: SkillRunDeps,
+  skill: string,
+  message: string,
+): Promise<void> {
+  const { viewer, serviceDb } = deps;
+  if (!serviceDb || !viewer.userId || !viewer.email || viewer.role === null) return;
+  const res = await inbox_post.run(
+    { caller: { profileId: viewer.userId, email: viewer.email, role: viewer.role }, db: serviceDb },
+    {
+      profileId: viewer.userId,
+      kind: SKILL_RUN_FAILED_KIND,
+      title: `${skill} did not finish`,
+      body: scrub(message),
+      sourceJob: skill,
+    },
+  );
+  if (!res.ok) console.warn("[skills] could not post the failure notice:", res.error.code);
+}
 
 /**
  * What this run is about, in words, or null. A missing/unreadable account is
@@ -177,6 +213,9 @@ export async function handleSkillRun(request: Request, deps: SkillRunDeps): Prom
 
   if (!result.ok) {
     await closeRun(serviceDb, runId, "error", result.error);
+    // Not-enrolled is the new-hire state, not a failure: the button already
+    // points them at /account, and a notice would be a second copy of that.
+    if (!result.notEnrolled) await notifyRunFailed(deps, name, result.error);
     // Not-enrolled is the new-hire state, not a fault: 409 so the button can
     // point at /account instead of showing a red error.
     const status = result.notEnrolled ? 409 : result.busy ? 503 : 502;

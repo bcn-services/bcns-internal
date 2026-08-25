@@ -3,6 +3,9 @@ import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Nav from "./nav";
 import { getViewer } from "@/lib/supabase-server";
+import { getServiceClient } from "@/lib/supabase-admin";
+import { countUnread } from "@/lib/inbox";
+import { cachedUnreadCount } from "@/lib/inbox-badge";
 
 /*
  * next/font self-hosts both faces at build time, so the app makes no request
@@ -34,13 +37,28 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // Read here rather than in Nav so the sidebar stays a client component for
   // usePathname. A null role is the signed-out or unprovisioned case, and it
   // gets the member sidebar — the gate, not the nav, is what turns it away.
-  const { role } = await getViewer();
+  const { role, userId } = await getViewer();
+
+  /*
+   * The badge, read ONCE here and cached — see lib/inbox-badge.ts for why it is
+   * not a query per page. The count is taken through the SERVICE client rather
+   * than the cookie-bound one on purpose: a cached function must not reach for
+   * request-scoped state, and the id it counts is `userId` from the verified
+   * session, so this reads nothing but the viewer's own unread total. No row
+   * content crosses this boundary, only an integer.
+   */
+  const unread = userId
+    ? await cachedUnreadCount(userId, async () => {
+        const svc = getServiceClient();
+        return svc ? countUnread(svc, userId) : 0;
+      })
+    : 0;
 
   return (
     <html lang="en" className={`${display.variable} ${mono.variable}`}>
       <body>
         <div className="shell">
-          <Nav role={role} />
+          <Nav role={role} unread={unread} />
           <div className="content">{children}</div>
         </div>
       </body>

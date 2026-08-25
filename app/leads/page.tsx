@@ -143,8 +143,10 @@ export default async function LeadsPage({
       {shown.length === 0 && !noProfile && <p>Nothing here yet.</p>}
 
       {shown.map((a) => {
+        // The id is what an inbox notice links to (lib/inbox.ts itemHref): the
+        // funnel is one list, so a deep link to a lead is an anchor on its row.
         return (
-          <article key={a.id}>
+          <article key={a.id} id={`account-${a.id}`}>
             <h2>{a.business_name}</h2>
 
             <dl>

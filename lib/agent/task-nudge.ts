@@ -91,18 +91,85 @@ export async function nudgeTaskClose(args: {
   return true;
 }
 
+/** The machine label on an assignment notice. Stable, like the nudge kind. */
+export const TASK_ASSIGNED_KIND = "task_assigned";
+
 /**
- * The prior status of a task, for the idempotency check above. Returns null
- * when it cannot be read — which makes the nudge fire rather than not, because
- * a missed prompt is worse than a duplicate one.
+ * Tell someone a task is now theirs.
+ *
+ * SECOND inbox_post CALL SITE, same shape as the close nudge and for the same
+ * reason: the app already knows this happened, and the person it happened TO is
+ * usually not the person who did it. Best effort — the assignment already
+ * landed, and a failed notice may not undo it.
+ *
+ * THREE THINGS MAKE IT QUIET RATHER THAN NOISY, and all three are the caller's
+ * previous-assignee read talking:
+ *   - unassigning tells nobody;
+ *   - re-saving the same assignee is not a second notice;
+ *   - assigning something to YOURSELF is not news, so it posts nothing.
  */
-export async function previousTaskStatus(db: DbClient, id: string): Promise<TaskStatus | null> {
+export async function notifyTaskAssigned(args: {
+  serviceDb?: DbClient;
+  caller: Caller;
+  task: Task;
+  /** Who held it BEFORE this update, or null if unassigned/unknown. */
+  previousAssignee: string | null;
+}): Promise<boolean> {
+  const { serviceDb, caller, task, previousAssignee } = args;
+  const recipient = task.assigned_to;
+
+  if (!recipient) return false;
+  if (recipient === previousAssignee) return false;
+  if (recipient === caller.profileId) return false;
+  if (!serviceDb) return false;
+
+  // Posted under the RECIPIENT's identity, exactly as the close nudge is: the
+  // literal below is the same expression, so no argument reaches a third
+  // person's inbox. See the note in nudgeTaskClose.
+  const res = await inbox_post.run(
+    { caller: { ...caller, profileId: recipient }, db: serviceDb },
+    {
+      profileId: recipient,
+      kind: TASK_ASSIGNED_KIND,
+      title: `Assigned to you: ${task.title}`,
+      body:
+        `${caller.email} put "${task.title}" on your plate` +
+        `${task.due_date ? `, due ${task.due_date}` : ""}.`,
+      sourceJob: TASK_ASSIGNED_KIND,
+      accountId: task.account_id,
+    },
+  );
+  if (!res.ok) {
+    console.warn("[task-nudge] could not post assignment:", res.error.code, res.error.message);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * The task as it stood BEFORE an update, for the two idempotency checks above.
+ * Returns null when it cannot be read — which makes a notice fire rather than
+ * not, because a missed prompt is worse than a duplicate one.
+ */
+export async function previousTaskRow(
+  db: DbClient,
+  id: string,
+): Promise<{ status: TaskStatus | null; assigned_to: string | null } | null> {
   try {
-    const res = await db.from("tasks").select("status").eq("id", id).maybeSingle();
-    const row = res.data as { status?: unknown } | null;
-    return typeof row?.status === "string" ? (row.status as TaskStatus) : null;
+    const res = await db.from("tasks").select("status, assigned_to").eq("id", id).maybeSingle();
+    const row = res.data as { status?: unknown; assigned_to?: unknown } | null;
+    if (!row) return null;
+    return {
+      status: typeof row.status === "string" ? (row.status as TaskStatus) : null,
+      assigned_to: typeof row.assigned_to === "string" ? row.assigned_to : null,
+    };
   } catch (err) {
-    console.warn("[task-nudge] could not read prior status:", err);
+    console.warn("[task-nudge] could not read the prior task:", err);
     return null;
   }
+}
+
+/** The prior status alone — what the close path checks. */
+export async function previousTaskStatus(db: DbClient, id: string): Promise<TaskStatus | null> {
+  return (await previousTaskRow(db, id))?.status ?? null;
 }

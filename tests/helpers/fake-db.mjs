@@ -36,7 +36,7 @@ export function fakeDb(tables, opts = {}) {
     const rec = { table, ops: [] };
     calls.push(rec);
 
-    const st = { mode: "select", cols: "", filters: [], orders: [], limit: null, range: null, payload: null };
+    const st = { mode: "select", cols: "", count: null, head: false, filters: [], orders: [], limit: null, range: null, payload: null };
 
     const rowsOf = () => (tables[table] ??= []);
 
@@ -90,7 +90,14 @@ export function fakeDb(tables, opts = {}) {
         }
         return Promise.resolve({ data: touched, error: null, _rows: touched });
       }
-      return Promise.resolve({ data: selected(), error: null });
+      // PostgREST's `select(cols, { count, head })`: `head` returns no rows at
+      // all, only the count. lib/inbox.ts's badge query uses exactly that, and
+      // a fake that ignored it would let a row-transferring count pass.
+      const rows = selected();
+      if (st.head || st.count) {
+        return Promise.resolve({ data: st.head ? null : rows, count: rows.length, error: null });
+      }
+      return Promise.resolve({ data: rows, error: null });
     }
 
     const one = (allowEmpty) =>
@@ -104,7 +111,13 @@ export function fakeDb(tables, opts = {}) {
       });
 
     const b = {
-      select: (cols) => ((st.cols = cols ?? ""), rec.ops.push(["select", cols]), b),
+      select: (cols, opts) => (
+        (st.cols = cols ?? ""),
+        (st.count = opts?.count ?? null),
+        (st.head = opts?.head === true),
+        rec.ops.push(["select", cols, opts]),
+        b
+      ),
       insert: (row) => ((st.mode = "insert"), (st.payload = row), rec.ops.push(["insert", row]), b),
       update: (row) => ((st.mode = "update"), (st.payload = row), rec.ops.push(["update", row]), b),
       eq: (col, val) => (st.filters.push({ op: "eq", col, val }), rec.ops.push(["eq", col, val]), b),

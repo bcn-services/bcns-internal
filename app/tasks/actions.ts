@@ -21,7 +21,9 @@ import {
 } from "@/lib/tasks";
 import { listProfiles } from "@/lib/profiles";
 import { getServiceClient } from "@/lib/supabase-admin";
-import { isCompletedStatus, nudgeTaskClose, previousTaskStatus } from "@/lib/agent/task-nudge";
+import {
+  isCompletedStatus, notifyTaskAssigned, nudgeTaskClose, previousTaskStatus,
+} from "@/lib/agent/task-nudge";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -70,8 +72,8 @@ const orNull = (v: FormDataEntryValue | null): string | null => {
 
 async function addTaskImpl(formData: FormData): Promise<ActionResult> {
   try {
-    const { db, email } = await requireDb();
-    await createTask(db, {
+    const { db, email, role } = await requireDb();
+    const task = await createTask(db, {
       title: String(formData.get("title") ?? ""),
       details: orNull(formData.get("details")),
       accountId: orNull(formData.get("accountId")),
@@ -79,6 +81,7 @@ async function addTaskImpl(formData: FormData): Promise<ActionResult> {
       dueDate: orNull(formData.get("dueDate")),
       createdBy: await viewerProfileId(db, email),
     });
+    await notifyAssigned(role, email, task, null);
     revalidatePath("/tasks");
     return { ok: true };
   } catch (e) {
@@ -140,15 +143,42 @@ async function setStatusImpl(formData: FormData): Promise<ActionResult> {
   }
 }
 
+/**
+ * The assignment notice, for the two actions that can cause one. It is here
+ * rather than inline because both callers need the same three facts and the
+ * same "never let a notice fail the save" rule; the decision itself lives in
+ * lib/agent/task-nudge.ts, shared with the tasks_write verb so the board and
+ * the agent cannot drift on when somebody gets told.
+ */
+async function notifyAssigned(
+  role: "admin" | "member",
+  email: string | null,
+  task: Awaited<ReturnType<typeof createTask>>,
+  previousAssignee: string | null,
+): Promise<void> {
+  const { userId } = await getViewer();
+  if (!userId || !email) return;
+  await notifyTaskAssigned({
+    serviceDb: getServiceClient() ?? undefined,
+    caller: { profileId: userId, email, role },
+    task,
+    previousAssignee,
+  });
+}
+
 async function setAssigneeImpl(formData: FormData): Promise<ActionResult> {
   try {
-    const { db } = await requireDb();
+    const { db, email, role } = await requireDb();
     // Empty means "back in the pool", which the data layer spells as null.
-    await assignTask(
+    const task = await assignTask(
       db,
       String(formData.get("taskId") ?? ""),
       orNull(formData.get("assignedTo")),
     );
+    // ponytail: no prior-assignee read, so re-saving the same person in the
+    // dropdown notices them twice. One SELECT buys the dedupe — see the same
+    // note in lib/agent/verbs/tasks_write.ts.
+    await notifyAssigned(role, email, task, null);
     revalidatePath("/tasks");
     return { ok: true };
   } catch (e) {

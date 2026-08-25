@@ -14,7 +14,7 @@ import {
   type TaskStatus,
 } from "../../tasks";
 import { isUuid } from "../../accounts";
-import { isCompletedStatus, nudgeTaskClose, previousTaskStatus } from "../task-nudge";
+import { isCompletedStatus, notifyTaskAssigned, nudgeTaskClose, previousTaskRow } from "../task-nudge";
 import { defineVerb, fail, ok, requireDb, type VerbResult } from "./types";
 
 export interface TasksWriteInput {
@@ -67,18 +67,25 @@ export const tasks_write = defineVerb<TasksWriteInput, Task>({
       if (typeof input.title !== "string" || input.title.trim() === "") {
         return fail("invalid_input", "tasks_write needs a title to create a task, or an id to update one");
       }
-      return ok(
-        await createTask(db, {
-          title: input.title,
-          details: input.details ?? null,
-          accountId: input.accountId ?? null,
-          assignedTo: assignee ?? null,
-          dueDate: input.dueDate ?? null,
-          // Never from input: the author is whoever is calling.
-          createdBy: ctx.caller.profileId,
-          ...(input.status !== undefined ? { status: input.status } : {}),
-        }),
-      );
+      const created = await createTask(db, {
+        title: input.title,
+        details: input.details ?? null,
+        accountId: input.accountId ?? null,
+        assignedTo: assignee ?? null,
+        dueDate: input.dueDate ?? null,
+        // Never from input: the author is whoever is calling.
+        createdBy: ctx.caller.profileId,
+        ...(input.status !== undefined ? { status: input.status } : {}),
+      });
+      // A task filed straight onto somebody else's plate is the same event as
+      // reassigning one, so it gets the same notice. Nothing held it before.
+      await notifyTaskAssigned({
+        serviceDb: ctx.serviceDb,
+        caller: ctx.caller,
+        task: created,
+        previousAssignee: null,
+      });
+      return ok(created);
     }
 
     if (!isUuid(input.id)) return fail("invalid_input", `bad task id: ${input.id}`);
@@ -95,13 +102,29 @@ export const tasks_write = defineVerb<TasksWriteInput, Task>({
     // Read BEFORE the write, and only on the close path: re-saving a task that
     // is already done must not send a second nudge, and that is the only fact
     // the update's own return value cannot supply.
-    const before = isCompletedStatus(input.status)
-      ? await previousTaskStatus(db, input.id)
-      : null;
+    //
+    // ponytail: the assignment notice does NOT get a read of its own — a
+    // reassignment stays one statement. The cost is that re-saving the SAME
+    // person in the dropdown notices them twice. Give it the prior row here if
+    // that ever becomes noise; `previousTaskRow` already returns it.
+    const before = isCompletedStatus(input.status) ? await previousTaskRow(db, input.id) : null;
 
     const task = await updateTask(db, input.id, patch);
     // Best effort by design — the move landed, and a failed notice may not undo it.
-    await nudgeTaskClose({ serviceDb: ctx.serviceDb, caller: ctx.caller, task, previousStatus: before });
+    await nudgeTaskClose({
+      serviceDb: ctx.serviceDb,
+      caller: ctx.caller,
+      task,
+      previousStatus: before?.status ?? null,
+    });
+    if (assignee !== undefined) {
+      await notifyTaskAssigned({
+        serviceDb: ctx.serviceDb,
+        caller: ctx.caller,
+        task,
+        previousAssignee: before?.assigned_to ?? null,
+      });
+    }
     return ok(task);
   },
 });
