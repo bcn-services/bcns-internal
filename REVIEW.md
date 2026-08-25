@@ -11,7 +11,7 @@ Nothing here has been deployed, pushed, or applied to production.
 
 | Gate | Result |
 |---|---|
-| `corepack pnpm test` | **893 pass · 0 fail · 0 skipped · 147 suites** (was 217 at the start) |
+| `corepack pnpm test` | **907 pass · 0 fail · 0 skipped · 150 suites** (was 217 at the start) |
 | `corepack pnpm typecheck` | clean |
 | `corepack pnpm lint` | exactly **5** unique errors, all pre-existing — see below |
 | `corepack pnpm build` | compiled successfully, 13 pages |
@@ -102,12 +102,22 @@ had a page; nothing regressed.
 
 ## Blockers
 
-**1. Notification sending — item 7.**
-No mail provider is configured, and configuring Resend needs an interactive signup
-this run was not permitted to perform. Routing works and is tested: the system decides
-inbox vs. email correctly. Emails that have nowhere to go are written out in full and
-parked in `email_outbox` with status `pending` — distinct from `failed`, which means a
-provider actually refused. Nothing is lost. `docs/NOTIFICATIONS.md` has the 12 steps.
+**1. Notification sending — item 7. RESOLVED 2026-08-25, one setup step left.**
+Resend turned out to be the wrong tool. Every notice this system sends goes to a bcns
+employee — a failed job, an assigned task, a lead asking for a meeting — and none goes
+to a lead, so a bot mailbox on Google Workspace carries the whole volume with no new
+account. The SMTP transport is built and tested (`lib/mailer.ts`, `tests/mailer-smtp.test.mjs`).
+
+What is left is creating `bot@bcn-services.com` and its app password, then putting five
+values in `.env.local` — `docs/NOTIFICATIONS.md` has the steps. Until they are set,
+sending stays off and emails park in `email_outbox` as `pending`, so nothing is lost.
+A PARTIAL configuration is deliberately treated as none: a missing password parks the
+mail as `pending`, never as `failed`, which would read as a provider's refusal.
+
+Resend still has a job, a different one: cold outreach to leads, on its own subdomain
+with its own DKIM. Google's terms prohibit unsolicited bulk mail, so outreach must
+never go through the bot mailbox — a complaint spiral there would take the internal
+notices down with it.
 
 **2. The briefing skill is staged, not installed — item 8.**
 This run was not allowed to write outside `~/bcns-internal`. The skill file sits at
@@ -130,10 +140,15 @@ accident.
 - **Nothing sends to a real lead, and there is no send path at all** — not even a
   dormant one. Drafts are database rows. `outreach_drafts` has no recipient column and
   no `sent_at`. This was verified by grepping the whole diff.
-- **No production migration was applied.** Production sits at `0008`. I probed the
-  live database on 2026-08-25: `lead_targets` and `job_runs`, both created by `0009`,
-  return 404. An earlier note in this file said `0009` was already applied. That was
-  wrong. `0009`–`0016` are all on disk and all unapplied.
+- **Migrations `0009`–`0016` were applied to production on 2026-08-25**, at Nate's
+  explicit request, and verified there: `inbox_items`, `lead_targets`, `job_runs`,
+  `email_outbox` and `outreach_drafts` all exist with RLS enabled, both
+  `account_activity` triggers are installed, and `outreach_mode` accepts all four
+  lane values. `account_activity` now has SELECT and INSERT policies and **no UPDATE
+  or DELETE policy for anyone**, which is what makes it append-only for every signed-in
+  user. (A superuser connection still bypasses RLS — that is by design, not a hole.)
+  Correction: an earlier version of this file said `0009` was already on production
+  before this run. It was not; production was at `0008`.
 - **The direct database host is unreachable from this machine.**
   `db.knmgyxlrhjxaydliucbs.supabase.co` resolves to an IPv6 address only, and this
   machine has no IPv6 route. The working IPv4 pooler is

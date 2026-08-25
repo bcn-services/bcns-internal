@@ -223,7 +223,8 @@ figures must read visually distinct from member-visible ones.
     - A successful `job_runs` row produces an inbox item and zero email payloads
     - A task assigned to any profile produces an email payload for that assignee
     - With no provider configured, every one of the above still writes its inbox item and records the undelivered email
-  status: done (send half blocked — no mail provider configured)
+  status: done (send half resolved 2026-08-25 — SMTP through the bot mailbox,
+          not Resend; needs the mailbox created per docs/NOTIFICATIONS.md)
 
 - task: Build the daily briefing skill and its delivery. Write a new
     `~/os/skills/briefing/SKILL.md` — it does not exist yet — that reads a person's
