@@ -23,6 +23,7 @@
  */
 
 import type { Task, TaskStatus } from "../tasks";
+import { deliverNotification, resolveProfile } from "../notify";
 import { inbox_post } from "./verbs/inbox_post";
 import type { Caller, DbClient } from "./verbs/types";
 
@@ -123,27 +124,31 @@ export async function notifyTaskAssigned(args: {
   if (recipient === caller.profileId) return false;
   if (!serviceDb) return false;
 
-  // Posted under the RECIPIENT's identity, exactly as the close nudge is: the
-  // literal below is the same expression, so no argument reaches a third
-  // person's inbox. See the note in nudgeTaskClose.
-  const res = await inbox_post.run(
-    { caller: { ...caller, profileId: recipient }, db: serviceDb },
+  // THROUGH lib/notify.ts, NOT STRAIGHT TO inbox_post. "Task assigned" is one
+  // of the three events that also send an email (to the assignee — every
+  // employee gets this one, not just the admin), and the rule lives in exactly
+  // one table there. This stays the single call site: the routing layer decides
+  // both halves off this one event, and the inbox item it writes goes through
+  // inbox_post under the RECIPIENT's identity just as it did before.
+  const out = await deliverNotification(
+    { serviceDb, caller },
     {
-      profileId: recipient,
       kind: TASK_ASSIGNED_KIND,
+      inboxProfileId: recipient,
       title: `Assigned to you: ${task.title}`,
       body:
         `${caller.email} put "${task.title}" on your plate` +
         `${task.due_date ? `, due ${task.due_date}` : ""}.`,
       sourceJob: TASK_ASSIGNED_KIND,
       accountId: task.account_id,
+      facts: { task: task.title, due: task.due_date, assignedBy: caller.email },
     },
+    // The email's addressee. Read through the service client because the
+    // directory is what turns a profile id into an address; a directory that
+    // cannot answer costs the email, never the inbox item.
+    await resolveProfile(serviceDb, recipient),
   );
-  if (!res.ok) {
-    console.warn("[task-nudge] could not post assignment:", res.error.code, res.error.message);
-    return false;
-  }
-  return true;
+  return out.inboxItemId !== null;
 }
 
 /**

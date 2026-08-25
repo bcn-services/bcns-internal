@@ -29,8 +29,8 @@
  */
 
 import { getAccount, isUuid } from "../accounts";
+import { deliverNotification } from "../notify";
 import { mayRunSkill, skillPrompt } from "./skills";
-import { inbox_post } from "./verbs/inbox_post";
 import type { CallerRole, DbClient } from "./verbs/types";
 import { scrub } from "./verbs/types";
 
@@ -105,16 +105,21 @@ async function closeRun(
 const json = (body: unknown, status: number) => Response.json(body, { status });
 
 /** The machine label on the notice a failed run leaves behind. */
-export const SKILL_RUN_FAILED_KIND = "skill_run_failed";
+export const SKILL_RUN_FAILED_KIND = "job_run_failed";
 
 /**
- * Tell the person their run died.
+ * Tell the person their run died — and tell the admin, by email.
  *
- * Only on FAILURE, and only to the person who started it. A run takes up to a
- * minute; the browser that started it may be closed or on another page by the
- * time it ends, and then the `job_runs` row is the only record — and job
- * history is admin-only (0009) and does not exist as a page until item 12. A
- * SUCCESSFUL run needs nothing here: its reply is in the response, on screen.
+ * Only on FAILURE. A run takes up to a minute; the browser that started it may
+ * be closed or on another page by the time it ends, and then the `job_runs` row
+ * is the only record — and job history is admin-only (0009) and does not exist
+ * as a page until item 12. A SUCCESSFUL run needs nothing here: its reply is in
+ * the response, on screen.
+ *
+ * TWO RECIPIENTS, ONE EVENT. The inbox item goes to whoever started the run;
+ * the email goes to the admin, because a failed run is somebody's job to fix
+ * and that somebody is not necessarily the member who pressed the button.
+ * lib/notify.ts owns that split — this file just says what happened.
  *
  * Best effort, like every other notice: bookkeeping must never fail a run that
  * already happened and already cost money.
@@ -126,17 +131,20 @@ async function notifyRunFailed(
 ): Promise<void> {
   const { viewer, serviceDb } = deps;
   if (!serviceDb || !viewer.userId || !viewer.email || viewer.role === null) return;
-  const res = await inbox_post.run(
-    { caller: { profileId: viewer.userId, email: viewer.email, role: viewer.role }, db: serviceDb },
+  await deliverNotification(
     {
-      profileId: viewer.userId,
+      serviceDb,
+      caller: { profileId: viewer.userId, email: viewer.email, role: viewer.role },
+    },
+    {
       kind: SKILL_RUN_FAILED_KIND,
+      inboxProfileId: viewer.userId,
       title: `${skill} did not finish`,
       body: scrub(message),
       sourceJob: skill,
+      facts: { job: skill, startedBy: viewer.email },
     },
   );
-  if (!res.ok) console.warn("[skills] could not post the failure notice:", res.error.code);
 }
 
 /**
