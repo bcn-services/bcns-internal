@@ -24,6 +24,7 @@ import Link from "next/link";
 import BrainGraph from "./brain-graph";
 import type { BrainNode } from "./brain-graph";
 import Today from "./today";
+import BriefingCard from "./briefing-card";
 
 export const dynamic = "force-dynamic";
 
@@ -119,6 +120,10 @@ export default async function BrainPage() {
           })}
         </ul>
       </details>
+
+      {/* Above the board: what the automation has to say this morning. It is a
+          server component that never waits for an agent — see briefing-card.tsx. */}
+      <BriefingCard />
 
       <Today />
     </main>

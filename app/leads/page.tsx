@@ -26,9 +26,26 @@ import Link from "next/link";
 import { listAccounts, STAGES, centsToDollars, type Stage } from "@/lib/accounts";
 import { listProfiles } from "@/lib/profiles";
 import { getViewer } from "@/lib/supabase-server";
-import { advanceStage, addNote, convertLead, assignLead } from "./actions";
+import { asJobFunction, skillButtonsFor } from "@/lib/agent/skills";
+import { MANUAL_LANE_MODES } from "@/lib/lanes";
+import { advanceStage, addNote, convertLead, assignLead, setLane } from "./actions";
+import ActivityCapture from "../activity-capture";
+import SkillButtons from "../skill-buttons";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Plain English for the four lanes. `no_response` is shown but never offered:
+ * it is what the bot concluded after three touches with no reply, not a
+ * setting — and it has to be visible, because a lead the machine has given up
+ * on must not read as one it is still working.
+ */
+const LANE_LABEL: Record<string, string> = {
+  ai: "Bot",
+  human: "Person",
+  paused: "Paused",
+  no_response: "No response — parked after 3 touches",
+};
 
 export default async function LeadsPage({
   searchParams,
@@ -40,7 +57,7 @@ export default async function LeadsPage({
     ? (status as Stage)
     : undefined;
 
-  const { role, email, client: db } = await getViewer();
+  const { role, email, userId, client: db } = await getViewer();
   const isAdmin = role === "admin";
   // Absent means "use my default": an admin opens the whole funnel, a member
   // opens their own leads. `assigned=anyone` is how either asks for the other
@@ -64,6 +81,14 @@ export default async function LeadsPage({
   // profiles.id IS that id, so the directory is the bridge between the two.
   const viewerId =
     staff.find((p) => p.email.toLowerCase() === (email ?? "").toLowerCase())?.id ?? null;
+
+  // The button sets. Both come out of lib/agent/skills.ts and are not
+  // re-derived here — the route re-checks the role anyway, so this is purely
+  // about not showing a developer five buttons none of their work uses.
+  // Read off the directory row that is already loaded; no extra query.
+  const jobFunction = asJobFunction(staff.find((p) => p.id === userId)?.job_function);
+  const pageSkills = skillButtonsFor("leads", role, jobFunction);
+  const leadSkills = skillButtonsFor("lead", role, jobFunction);
 
   // "Mine" with no directory row of your own is not "everyone" — filtering by
   // an absent id would silently widen to every lead, so the page says so and
@@ -97,6 +122,10 @@ export default async function LeadsPage({
   return (
     <main>
       <h1>Leads</h1>
+
+      {/* Prospecting is admin work, so this set is normally just `leads`. */}
+      <SkillButtons buttons={pageSkills} />
+
       {/* Set by a server action that failed — a permission denial, usually. */}
       {error && <p role="alert"><strong>Could not save:</strong> {error}</p>}
 
@@ -128,8 +157,10 @@ export default async function LeadsPage({
       {shown.length === 0 && !noProfile && <p>Nothing here yet.</p>}
 
       {shown.map((a) => {
+        // The id is what an inbox notice links to (lib/inbox.ts itemHref): the
+        // funnel is one list, so a deep link to a lead is an anchor on its row.
         return (
-          <article key={a.id}>
+          <article key={a.id} id={`account-${a.id}`}>
             <h2>{a.business_name}</h2>
 
             <dl>
@@ -146,9 +177,37 @@ export default async function LeadsPage({
               </dd>
               <dt>Assigned to</dt>
               <dd>{(a.assigned_to && nameOf.get(a.assigned_to)) ?? "Unassigned"}</dd>
+              <dt>Outreach</dt>
+              <dd>{LANE_LABEL[a.outreach_mode ?? "ai"] ?? a.outreach_mode}</dd>
             </dl>
 
             <div>
+              {/* THE MANUAL LANE OVERRIDE. Three submit buttons rather than a
+                  select, because a select needs a defaultValue and a lead the
+                  bot has parked as `no_response` has no matching option — the
+                  same trap the owner form documents below. A button carries its
+                  own value only when it is the one clicked, so the current lane
+                  is simply the disabled one and nothing is submitted by
+                  accident. Choosing "Bot" is also how a parked lead is
+                  un-parked. This writes no activity row: see setLane. */}
+              <form action={setLane}>
+                <input type="hidden" name="accountId" value={a.id} />
+                <fieldset>
+                  <legend>Outreach lane</legend>
+                  {MANUAL_LANE_MODES.map((m) => (
+                    <button
+                      key={m}
+                      type="submit"
+                      name="outreachMode"
+                      value={m}
+                      disabled={(a.outreach_mode ?? "ai") === m}
+                    >
+                      {LANE_LABEL[m]}
+                    </button>
+                  ))}
+                </fieldset>
+              </form>
+
               {isAdmin && (
               <form action={assignLead}>
                 <input type="hidden" name="accountId" value={a.id} />
@@ -182,6 +241,16 @@ export default async function LeadsPage({
                 </label>
                 <button type="submit">Save stage</button>
               </form>
+
+              {/* Runs as THIS employee, on their own Claude seat, about this
+                  lead. Empty for a developer and for anyone with no
+                  job_function, in which case it renders nothing at all. */}
+              <SkillButtons buttons={leadSkills} accountId={a.id} />
+
+              {/* Free text first, structured fallback second. The old
+                  kind+note form stays: it works with JavaScript off, and the
+                  capture box does not. */}
+              <ActivityCapture target={{ accountId: a.id }} />
 
               <form action={addNote}>
                 <input type="hidden" name="accountId" value={a.id} />

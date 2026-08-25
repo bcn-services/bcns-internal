@@ -18,6 +18,7 @@
 import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getConfig } from "./env";
+import { markServiceClient } from "./service-client-mark";
 
 /**
  * A service-role client, or null when Supabase is unconfigured — the same
@@ -30,7 +31,11 @@ import { getConfig } from "./env";
 export function getServiceClient(): SupabaseClient | null {
   const { supabaseUrl, supabaseServiceRoleKey } = getConfig();
   if (!supabaseUrl || !supabaseServiceRoleKey) return null;
-  return createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  // Stamped so the RLS-bound data-layer functions can REFUSE it — see
+  // lib/service-client-mark.ts and countUnread in lib/inbox.ts.
+  return markServiceClient(
+    createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    }),
+  );
 }

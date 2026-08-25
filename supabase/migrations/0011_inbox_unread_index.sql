@@ -1,0 +1,19 @@
+-- ---------------------------------------------------------------------------
+-- 0011 — an index for the badge's count.
+--
+-- 0009 gave inbox_items one index: (profile_id, created_at desc). The badge
+-- runs `count(*) where profile_id = $1 and read_at is null` on every cache
+-- miss — once a minute per active person — and with only that index Postgres
+-- walks EVERY row of that profile and rechecks read_at on the heap. An inbox
+-- has no DELETE policy, so that row count only ever grows: at 5k notices with
+-- 3 unread, the answer costs 5k row visits.
+--
+-- PARTIAL, on read_at is null. The index then contains only the rows the query
+-- wants, so the count is an index-only scan over a handful of entries, and the
+-- index stays tiny — a row leaves it the moment it is read. Same partial-index
+-- shape as the two FK indexes in 0009.
+--
+-- 0009's index is NOT replaced: it still serves the inbox page, which reads
+-- one person's notices newest-first regardless of read state.
+-- ---------------------------------------------------------------------------
+create index inbox_items_unread_idx on inbox_items (profile_id) where read_at is null;

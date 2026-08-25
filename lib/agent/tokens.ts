@@ -50,8 +50,12 @@ type EnrollmentRow = {
  */
 const TOKEN_LIFETIME_DAYS = 365;
 
-/** How long before expiry the account page starts nagging. */
-export const EXPIRY_WARNING_DAYS = 30;
+/**
+ * How long before expiry the account page starts nagging. Defined in the leaf
+ * `tokens-expiry.ts` and re-exported here, because /admin's token panel needs
+ * the same number and cannot import this file (it pulls in `server-only`).
+ */
+export { EXPIRY_WARNING_DAYS } from "./tokens-expiry";
 
 export class AgentTokenError extends Error {
   constructor(message: string) {

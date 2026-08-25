@@ -27,11 +27,23 @@ export interface Profile {
   email: string;
   display_name: string;
   active: boolean;
+  /**
+   * What kind of work this person does — 0009's `developer` | `sales` | `ops`,
+   * or null when nobody has set one. It is NOT a role: role lives in the JWT
+   * and decides what anybody may do. This decides only which skill buttons a
+   * page bothers to render (lib/agent/skills.ts), which is why it is safe for
+   * it to sit in an API-readable column while role deliberately does not.
+   *
+   * Typed as a plain string so the data layer stays free of the skills module;
+   * `asJobFunction` narrows it at the one place that cares.
+   */
+  job_function: string | null;
   created_at: string;
   updated_at: string;
 }
 
-const PROFILE_COLUMNS = "id, email, display_name, active, created_at, updated_at";
+const PROFILE_COLUMNS =
+  "id, email, display_name, active, job_function, created_at, updated_at";
 
 /** Structural shape of the query builder used here — see lib/accounts.ts. */
 interface Result<T> {

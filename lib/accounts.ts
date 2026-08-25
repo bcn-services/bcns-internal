@@ -11,6 +11,8 @@
  * at the database, not here — proven in tests/rls-policies.test.mjs.
  */
 
+import { HUMAN_KINDS } from "./agent/verbs/activity_query";
+
 /** The eight funnel stages. Order is the funnel order; the DB CHECK matches. */
 export const STAGES = [
   "new",
@@ -102,6 +104,8 @@ export interface Account {
   /** profiles.id of the person who owns this lead, or null for unassigned. */
   assigned_to: string | null;
   notes: string | null;
+  /** 0009: whether automated outreach may contact this lead ("ai" | "human" | "paused"). */
+  outreach_mode?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -126,7 +130,7 @@ export interface Client {
 }
 
 const ACCOUNT_COLUMNS =
-  "id, place_id, business_name, business_type, city, phone, website, has_website, rating, review_count, lead_score, score_reason, status, call_count, last_contact, contact_name, last_outcome, consult_date, close_date, deal_value_cents, source_query, date_added, assigned_to, notes, created_at, updated_at";
+  "id, place_id, business_name, business_type, city, phone, website, has_website, rating, review_count, lead_score, score_reason, status, call_count, last_contact, contact_name, last_outcome, consult_date, close_date, deal_value_cents, source_query, date_added, assigned_to, notes, outreach_mode, created_at, updated_at";
 const CLIENT_COLUMNS =
   "id, account_id, slug, status, monthly_rate_cents, domain, created_at, updated_at";
 /** CLIENT_COLUMNS plus the one account field the client views need. */
@@ -150,7 +154,7 @@ function unwrap<T>(res: Result<T>, what: string): T {
 /** All accounts, newest first. RLS decides which rows come back. */
 export async function listAccounts(
   db: Client_,
-  opts: { status?: Stage; assignedTo?: string | null } = {},
+  opts: { status?: Stage; assignedTo?: string | null; limit?: number } = {},
 ): Promise<Account[]> {
   // Validate BEFORE touching the client, so a bad filter never issues a query.
   if (opts.status !== undefined && !isStage(opts.status)) {
@@ -162,11 +166,18 @@ export async function listAccounts(
   if (opts.assignedTo !== undefined && opts.assignedTo !== null && !isUuid(opts.assignedTo)) {
     throw new InvalidInputError(`bad assignee id: ${opts.assignedTo}`);
   }
+  if (opts.limit !== undefined && (!Number.isInteger(opts.limit) || opts.limit <= 0)) {
+    throw new InvalidInputError(`bad limit: ${opts.limit}`);
+  }
   let q = db.from("accounts").select(ACCOUNT_COLUMNS);
   if (opts.status !== undefined) q = q.eq("status", opts.status);
   if (opts.assignedTo === null) q = q.is("assigned_to", null);
   else if (opts.assignedTo !== undefined) q = q.eq("assigned_to", opts.assignedTo);
-  return unwrap<Account[]>(await q.order("created_at", { ascending: false }), "listAccounts");
+  q = q.order("created_at", { ascending: false });
+  // Bounded at the DATABASE when a caller asks for a cap: slicing after the
+  // fetch still drags every matching row across the wire.
+  if (opts.limit !== undefined) q = q.limit(opts.limit);
+  return unwrap<Account[]>(await q, "listAccounts");
 }
 
 export async function getAccount(db: Client_, id: string): Promise<Account | null> {
@@ -181,17 +192,34 @@ export async function getAccount(db: Client_, id: string): Promise<Account | nul
 }
 
 /** Move an account through the funnel. Rejects an unknown stage before the DB. */
-export async function setAccountStatus(
+/**
+ * ONE atomic patch of one account. Every account write goes through here so a
+ * caller changing two fields issues ONE update — two sequential updates can
+ * fail halfway and leave the first applied while the caller reports an error,
+ * and PostgREST gives us no transaction to wrap them in.
+ */
+export async function updateAccount(
   db: Client_,
   id: string,
-  status: Stage,
+  patch: { status?: Stage; assigned_to?: string | null; outreach_mode?: string },
 ): Promise<Account> {
   if (!isUuid(id)) throw new InvalidInputError(`bad account id: ${id}`);
-  if (!isStage(status)) throw new InvalidInputError(`bad status: ${status}`);
+  if (patch.status !== undefined && !isStage(patch.status)) {
+    throw new InvalidInputError(`bad status: ${patch.status}`);
+  }
+  if (patch.assigned_to !== undefined && patch.assigned_to !== null && !isUuid(patch.assigned_to)) {
+    throw new InvalidInputError(`bad assignee id: ${patch.assigned_to}`);
+  }
+  if (Object.keys(patch).length === 0) throw new InvalidInputError("updateAccount: nothing to change");
   return unwrap<Account>(
-    await db.from("accounts").update({ status }).eq("id", id).select(ACCOUNT_COLUMNS).single(),
-    "setAccountStatus",
+    await db.from("accounts").update(patch).eq("id", id).select(ACCOUNT_COLUMNS).single(),
+    "updateAccount",
   );
+}
+
+export async function setAccountStatus(db: Client_, id: string, status: Stage): Promise<Account> {
+  if (!isStage(status)) throw new InvalidInputError(`bad status: ${status}`);
+  return updateAccount(db, id, { status });
 }
 
 /**
@@ -206,28 +234,44 @@ export async function assignAccount(
   id: string,
   profileId: string | null,
 ): Promise<Account> {
-  if (!isUuid(id)) throw new InvalidInputError(`bad account id: ${id}`);
-  if (profileId !== null && !isUuid(profileId)) {
-    throw new InvalidInputError(`bad assignee id: ${profileId}`);
-  }
-  return unwrap<Account>(
-    await db.from("accounts").update({ assigned_to: profileId }).eq("id", id)
-      .select(ACCOUNT_COLUMNS).single(),
-    "assignAccount",
-  );
+  return updateAccount(db, id, { assigned_to: profileId });
 }
 
 /** Append one contact record. This is the history the lead sheet could not keep. */
 export async function logActivity(
   db: Client_,
-  input: { accountId: string; kind: string; note?: string | null; actor?: string | null },
+  input: {
+    accountId: string;
+    kind: string;
+    note?: string | null;
+    actor?: string | null;
+    /** How it went. Free text; `outcome` has no CHECK in 0001. */
+    outcome?: string | null;
+    /** ISO instant. Omitted lets the column default to now(). */
+    occurredAt?: string | null;
+  },
 ): Promise<void> {
   if (!isUuid(input.accountId)) throw new InvalidInputError(`bad account id: ${input.accountId}`);
   if (!input.kind?.trim()) throw new InvalidInputError("activity kind is required");
+  // THE READABLE ERROR, NOT THE BOUNDARY. Every activity write in this app —
+  // the verb, the note box, a stage move, an assignment — comes through here,
+  // so one guard covers all of them instead of one per caller. The boundary is
+  // 0009's staff INSERT policy plus 0010's trigger, both of which refuse the
+  // agent kinds at the database whatever this layer does.
+  if (!(HUMAN_KINDS as readonly string[]).includes(input.kind.trim())) {
+    throw new InvalidInputError(
+      `activity kind not writable by a person: ${input.kind.trim()}`,
+    );
+  }
   const res: Result<unknown> = await db.from("account_activity").insert({
     account_id: input.accountId,
     kind: input.kind.trim(),
     note: input.note ?? null,
+    outcome: input.outcome ?? null,
+    // Only sent when the caller has one. Sending an explicit null would
+    // override the column's own `default now()` with NULL, and the column is
+    // NOT NULL — so the write would fail rather than fall back.
+    ...(input.occurredAt ? { occurred_at: input.occurredAt } : {}),
     // Column is `actor_email` in 0001, not `actor` — PostgREST rejects an
     // unknown column outright, so a mismatch here 400s every write.
     actor_email: input.actor ?? null,
@@ -251,6 +295,21 @@ export async function listClients(db: Client_): Promise<Client[]> {
   const rows = unwrap<(Client & { account?: AccountEmbed })[]>(
     await db.from("clients").select(CLIENT_SELECT).order("slug", { ascending: true }),
     "listClients",
+  );
+  return rows.map(flattenClient);
+}
+
+/**
+ * Just the clients an inbox page (or any list) already has ids for. `.in()`
+ * rather than reading the whole table with its account embed to resolve one or
+ * two slugs. An empty list short-circuits — `.in("id", [])` is a round trip for
+ * a guaranteed-empty answer.
+ */
+export async function listClientsByIds(db: Client_, ids: string[]): Promise<Client[]> {
+  if (ids.length === 0) return [];
+  const rows = unwrap<(Client & { account?: AccountEmbed })[]>(
+    await db.from("clients").select(CLIENT_SELECT).in("id", ids),
+    "listClientsByIds",
   );
   return rows.map(flattenClient);
 }
