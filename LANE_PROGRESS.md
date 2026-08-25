@@ -19,7 +19,7 @@ LANE.md wins for scope.
 | 6. Inbox | not started |
 | 7. Notification routing | not started |
 | 8. Daily briefing | not started |
-| 9. Job runner and first three jobs | not started |
+| 9. Job runner and first three jobs | done — scheduled work now has a proper home: a job opens a record, runs, and always closes that record even when it crashes, so a job can never silently vanish. Three jobs exist: a daily check that every hosted client site is up, a weekly warning 30 days before any credential expires, and a daily detector for onboarding clients who have gone quiet for a week. Clients with no website recorded are reported as 'cannot be monitored' rather than quietly counted as healthy. Running a job twice in the same window produces one notification, not two, proven against genuinely simultaneous runs. Nothing is scheduled yet — the cron lines are written down in docs/JOBS.md for when the droplet exists. |
 | 10. Lead outreach lanes and sweep | not started |
 | 11. README export generator | not started |
 | 12. Admin configuration surface | not started |
