@@ -4,8 +4,8 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
-- Status: items 1–8 done (7 partly blocked), items 9–13 pending
-- Next: item 9 — the job runner and its first three jobs
+- Status: items 1–9 done (7 partly blocked), items 10–13 pending
+- Next: item 10 — lead outreach lanes and the sweep
 - Blockers: item 7's send half — no mail provider is configured. Configuring Resend needs an interactive signup. See docs/NOTIFICATIONS.md.
 - Last updated: 2026-08-24
 
@@ -19,7 +19,7 @@ LANE.md wins for scope.
 | 6. Inbox | done — every employee now has a private inbox in the app, newest first, with unread marks and a count in the sidebar. Items link to whatever they are about, and replying to one logs the contact through the same review-before-saving step as the capture box. Privacy is enforced by the database itself, not by the page: nobody, admin included, can read or alter anyone else's inbox. The count in the sidebar is cached, so it does not query on every page you open. |
 | 7. Notification routing | done, except sending — the system now decides on its own whether something belongs in your inbox, your email, or both. Email goes out for exactly three things: a scheduled run that failed, a task assigned to you, and a lead saying they want to meet. Briefings, successful runs and agent proposals stay in the inbox only. Everything reaches the inbox no matter what. No mail provider is set up yet, so emails are written out in full and parked in a queue rather than lost — once Resend is configured they can be sent. docs/NOTIFICATIONS.md has the 12 steps. |
 | 8. Daily briefing | done — signing in kicks off a briefing in the background: the page appears at once with the card marked as building, and it fills itself in when ready, so nothing waits on a run that takes up to a minute. It covers everything since your last briefing rather than 'since yesterday', so a week away gives you one briefing for the week instead of seven stale ones. It runs at most once per 20 hours, proven safe against two sign-ins at the same moment, and a failed run leaves your window intact rather than silently eating it. The skill file itself is staged in the repo for you to install into ~/os. |
-| 9. Job runner and first three jobs | not started |
+| 9. Job runner and first three jobs | done — scheduled work now has one place to live: a job opens a record of the run, does its work, closes it with a result, and sends the outcome through the notification rules from item 7. Three jobs ship with it. A daily sweep checks every client site that has an address and reports the ones that are down. A weekly check warns when an agent token is within 30 days of expiring, so nothing dies silently next August. A daily detector flags a client being onboarded who has gone quiet for a week — active and finished clients are ignored on purpose. Each job claims its own time window before running, proven safe against two schedulers firing at the same moment, so a doubled cron line cannot produce doubled work. Nothing runs on a timer inside the app; an outside scheduler calls a script, so it works with no laptop on. The cron lines are written down in docs/JOBS.md for when the droplet exists. |
 | 10. Lead outreach lanes and sweep | not started |
 | 11. README export generator | not started |
 | 12. Admin configuration surface | not started |

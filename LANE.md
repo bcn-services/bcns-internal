@@ -265,7 +265,7 @@ figures must read visually distinct from member-visible ones.
     - The health sweep on a seeded fixture of one reachable domain, one unreachable, and three with no domain yields exactly one healthy, one down, three unmonitorable
     - The credential job warns for an `agent_tokens` row expiring in 29 days and stays silent for one expiring in 31
     - The quiet detector flags an `onboarding` client with no activity for 8 days and not one at 6 days, and ignores `active` and `churned` clients entirely
-  status: not started
+  status: done
 
 - task: Lead outreach lanes and the sweep. Implement lane state: every lead starts
     `outreach_mode = 'ai'`; any `account_activity` row written by a human on that lead
