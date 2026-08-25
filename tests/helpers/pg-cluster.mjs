@@ -35,7 +35,11 @@ const DB_NAME = "bcns_internal_test";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const migrationsDir = resolve(here, "../../supabase/migrations");
-const mig = (n) => join(migrationsDir, n);
+// Rollbacks live in their own directory: the Supabase CLI reads every .sql under
+// supabase/migrations/ as a migration, and a `0001_x.down.sql` sitting next to
+// `0001_x.sql` makes it record version 0001 twice.
+const rollbacksDir = resolve(here, "../../supabase/rollbacks");
+const mig = (n) => join(n.endsWith(".down.sql") ? rollbacksDir : migrationsDir, n);
 
 export const UP = ["0001_core_schema.sql", "0002_rls_policies.sql"];
 
