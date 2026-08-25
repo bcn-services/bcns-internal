@@ -130,8 +130,15 @@ accident.
 - **Nothing sends to a real lead, and there is no send path at all** — not even a
   dormant one. Drafts are database rows. `outreach_drafts` has no recipient column and
   no `sent_at`. This was verified by grepping the whole diff.
-- **No production migration was applied.** `0009` is on production from an earlier
-  session; `0010`–`0016` are on disk and unapplied. Review them before applying.
+- **No production migration was applied.** Production sits at `0008`. I probed the
+  live database on 2026-08-25: `lead_targets` and `job_runs`, both created by `0009`,
+  return 404. An earlier note in this file said `0009` was already applied. That was
+  wrong. `0009`–`0016` are all on disk and all unapplied.
+- **The direct database host is unreachable from this machine.**
+  `db.knmgyxlrhjxaydliucbs.supabase.co` resolves to an IPv6 address only, and this
+  machine has no IPv6 route. The working IPv4 pooler is
+  `aws-0-us-west-2.pooler.supabase.com:5432`, user `postgres.knmgyxlrhjxaydliucbs`.
+  An earlier probe of 12 regions missed it.
 - **No value recorded as unknown was guessed.** Four clients have no `monthly_rate_cents`
   and four have neither `domain` nor `droplet_host`. A test now asserts the seed can
   never quietly fill them.
@@ -222,9 +229,21 @@ first sign-in, or the person holds a roleless token.
 
 ## What you need to do before the next session
 
-1. **Review migrations `0010`–`0016`** and apply them to production when you are happy.
-   They are additive. `0010` makes `account_activity` append-only, which is a real
-   behaviour change: after it, nobody — admin included — can edit or delete history.
+1. **Review migrations `0009`–`0016`** and apply them to production when you are happy.
+   They are additive and every one has a `.down.sql`. `0010` makes `account_activity`
+   append-only, which is a real behaviour change: after it, nobody — admin included —
+   can edit or delete history. Nothing in the app works until these are applied.
+
+   ```
+   cd ~/bcns-internal && set -a && . ./.env.local && set +a
+   PW=$(printf '%s' "$DATABASE_URL" | sed -E 's|^postgres(ql)?://[^:]+:([^@]+)@.*|\2|')
+   PGURL="postgresql://postgres.knmgyxlrhjxaydliucbs:$PW@aws-0-us-west-2.pooler.supabase.com:5432/postgres"
+   for f in supabase/migrations/00{09,10,11,12,13,14,15,16}_*.sql; do
+     case "$f" in *down*) continue;; esac
+     echo "--- $(basename $f)"
+     psql "$PGURL" -v ON_ERROR_STOP=1 --single-transaction -q -f "$f" || break
+   done
+   ```
 2. **Install the briefing skill**: copy `os-staging/skills/briefing/SKILL.md` to
    `~/os/skills/briefing/SKILL.md` and add the `INDEX.md` line staged alongside it.
 3. **Configure Resend** per the 12 steps in `docs/NOTIFICATIONS.md` to unblock item 7.
