@@ -1,0 +1,127 @@
+/**
+ * fake-db.mjs — a tiny in-memory stand-in for the supabase-js query builder.
+ *
+ * Why not the real Postgres harness: the verb layer talks PostgREST, and
+ * tests/helpers/pg-cluster.mjs talks psql. Standing up PostgREST to test a
+ * `select` shape would be a second harness for no extra guarantee — the
+ * database's own rules (RLS, CHECKs, FKs) are already proven against real
+ * Postgres in rls-policies / automation-schema-migration.
+ *
+ * Unlike the throwaway fakes in tasks-data-layer.test.mjs this one actually
+ * HOLDS ROWS and applies eq/in/is/order/limit to them, because the things being
+ * tested here — a derived open-task count, a money field being absent — are
+ * about the data that comes back, not about which builder methods were called.
+ *
+ * Rows are copied on the way out, so a verb mutating its result cannot corrupt
+ * the fixture and make a later test pass for the wrong reason.
+ */
+
+const clone = (row) => (row === null || typeof row !== "object" ? row : { ...row });
+
+/**
+ * @param tables {Record<string, object[]>} seeded rows, keyed by table name.
+ * @param opts.failOn {Record<string,string>} table -> error message to return.
+ * @param opts.throwOn {string} table name whose query throws instead.
+ */
+export function fakeDb(tables, opts = {}) {
+  const calls = [];
+
+  function from(table) {
+    if (opts.throwOn === table) {
+      throw new Error(`fake-db: exploding on ${table}`);
+    }
+    const rec = { table, ops: [] };
+    calls.push(rec);
+
+    const st = { mode: "select", cols: "", filters: [], orders: [], limit: null, payload: null };
+
+    const rowsOf = () => (tables[table] ??= []);
+
+    function selected() {
+      let rows = rowsOf().map(clone);
+      for (const f of st.filters) {
+        if (f.op === "eq") rows = rows.filter((r) => r[f.col] === f.val);
+        else if (f.op === "in") rows = rows.filter((r) => f.val.includes(r[f.col]));
+        else if (f.op === "is") rows = rows.filter((r) => r[f.col] === f.val);
+      }
+      for (const o of [...st.orders].reverse()) {
+        rows.sort((a, b) => {
+          const [x, y] = [a[o.col], b[o.col]];
+          if (x === y) return 0;
+          if (x === null || x === undefined) return o.nullsFirst ? -1 : 1;
+          if (y === null || y === undefined) return o.nullsFirst ? 1 : -1;
+          return (x < y ? -1 : 1) * (o.ascending === false ? -1 : 1);
+        });
+      }
+      if (st.limit !== null) rows = rows.slice(0, st.limit);
+      return rows.map((r) => embed(r, st.cols, tables));
+    }
+
+    function settle() {
+      const fail = opts.failOn?.[table];
+      if (fail) return Promise.resolve({ data: null, error: { message: fail } });
+
+      if (st.mode === "insert") {
+        const row = { id: `fake-${table}-${rowsOf().length + 1}`, created_at: "2026-01-01T00:00:00Z", ...st.payload };
+        rowsOf().push(row);
+        return Promise.resolve({ data: clone(row), error: null });
+      }
+      if (st.mode === "update") {
+        const before = st.filters;
+        let touched = [];
+        for (const row of rowsOf()) {
+          const match = before.every((f) =>
+            f.op === "in" ? f.val.includes(row[f.col]) : row[f.col] === f.val,
+          );
+          if (match) {
+            Object.assign(row, st.payload);
+            touched.push(clone(row));
+          }
+        }
+        return Promise.resolve({ data: touched, error: null, _rows: touched });
+      }
+      return Promise.resolve({ data: selected(), error: null });
+    }
+
+    const one = (allowEmpty) =>
+      settle().then((res) => {
+        if (res.error) return res;
+        const rows = Array.isArray(res.data) ? res.data : [res.data];
+        if (rows.length === 0) {
+          return allowEmpty ? { data: null, error: null } : { data: null, error: { message: "no rows" } };
+        }
+        return { data: rows[0], error: null };
+      });
+
+    const b = {
+      select: (cols) => ((st.cols = cols ?? ""), rec.ops.push(["select", cols]), b),
+      insert: (row) => ((st.mode = "insert"), (st.payload = row), rec.ops.push(["insert", row]), b),
+      update: (row) => ((st.mode = "update"), (st.payload = row), rec.ops.push(["update", row]), b),
+      eq: (col, val) => (st.filters.push({ op: "eq", col, val }), rec.ops.push(["eq", col, val]), b),
+      in: (col, val) => (st.filters.push({ op: "in", col, val }), rec.ops.push(["in", col, val]), b),
+      is: (col, val) => (st.filters.push({ op: "is", col, val }), rec.ops.push(["is", col, val]), b),
+      order: (col, o = {}) => (st.orders.push({ col, ...o }), rec.ops.push(["order", col, o]), b),
+      limit: (n) => ((st.limit = n), rec.ops.push(["limit", n]), b),
+      single: () => (rec.ops.push(["single"]), one(false)),
+      maybeSingle: () => (rec.ops.push(["maybeSingle"]), one(true)),
+      then: (res, rej) => settle().then(res, rej),
+    };
+    return b;
+  }
+
+  return { from, calls };
+}
+
+/** Reproduce the two PostgREST embeds the data layer asks for. */
+function embed(row, cols, tables) {
+  const out = { ...row };
+  if (cols.includes("accounts(business_name)")) {
+    const acct = (tables.accounts ?? []).find((a) => a.id === row.account_id);
+    out.account = acct ? { business_name: acct.business_name } : null;
+  }
+  if (cols.includes("profiles!tasks_assigned_to_fkey(display_name)")) {
+    const p = (tables.profiles ?? []).find((x) => x.id === row.assigned_to);
+    out.assignee = p ? { display_name: p.display_name } : null;
+  }
+  return out;
+}
