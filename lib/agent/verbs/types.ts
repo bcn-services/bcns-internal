@@ -206,6 +206,12 @@ export interface VerbContext {
   allowPrivateHosts?: boolean;
   /** `os_publish` only. Which git repo to publish. Never defaults to a hard-coded path. */
   osDir?: string;
+  /**
+   * `os_publish` only. Who the commit is authored by. Defaults to the generic
+   * agent identity below; the README export overrides it with `bcns-os-bot`,
+   * because a commit nobody typed should not carry a person's name.
+   */
+  osAuthor?: { name: string; email: string };
   /** `search_places` only — where the existing python script lives, and what runs it. */
   places?: { python?: string; script?: string };
   /** Injected clock, so a test never races a real one. */

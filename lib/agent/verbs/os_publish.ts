@@ -49,23 +49,23 @@ export interface OsPublishResult {
 }
 
 /** Minimal environment for git: enough to run, nothing that is a secret. */
-function gitEnv(): Record<string, string> {
+function gitEnv(author?: { name: string; email: string }): Record<string, string> {
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
     // Never prompt. An unattended prompt is an unbounded hang, not a failure.
     GIT_TERMINAL_PROMPT: "0",
     GIT_ASKPASS: "",
     // Identity, so a bare droplet clone with no user.email can still commit.
-    GIT_AUTHOR_NAME: "bcns agent",
-    GIT_AUTHOR_EMAIL: "agent@bcn-services.com",
-    GIT_COMMITTER_NAME: "bcns agent",
-    GIT_COMMITTER_EMAIL: "agent@bcn-services.com",
+    GIT_AUTHOR_NAME: author?.name ?? "bcns agent",
+    GIT_AUTHOR_EMAIL: author?.email ?? "agent@bcn-services.com",
+    GIT_COMMITTER_NAME: author?.name ?? "bcns agent",
+    GIT_COMMITTER_EMAIL: author?.email ?? "agent@bcn-services.com",
   };
   if (process.env.HOME) env.HOME = process.env.HOME;
   return env;
 }
 
-async function git(dir: string, args: string[]): Promise<{ ok: true; out: string } | { ok: false; error: string }> {
+async function git(dir: string, args: string[], author?: { name: string; email: string }): Promise<{ ok: true; out: string } | { ok: false; error: string }> {
   try {
     // `core.hooksPath=/dev/null` on EVERY invocation: this run just wrote files
     // into that directory, and a .git/hooks/pre-commit there would otherwise
@@ -73,7 +73,7 @@ async function git(dir: string, args: string[]): Promise<{ ok: true; out: string
     const { stdout } = await execFileAsync("git", ["-C", dir, "-c", "core.hooksPath=/dev/null", ...args], {
       // Cast as in lib/agent/runner.ts: next-env.d.ts augments ProcessEnv with a
       // required NODE_ENV, which a built-from-scratch env deliberately omits.
-      env: gitEnv() as NodeJS.ProcessEnv,
+      env: gitEnv(author) as NodeJS.ProcessEnv,
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: 4 * 1024 * 1024,
     });
@@ -138,7 +138,7 @@ export const os_publish = defineVerb<OsPublishInput, OsPublishResult>({
     const files = names.out.split("\0").filter(Boolean);
 
     // `--` ends option parsing so a message beginning with a dash is a message.
-    const committed = await git(dir, ["commit", "-m", message, "--"]);
+    const committed = await git(dir, ["commit", "-m", message, "--"], ctx.osAuthor);
     if (!committed.ok) return fail("internal", `os_publish (commit): ${committed.error}`);
 
     if (input.push === false) return ok({ dir, committed: true, pushed: false, files, message });

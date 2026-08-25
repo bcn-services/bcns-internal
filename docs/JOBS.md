@@ -19,12 +19,25 @@ is the caller's business and nothing else's.
 | `quiet_clients` | daily | flags `onboarding` clients with no signal for more than 7 days | a client has gone quiet |
 | `lead_outreach` | daily | drafts the next touch for every lead in the `ai` lane; parks a lead as `no_response` after three touches with no reply | every due lead's website was unreadable |
 | `lead_sweep` | weekly | picks the next trade/town pairs from `lead_targets`, or from segments that have earned it | never — an empty target list is a gap, not an outage |
+| `readme_export` | daily | rewrites the generated frontmatter block in `$OS_DIR/clients/<slug>/README.md` and commits it as `bcns-os-bot` | a README has lost its markers, or the commit did not land |
 
 **`lead_outreach` sends nothing.** It writes rows to `outreach_drafts`, which
 has no recipient column, no `sent_at` and no status — the table cannot
 represent a sent message. Whoever eventually sends one opens the lead to find
 out where it would go. The only network call is `read_site` (item 3, unchanged)
 against the lead's own website, and it is injected, so no test can make it.
+
+**`readme_export` is one-way and marker-bounded.** Supabase is authoritative;
+the README is an export target. The job rewrites only what sits between
+`# --- bcns:generated ... ---` and `# --- bcns:end ---` inside the YAML
+frontmatter, and the search for those two lines is confined to the frontmatter
+region — so the hand-written prose body is never parsed, never searched and
+never rewritten. A README that has lost its markers is REFUSED, not repaired.
+No money column is ever selected, so a NULL monthly rate exports as an absent
+field and there is no branch that could turn it into a `0`. `OS_DIR` must be
+set: there is no `~/os` fallback, and an unset one is a finding rather than a
+guess. Nothing derives from the wall clock, so an unchanged night writes no
+bytes and makes no commit.
 
 **`lead_sweep` selects a territory; it does not prospect one.** Running the
 real `leads` skill (Google Places, its own budget cap) stays a human action —
@@ -66,6 +79,7 @@ CRON_TZ=UTC
   10 6   *   *   *   cd /srv/bcns-internal && corepack pnpm job site_health   >> /var/log/bcns/site_health.log 2>&1
   25 6   *   *   *   cd /srv/bcns-internal && corepack pnpm job quiet_clients >> /var/log/bcns/quiet_clients.log 2>&1
   40 6   *   *   1   cd /srv/bcns-internal && corepack pnpm job credential_expiry >> /var/log/bcns/credential_expiry.log 2>&1
+  55 6   *   *   *   cd /srv/bcns-internal && corepack pnpm job readme_export >> /var/log/bcns/readme_export.log 2>&1
 ```
 
 The environment cron gives a job is not a login shell's. Either put

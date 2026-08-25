@@ -71,6 +71,7 @@ import { claimRun, closeRun, type JobRunStatus } from "./agent/skill-run";
 // across the boundary depends on being deferred to call time.
 import { leadSweepJob, outreachJob, type Evaluator, type SiteReader } from "./outreach";
 import { dailyWindow, weeklyWindow, type WindowKey } from "./job-windows";
+import { readmeExportJob, type ReadmeExportDeps } from "./os/readme-export";
 import { timeoutFetch } from "./fetch-timeout";
 import { notifyJobRun, resolveAdmin, type NotifyOutcome, type Recipient } from "./notify";
 import { scrub, type Caller, type DbClient } from "./agent/verbs/types";
@@ -665,6 +666,8 @@ export function jobRegistry(
     commits?: CommitReader;
     readSite?: SiteReader;
     evaluate?: Evaluator;
+    /** Item 11. Injected so a test exports into a temp fixture, never ~/os. */
+    readme?: ReadmeExportDeps;
   } = {},
 ): Record<string, JobDefinition> {
   const fetcher = deps.fetcher ?? realSiteFetcher;
@@ -676,6 +679,7 @@ export function jobRegistry(
       quietClientJob(fetcher, commits),
       outreachJob({ readSite: deps.readSite, evaluate: deps.evaluate }),
       leadSweepJob(),
+      readmeExportJob(deps.readme),
     ].map((j) => [j.name, j]),
   );
 }
@@ -686,4 +690,5 @@ export const JOB_NAMES = [
   "quiet_clients",
   "lead_outreach",
   "lead_sweep",
+  "readme_export",
 ] as const;
