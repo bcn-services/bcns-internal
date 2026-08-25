@@ -288,7 +288,7 @@ figures must read visually distinct from member-visible ones.
     - A lead with 3 bot activity rows and no reply is set to `no_response` and receives no 4th draft
     - An outreach draft for a lead with a reachable website contains a business description derived from that site's content, not from its `source_query`
     - The sweep with zero `enough_data: true` segments draws every target from `lead_targets` and invents none
-  status: not started
+  status: done
   caution: true
 
 - task: README export generator. Reads Supabase and writes client frontmatter into

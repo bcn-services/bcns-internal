@@ -4,10 +4,10 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
-- Status: items 1–9 done (7 partly blocked), items 10–13 pending
-- Next: item 10 — lead outreach lanes and the sweep
+- Status: items 1–10 done (7 partly blocked), items 11–13 pending
+- Next: item 11 — the README export generator
 - Blockers: item 7's send half — no mail provider is configured. Configuring Resend needs an interactive signup. See docs/NOTIFICATIONS.md.
-- Last updated: 2026-08-24
+- Last updated: 2026-08-25
 
 | Item | Status |
 |------|--------|
@@ -20,7 +20,7 @@ LANE.md wins for scope.
 | 7. Notification routing | done, except sending — the system now decides on its own whether something belongs in your inbox, your email, or both. Email goes out for exactly three things: a scheduled run that failed, a task assigned to you, and a lead saying they want to meet. Briefings, successful runs and agent proposals stay in the inbox only. Everything reaches the inbox no matter what. No mail provider is set up yet, so emails are written out in full and parked in a queue rather than lost — once Resend is configured they can be sent. docs/NOTIFICATIONS.md has the 12 steps. |
 | 8. Daily briefing | done — signing in kicks off a briefing in the background: the page appears at once with the card marked as building, and it fills itself in when ready, so nothing waits on a run that takes up to a minute. It covers everything since your last briefing rather than 'since yesterday', so a week away gives you one briefing for the week instead of seven stale ones. It runs at most once per 20 hours, proven safe against two sign-ins at the same moment, and a failed run leaves your window intact rather than silently eating it. The skill file itself is staged in the repo for you to install into ~/os. |
 | 9. Job runner and first three jobs | done — scheduled work now has one place to live: a job opens a record of the run, does its work, closes it with a result, and sends the outcome through the notification rules from item 7. Three jobs ship with it. A daily sweep checks every client site that has an address and reports the ones that are down. A weekly check warns when an agent token is within 30 days of expiring, so nothing dies silently next August. A daily detector flags a client being onboarded who has gone quiet for a week — active and finished clients are ignored on purpose. Each job claims its own time window before running, proven safe against two schedulers firing at the same moment, so a doubled cron line cannot produce doubled work. Nothing runs on a timer inside the app; an outside scheduler calls a script, so it works with no laptop on. The cron lines are written down in docs/JOBS.md for when the droplet exists. |
-| 10. Lead outreach lanes and sweep | not started |
+| 10. Lead outreach lanes and sweep | done — leads now sit in one of four lanes and the system knows which. Every new lead starts on the robot's lane. The moment a person logs any contact with that lead, the robot stops touching it — enforced by the database itself, so it holds however the record was written. Three robot touches with no reply parks the lead as no-response and it gets no fourth. You can move any lead between lanes by hand from the leads page. The draft writer reads each lead's own website and writes a real business description from what the site actually says, not from the search phrase that found them — proven by a test that fails if the page text never reaches the model. Drafts are database rows; there is no way to send from here and no address to send to. The territory sweep only ever draws from the target list you set, and with an empty list it returns nothing rather than inventing a town. The review found the draft batch could never move past its first 25 leads and would have failed silently; that is fixed, and the job now stops itself before its own timeout instead of writing rows after it was declared failed. Honest limit: nothing yet records a robot touch, so in practice every lead stays on touch one until a sender exists. |
 | 11. README export generator | not started |
 | 12. Admin configuration surface | not started |
 | 13. Final integration pass and review handoff | not started |
