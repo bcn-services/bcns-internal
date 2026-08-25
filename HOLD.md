@@ -9,10 +9,32 @@ against it. Its schema is still owned by *this* repo's `supabase/migrations/` �
 add migrations here, apply from here, or the two will diverge and neither will
 have an accurate migration history.
 
-Nothing else runs. No deployment exists, no cron line is installed, no launchd
-agent or crontab entry references this repo, and `.github/workflows/ci.yml` has
-no `schedule` trigger — it fires only on push/PR to `main` and on manual
-dispatch. Vercel was never connected, so there is nothing to tear down.
+**Nothing in this repo connects to it any more.** At hold time the only live
+connection was a `next dev -p 3100` server running on Nate's machine; it was
+killed. Nothing restarts it — there is no launchd agent, no crontab line, no
+Claude Code scheduled job, and no PM2 process anywhere on the machine that
+references this repo or that project ref.
+
+**Nothing here can reach Claude either.** `.env.local` has `AI_ENABLED="0"` and
+carries no Anthropic key at all, so `lib/agent/runner.ts` — the one path that
+spawns the Claude Code CLI — cannot fire even if the app is started by hand.
+
+**CI is disabled.** `.github/workflows/ci.yml` is `disabled_manually`; pushes to
+`main` queue nothing. It never touched the production database (it stands up a
+throwaway Supabase stack, and the only repo secret is `GH_PACKAGES_TOKEN` — no
+database credential and no API key is stored in Actions). It was switched off to
+stop red-run noise, not for safety. The last run on `main` failed in the shadow
+stack's container (`supabase db reset` → `error running container: exit 1`) —
+infrastructure, not code; the commit before it ran 845/845 green. Deliberately
+not chased.
+
+### To reconnect on resume
+
+    gh workflow enable ci      # in ~/bcns-internal
+    corepack pnpm dev          # localhost:3100
+
+Set `AI_ENABLED=1` and add an Anthropic key only when the agent layer is wanted
+again.
 
 ## State at hold time
 
@@ -20,6 +42,7 @@ dispatch. Vercel was never connected, so there is nothing to tear down.
 - CI green: **845 tests / 139 suites / 0 fail**, typecheck clean.
 - Migrations 0001–0016 applied to production and verified.
 - Working tree clean, fully pushed.
+- CI disabled; dev server killed; AI off. See above.
 - `email_outbox` holds `pending` rows. Nothing was lost; nothing was sent.
 
 ## Deliberately deferred — do not treat as forgotten
