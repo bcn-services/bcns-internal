@@ -22,6 +22,9 @@ const clone = (row) => (row === null || typeof row !== "object" ? row : { ...row
  * @param tables {Record<string, object[]>} seeded rows, keyed by table name.
  * @param opts.failOn {Record<string,string>} table -> error message to return.
  * @param opts.throwOn {string} table name whose query throws instead.
+ * @param opts.maxRows {number} PostgREST's server-side row cap (default 1000 in
+ *   a real deployment). Set it to make a SELECT truncate the way the real one
+ *   silently does, so an unpaginated reader is caught.
  */
 export function fakeDb(tables, opts = {}) {
   const calls = [];
@@ -33,7 +36,7 @@ export function fakeDb(tables, opts = {}) {
     const rec = { table, ops: [] };
     calls.push(rec);
 
-    const st = { mode: "select", cols: "", filters: [], orders: [], limit: null, payload: null };
+    const st = { mode: "select", cols: "", filters: [], orders: [], limit: null, range: null, payload: null };
 
     const rowsOf = () => (tables[table] ??= []);
 
@@ -53,7 +56,11 @@ export function fakeDb(tables, opts = {}) {
           return (x < y ? -1 : 1) * (o.ascending === false ? -1 : 1);
         });
       }
+      // PostgREST semantics: range is inclusive on both ends.
+      if (st.range !== null) rows = rows.slice(st.range[0], st.range[1] + 1);
       if (st.limit !== null) rows = rows.slice(0, st.limit);
+      // PostgREST truncates at its configured maximum and says nothing.
+      if (opts.maxRows) rows = rows.slice(0, opts.maxRows);
       return rows.map((r) => embed(r, st.cols, tables));
     }
 
@@ -102,6 +109,7 @@ export function fakeDb(tables, opts = {}) {
       is: (col, val) => (st.filters.push({ op: "is", col, val }), rec.ops.push(["is", col, val]), b),
       order: (col, o = {}) => (st.orders.push({ col, ...o }), rec.ops.push(["order", col, o]), b),
       limit: (n) => ((st.limit = n), rec.ops.push(["limit", n]), b),
+      range: (from, to) => ((st.range = [from, to]), rec.ops.push(["range", from, to]), b),
       single: () => (rec.ops.push(["single"]), one(false)),
       maybeSingle: () => (rec.ops.push(["maybeSingle"]), one(true)),
       then: (res, rej) => settle().then(res, rej),

@@ -11,8 +11,7 @@
  * admin.
  */
 
-import { assignAccount, setAccountStatus, STAGES, isStage, isUuid, type Account, type Stage }
-  from "../../accounts";
+import { updateAccount, STAGES, isStage, isUuid, type Account, type Stage } from "../../accounts";
 import { defineVerb, fail, ok, requireDb, type VerbResult } from "./types";
 
 export const OUTREACH_MODES = ["ai", "human", "paused"] as const;
@@ -64,25 +63,19 @@ export const leads_write = defineVerb<LeadsWriteInput, Account>({
       return fail("invalid_input", `bad outreach mode: ${String(input.outreachMode)}`);
     }
 
-    let row: Account | null = null;
-    if (input.status !== undefined) row = await setAccountStatus(db, input.id, input.status);
+    // ONE update, not three. Sequential writes have no transaction around them:
+    // a failure on the second would leave the first applied while this verb
+    // reports an error, and the model would then re-issue the whole change.
+    const patch: { status?: Stage; assigned_to?: string | null; outreach_mode?: OutreachMode } = {};
+    if (input.status !== undefined) patch.status = input.status;
     if (input.assignedTo !== undefined) {
       const owner =
         input.assignedTo === null || input.assignedTo === "unassigned" ? null : input.assignedTo;
       if (owner !== null && !isUuid(owner)) return fail("invalid_input", `bad assignee id: ${owner}`);
-      row = await assignAccount(db, input.id, owner);
+      patch.assigned_to = owner;
     }
-    if (input.outreachMode !== undefined) {
-      const res = await db
-        .from("accounts")
-        .update({ outreach_mode: input.outreachMode })
-        .eq("id", input.id)
-        .select("*")
-        .single();
-      if (res.error) return fail("db_error", `leads_write (outreach_mode): ${res.error.message}`);
-      row = res.data as Account;
-    }
-    if (!row) return fail("internal", "leads_write applied no update");
-    return ok(row);
+    if (input.outreachMode !== undefined) patch.outreach_mode = input.outreachMode;
+
+    return ok(await updateAccount(db, input.id, patch));
   },
 });

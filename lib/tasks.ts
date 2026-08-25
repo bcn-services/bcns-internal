@@ -150,36 +150,36 @@ export async function createTask(
   );
 }
 
-export async function updateTaskStatus(
+/**
+ * ONE atomic patch of one task. Both writers below go through it: status and
+ * assignee changed in two sequential updates can fail halfway, leaving the
+ * first applied while the caller reports failure.
+ */
+export async function updateTask(
   db: Client_,
   id: string,
-  status: TaskStatus,
+  patch: { status?: TaskStatus; assigned_to?: string | null },
 ): Promise<Task> {
   if (!isUuid(id)) throw new InvalidInputError(`bad task id: ${id}`);
-  if (!isTaskStatus(status)) throw new InvalidInputError(`bad status: ${status}`);
+  if (patch.status !== undefined && !isTaskStatus(patch.status)) {
+    throw new InvalidInputError(`bad status: ${patch.status}`);
+  }
+  if (patch.assigned_to !== undefined && patch.assigned_to !== null && !isUuid(patch.assigned_to)) {
+    throw new InvalidInputError(`bad assignee id: ${patch.assigned_to}`);
+  }
+  if (Object.keys(patch).length === 0) throw new InvalidInputError("updateTask: nothing to change");
   return unwrap<Task>(
-    await db.from("tasks").update({ status }).eq("id", id).select(TASK_COLUMNS).single(),
-    "updateTaskStatus",
+    await db.from("tasks").update(patch).eq("id", id).select(TASK_COLUMNS).single(),
+    "updateTask",
   );
 }
 
+export async function updateTaskStatus(db: Client_, id: string, status: TaskStatus): Promise<Task> {
+  if (!isTaskStatus(status)) throw new InvalidInputError(`bad status: ${status}`);
+  return updateTask(db, id, { status });
+}
+
 /** Reassign, or hand the work back to the pool with null. */
-export async function assignTask(
-  db: Client_,
-  id: string,
-  profileId: string | null,
-): Promise<Task> {
-  if (!isUuid(id)) throw new InvalidInputError(`bad task id: ${id}`);
-  if (profileId !== null && !isUuid(profileId)) {
-    throw new InvalidInputError(`bad assignee id: ${profileId}`);
-  }
-  return unwrap<Task>(
-    await db
-      .from("tasks")
-      .update({ assigned_to: profileId })
-      .eq("id", id)
-      .select(TASK_COLUMNS)
-      .single(),
-    "assignTask",
-  );
+export async function assignTask(db: Client_, id: string, profileId: string | null): Promise<Task> {
+  return updateTask(db, id, { assigned_to: profileId });
 }

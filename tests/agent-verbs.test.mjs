@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import {
   VERBS, VERB_NAMES, callVerb, toolSchemas, verbsFor,
   leads_query, leads_stats, clients_query, tasks_write, log_activity,
-  profiles_query, inbox_post, activity_query, leads_write, tasks_query, stripMoney,
+  profiles_query, inbox_post, activity_query, leads_write, tasks_query, stripMoney, clients_write,
 } from "../lib/agent/verbs/index.ts";
 import { fakeDb } from "./helpers/fake-db.mjs";
 
@@ -159,6 +159,17 @@ describe("verb registry", () => {
     assert.equal(r.ok, false);
     assert.equal(r.error.code, "invalid_input");
     assert.match(r.error.message, /no such verb/);
+  });
+
+  test("an inherited Object.prototype key is not a verb", async () => {
+    // `VERBS["toString"]` is truthy and is not a verb: calling `.run` on it
+    // throws a raw TypeError straight out of callVerb, past every typed error.
+    for (const name of ["toString", "constructor", "valueOf", "hasOwnProperty", "__proto__"]) {
+      const r = await callVerb(name, { caller: ADMIN });
+      assert.equal(r.ok, false, `${name} was dispatched`);
+      assert.equal(r.error.code, "invalid_input", `${name}: ${JSON.stringify(r.error)}`);
+      assert.match(r.error.message, /no such verb/);
+    }
   });
 });
 
@@ -418,6 +429,122 @@ describe("input validation and derived behaviour", () => {
     assert.equal(r.data.unassigned, 1);
   });
 
+  test("clients_write refuses a negative or absurd monthly rate", async () => {
+    for (const rate of ["-500", -1, "-0.01", "1000000", 99_999_999]) {
+      const tables = fixture();
+      const db = fakeDb(tables);
+      const r = await clients_write.run({ caller: ADMIN, db }, { slug: "coventry", monthlyRateDollars: rate });
+      assert.equal(r.ok, false, `${rate} was accepted`);
+      assert.equal(r.error.code, "invalid_input", `${rate}: ${JSON.stringify(r.error)}`);
+      assert.equal(
+        tables.clients[0].monthly_rate_cents, 15000,
+        `${rate} was written to the client row`,
+      );
+    }
+  });
+
+  test("clients_write still accepts a normal rate", async () => {
+    const tables = fixture();
+    const r = await clients_write.run(
+      { caller: ADMIN, db: fakeDb(tables) },
+      { slug: "coventry", monthlyRateDollars: "149.99" },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r.error));
+    assert.equal(tables.clients[0].monthly_rate_cents, 14999);
+  });
+
+  test("leads_stats pages past PostgREST's row cap instead of reporting it as the total", async () => {
+    const tables = fixture();
+    tables.accounts = Array.from({ length: 1500 }, (_, i) => ({
+      id: `acct-${String(i).padStart(5, "0")}`,
+      business_name: `Lead ${i}`,
+      status: i % 3 === 0 ? "won" : "new",
+      assigned_to: i % 2 === 0 ? MEMBER.profileId : null,
+      created_at: "2026-01-01",
+    }));
+    const db = fakeDb(tables, { maxRows: 1000 });
+    const r = await leads_stats.run({ caller: ADMIN, db }, {});
+    assert.equal(r.ok, true, JSON.stringify(r.error));
+    assert.equal(r.data.total, 1500, "the count stopped at the server's row cap");
+    assert.equal(r.data.byStage.won, 500);
+    assert.equal(r.data.byStage.new, 1000);
+    assert.equal(r.data.open, 1000, "won is terminal");
+    assert.equal(r.data.unassigned, 750);
+    assert.equal(r.data.truncated, false, "1500 rows is inside the ceiling");
+    // Paged, not one unbounded select.
+    const ranges = db.calls.flatMap((c) => c.ops.filter((o) => o[0] === "range"));
+    assert.ok(ranges.length >= 2, "leads_stats issued no range query");
+  });
+
+  test("leads_query caps at the DATABASE, not with a slice after the fetch", async () => {
+    const tables = fixture();
+    tables.accounts = Array.from({ length: 40 }, (_, i) => ({
+      id: `acct-${i}`, business_name: `Lead ${i}`, status: "new", assigned_to: null,
+      deal_value_cents: null, created_at: `2026-01-${String((i % 28) + 1).padStart(2, "0")}`,
+    }));
+    const db = fakeDb(tables);
+    const r = await leads_query.run({ caller: ADMIN, db }, { limit: 5 });
+    assert.equal(r.ok, true, JSON.stringify(r.error));
+    assert.equal(r.data.length, 5);
+    const limits = db.calls.flatMap((c) => c.ops.filter((o) => o[0] === "limit"));
+    assert.deepEqual(limits, [["limit", 5]], "the cap never reached the query");
+
+    // The default is pushed down too, not just an explicit one.
+    const db2 = fakeDb(tables);
+    await leads_query.run({ caller: ADMIN, db: db2 }, {});
+    assert.deepEqual(
+      db2.calls.flatMap((c) => c.ops.filter((o) => o[0] === "limit")),
+      [["limit", 50]],
+    );
+  });
+
+  test("leads_write applies status, owner and outreach mode in ONE update", async () => {
+    const tables = fixture();
+    const db = fakeDb(tables);
+    const r = await leads_write.run(
+      { caller: ADMIN, db },
+      { id: ACCT, status: "lost", assignedTo: MEMBER2.profileId, outreachMode: "paused" },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r.error));
+    const updates = db.calls.flatMap((c) => c.ops.filter((o) => o[0] === "update"));
+    assert.equal(updates.length, 1, "three fields cost three un-transacted round trips");
+    assert.deepEqual(updates[0][1], {
+      status: "lost", assigned_to: MEMBER2.profileId, outreach_mode: "paused",
+    });
+    const row = tables.accounts.find((a) => a.id === ACCT);
+    assert.equal(row.status, "lost");
+    assert.equal(row.assigned_to, MEMBER2.profileId);
+    assert.equal(row.outreach_mode, "paused");
+  });
+
+  test("leads_write leaves NOTHING applied when the single update fails", async () => {
+    const tables = fixture();
+    const before = { ...tables.accounts.find((a) => a.id === ACCT) };
+    const db = fakeDb(tables, { failOn: { accounts: "update rejected" } });
+    const r = await leads_write.run(
+      { caller: ADMIN, db },
+      { id: ACCT, status: "lost", assignedTo: MEMBER2.profileId },
+    );
+    assert.equal(r.ok, false);
+    assert.deepEqual(tables.accounts.find((a) => a.id === ACCT), before, "a partial write survived");
+  });
+
+  test("tasks_write applies status and assignee in ONE update and returns the final row", async () => {
+    const tables = fixture();
+    const db = fakeDb(tables);
+    const r = await tasks_write.run(
+      { caller: ADMIN, db },
+      { id: TASK, status: "doing", assignedTo: MEMBER.profileId },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r.error));
+    const updates = db.calls.flatMap((c) => c.ops.filter((o) => o[0] === "update"));
+    assert.equal(updates.length, 1, "status and assignee were written separately");
+    assert.deepEqual(updates[0][1], { status: "doing", assigned_to: MEMBER.profileId });
+    // The returned row carries BOTH changes, not just the last write's.
+    assert.equal(r.data.status, "doing");
+    assert.equal(r.data.assigned_to, MEMBER.profileId);
+  });
+
   test("leads_write with nothing to change is invalid_input", async () => {
     const r = await leads_write.run({ caller: MEMBER, db: fakeDb(fixture()) }, { id: ACCT });
     assert.equal(r.ok, false);
@@ -507,6 +634,9 @@ describe("input validation and derived behaviour", () => {
     );
     assert.equal(r.ok, false);
     assert.equal(r.error.code, "internal");
-    assert.match(r.error.message, /exploding/);
+    // The CODE is what the caller acts on. The driver's own text is not
+    // forwarded — it can quote a constraint value or a row back at the model.
+    assert.ok(!r.error.message.includes("exploding"), r.error.message);
+    assert.match(r.error.message, /leads_query failed \(internal\)/);
   });
 });

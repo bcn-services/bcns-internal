@@ -6,10 +6,9 @@
  */
 
 import {
-  assignTask,
   createTask,
   isTaskStatus,
-  updateTaskStatus,
+  updateTask,
   TASK_STATUSES,
   type Task,
   type TaskStatus,
@@ -86,10 +85,11 @@ export const tasks_write = defineVerb<TasksWriteInput, Task>({
       return fail("invalid_input", "tasks_write needs status or assignedTo when updating");
     }
 
-    let row: Task | null = null;
-    if (input.status !== undefined) row = await updateTaskStatus(db, input.id, input.status);
-    if (assignee !== undefined) row = await assignTask(db, input.id, assignee);
-    if (!row) return fail("internal", "tasks_write applied no update");
-    return ok(row);
+    // ONE update: status and assignee written separately can fail between the
+    // two, and only the second write's row would come back to the caller.
+    const patch: { status?: TaskStatus; assigned_to?: string | null } = {};
+    if (input.status !== undefined) patch.status = input.status;
+    if (assignee !== undefined) patch.assigned_to = assignee;
+    return ok(await updateTask(db, input.id, patch));
   },
 });

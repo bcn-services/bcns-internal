@@ -19,6 +19,9 @@ import {
 } from "../../accounts";
 import { defineVerb, fail, ok, requireDb, type VerbResult } from "./types";
 
+/** $100,000/month. Above this is a typo or an attack, not a retainer. */
+const MAX_RATE_CENTS = 10_000_000;
+
 export interface ClientsWriteInput {
   slug?: string;
   status?: string;
@@ -40,7 +43,9 @@ export const clients_write = defineVerb<ClientsWriteInput, Client>({
     domain: { type: "string", description: "The client's domain." },
     monthlyRateDollars: {
       type: "string",
-      description: "Monthly retainer in dollars, e.g. '150' or '149.99'. Stored as integer cents.",
+      description:
+        `Monthly retainer in dollars, e.g. '150' or '149.99'. Stored as integer cents. ` +
+        `Must be between 0 and ${MAX_RATE_CENTS / 100}; a negative rate is refused.`,
     },
     fromAccountId: {
       type: "string",
@@ -70,7 +75,17 @@ export const clients_write = defineVerb<ClientsWriteInput, Client>({
     if (input.status !== undefined) patch.status = input.status;
     if (input.domain !== undefined) patch.domain = input.domain;
     if (input.monthlyRateDollars !== undefined) {
-      patch.monthly_rate_cents = dollarsToCents(input.monthlyRateDollars);
+      // dollarsToCents happily parses a leading "-": a retainer is not a refund,
+      // and a model that types "-500" must be refused at this boundary rather
+      // than have -50000 cents written unchallenged.
+      const cents = dollarsToCents(input.monthlyRateDollars);
+      if (cents < 0 || cents > MAX_RATE_CENTS) {
+        return fail(
+          "invalid_input",
+          `monthly rate must be between $0 and $${MAX_RATE_CENTS / 100}: got ${input.monthlyRateDollars}`,
+        );
+      }
+      patch.monthly_rate_cents = cents;
     }
     if (Object.keys(patch).length === 0) {
       return fail("invalid_input", "clients_write needs at least one field to change");

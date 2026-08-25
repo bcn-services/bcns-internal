@@ -74,10 +74,13 @@ export async function callVerb(
   ctx: VerbContext,
   input: Record<string, unknown> = {},
 ): Promise<VerbResult<unknown>> {
-  const verb = VERBS[name];
-  if (!verb) {
+  // `Object.hasOwn`, not truthiness: `VERBS["toString"]` reaches Object.prototype
+  // and hands back a function, which would then be `.run`-ed and throw a raw
+  // TypeError past defineVerb's catch.
+  if (!Object.hasOwn(VERBS, name)) {
     return { ok: false, error: { code: "invalid_input", message: `no such verb: ${name}` } };
   }
+  const verb = VERBS[name] as AnyVerb;
   return verb.run(ctx, input);
 }
 

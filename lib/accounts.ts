@@ -102,6 +102,8 @@ export interface Account {
   /** profiles.id of the person who owns this lead, or null for unassigned. */
   assigned_to: string | null;
   notes: string | null;
+  /** 0009: whether automated outreach may contact this lead ("ai" | "human" | "paused"). */
+  outreach_mode?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -126,7 +128,7 @@ export interface Client {
 }
 
 const ACCOUNT_COLUMNS =
-  "id, place_id, business_name, business_type, city, phone, website, has_website, rating, review_count, lead_score, score_reason, status, call_count, last_contact, contact_name, last_outcome, consult_date, close_date, deal_value_cents, source_query, date_added, assigned_to, notes, created_at, updated_at";
+  "id, place_id, business_name, business_type, city, phone, website, has_website, rating, review_count, lead_score, score_reason, status, call_count, last_contact, contact_name, last_outcome, consult_date, close_date, deal_value_cents, source_query, date_added, assigned_to, notes, outreach_mode, created_at, updated_at";
 const CLIENT_COLUMNS =
   "id, account_id, slug, status, monthly_rate_cents, domain, created_at, updated_at";
 /** CLIENT_COLUMNS plus the one account field the client views need. */
@@ -150,7 +152,7 @@ function unwrap<T>(res: Result<T>, what: string): T {
 /** All accounts, newest first. RLS decides which rows come back. */
 export async function listAccounts(
   db: Client_,
-  opts: { status?: Stage; assignedTo?: string | null } = {},
+  opts: { status?: Stage; assignedTo?: string | null; limit?: number } = {},
 ): Promise<Account[]> {
   // Validate BEFORE touching the client, so a bad filter never issues a query.
   if (opts.status !== undefined && !isStage(opts.status)) {
@@ -162,11 +164,18 @@ export async function listAccounts(
   if (opts.assignedTo !== undefined && opts.assignedTo !== null && !isUuid(opts.assignedTo)) {
     throw new InvalidInputError(`bad assignee id: ${opts.assignedTo}`);
   }
+  if (opts.limit !== undefined && (!Number.isInteger(opts.limit) || opts.limit <= 0)) {
+    throw new InvalidInputError(`bad limit: ${opts.limit}`);
+  }
   let q = db.from("accounts").select(ACCOUNT_COLUMNS);
   if (opts.status !== undefined) q = q.eq("status", opts.status);
   if (opts.assignedTo === null) q = q.is("assigned_to", null);
   else if (opts.assignedTo !== undefined) q = q.eq("assigned_to", opts.assignedTo);
-  return unwrap<Account[]>(await q.order("created_at", { ascending: false }), "listAccounts");
+  q = q.order("created_at", { ascending: false });
+  // Bounded at the DATABASE when a caller asks for a cap: slicing after the
+  // fetch still drags every matching row across the wire.
+  if (opts.limit !== undefined) q = q.limit(opts.limit);
+  return unwrap<Account[]>(await q, "listAccounts");
 }
 
 export async function getAccount(db: Client_, id: string): Promise<Account | null> {
@@ -181,17 +190,34 @@ export async function getAccount(db: Client_, id: string): Promise<Account | nul
 }
 
 /** Move an account through the funnel. Rejects an unknown stage before the DB. */
-export async function setAccountStatus(
+/**
+ * ONE atomic patch of one account. Every account write goes through here so a
+ * caller changing two fields issues ONE update — two sequential updates can
+ * fail halfway and leave the first applied while the caller reports an error,
+ * and PostgREST gives us no transaction to wrap them in.
+ */
+export async function updateAccount(
   db: Client_,
   id: string,
-  status: Stage,
+  patch: { status?: Stage; assigned_to?: string | null; outreach_mode?: string },
 ): Promise<Account> {
   if (!isUuid(id)) throw new InvalidInputError(`bad account id: ${id}`);
-  if (!isStage(status)) throw new InvalidInputError(`bad status: ${status}`);
+  if (patch.status !== undefined && !isStage(patch.status)) {
+    throw new InvalidInputError(`bad status: ${patch.status}`);
+  }
+  if (patch.assigned_to !== undefined && patch.assigned_to !== null && !isUuid(patch.assigned_to)) {
+    throw new InvalidInputError(`bad assignee id: ${patch.assigned_to}`);
+  }
+  if (Object.keys(patch).length === 0) throw new InvalidInputError("updateAccount: nothing to change");
   return unwrap<Account>(
-    await db.from("accounts").update({ status }).eq("id", id).select(ACCOUNT_COLUMNS).single(),
-    "setAccountStatus",
+    await db.from("accounts").update(patch).eq("id", id).select(ACCOUNT_COLUMNS).single(),
+    "updateAccount",
   );
+}
+
+export async function setAccountStatus(db: Client_, id: string, status: Stage): Promise<Account> {
+  if (!isStage(status)) throw new InvalidInputError(`bad status: ${status}`);
+  return updateAccount(db, id, { status });
 }
 
 /**
@@ -206,15 +232,7 @@ export async function assignAccount(
   id: string,
   profileId: string | null,
 ): Promise<Account> {
-  if (!isUuid(id)) throw new InvalidInputError(`bad account id: ${id}`);
-  if (profileId !== null && !isUuid(profileId)) {
-    throw new InvalidInputError(`bad assignee id: ${profileId}`);
-  }
-  return unwrap<Account>(
-    await db.from("accounts").update({ assigned_to: profileId }).eq("id", id)
-      .select(ACCOUNT_COLUMNS).single(),
-    "assignAccount",
-  );
+  return updateAccount(db, id, { assigned_to: profileId });
 }
 
 /** Append one contact record. This is the history the lead sheet could not keep. */

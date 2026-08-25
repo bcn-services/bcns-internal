@@ -269,8 +269,16 @@ export function defineVerb<I, O>(spec: {
       } catch (err) {
         // A verb must never throw at its caller. Anything that escapes a
         // handler — a bad fake, a PostgREST shape change — becomes typed here.
-        const message = err instanceof Error ? err.message : String(err);
-        return fail(errorCodeFor(err), message);
+        const code = errorCodeFor(err);
+        // An InvalidInputError is OUR text and is meant for the model. Anything
+        // else is unknown provenance — a PostgREST/undici string that can quote
+        // a constraint value, a row, or a request URL — so it is logged here and
+        // NOT handed back. The code is the part the caller can act on.
+        const raw = err instanceof Error ? err.message : String(err);
+        if (code !== "invalid_input") console.error(`[verb ${spec.name}] ${scrub(raw)}`);
+        const message =
+          code === "invalid_input" ? raw : `${spec.name} failed (${code}); see the server log`;
+        return fail(code, message);
       }
       if (!result.ok) return fail(result.error.code, result.error.message);
       return ok(stripMoney(result.data, role));

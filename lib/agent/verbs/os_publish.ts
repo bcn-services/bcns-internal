@@ -67,7 +67,10 @@ function gitEnv(): Record<string, string> {
 
 async function git(dir: string, args: string[]): Promise<{ ok: true; out: string } | { ok: false; error: string }> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", dir, ...args], {
+    // `core.hooksPath=/dev/null` on EVERY invocation: this run just wrote files
+    // into that directory, and a .git/hooks/pre-commit there would otherwise
+    // execute as the server, with the server's HOME.
+    const { stdout } = await execFileAsync("git", ["-C", dir, "-c", "core.hooksPath=/dev/null", ...args], {
       // Cast as in lib/agent/runner.ts: next-env.d.ts augments ProcessEnv with a
       // required NODE_ENV, which a built-from-scratch env deliberately omits.
       env: gitEnv() as NodeJS.ProcessEnv,
@@ -106,6 +109,16 @@ export const os_publish = defineVerb<OsPublishInput, OsPublishResult>({
     const isRepo = await git(dir, ["rev-parse", "--is-inside-work-tree"]);
     if (!isRepo.ok) return fail("not_configured", `os_publish: ${dir} is not a git work tree`);
 
+    // Refuse a clone that is mid-rebase. Committing inside one would fold this
+    // run's files into somebody else's half-replayed commit.
+    const midRebase = await git(dir, ["rev-parse", "--verify", "REBASE_HEAD"]);
+    if (midRebase.ok) {
+      return fail(
+        "internal",
+        `os_publish: ${dir} is in the middle of a rebase. Nothing was committed; finish or abort it by hand.`,
+      );
+    }
+
     const staged = await git(dir, ["add", "-A"]);
     if (!staged.ok) return fail("internal", `os_publish (add): ${staged.error}`);
 
@@ -115,11 +128,14 @@ export const os_publish = defineVerb<OsPublishInput, OsPublishResult>({
       return ok({ dir, committed: false, pushed: false, files: [], message });
     }
     // Parsed BEFORE the commit — afterwards the tree is clean and there is
-    // nothing left to list.
-    const files = status.out
-      .split("\n")
-      .map((line) => line.slice(3).trim())
-      .filter(Boolean);
+    // nothing left to list. NUL-separated from the index rather than sliced out
+    // of porcelain: porcelain writes a rename as "old -> new" and C-quotes a
+    // path with a space or a non-ASCII byte in it.
+    // --no-renames so a rename lists BOTH paths: the caller wants to see what
+    // left the machine, not git's guess at which file became which.
+    const names = await git(dir, ["diff", "--name-only", "--cached", "--no-renames", "-z"]);
+    if (!names.ok) return fail("internal", `os_publish (diff): ${names.error}`);
+    const files = names.out.split("\0").filter(Boolean);
 
     // `--` ends option parsing so a message beginning with a dash is a message.
     const committed = await git(dir, ["commit", "-m", message, "--"]);
@@ -136,9 +152,18 @@ export const os_publish = defineVerb<OsPublishInput, OsPublishResult>({
 
     const rebased = await git(dir, ["pull", "--rebase"]);
     if (!rebased.ok) {
+      // Unwind it. A conflicted rebase left in place means the NEXT os_publish
+      // runs `git add -A` and commits inside a half-applied rebase. A pull that
+      // failed before starting one (no network, no upstream) leaves nothing to
+      // abort, so the abort is attempted only when a rebase is actually open.
+      let note = "No rebase was left in progress";
+      if ((await git(dir, ["rev-parse", "--verify", "REBASE_HEAD"])).ok) {
+        const aborted = await git(dir, ["rebase", "--abort"]);
+        note = aborted.ok ? "The rebase was aborted" : "The rebase could NOT be aborted";
+      }
       return fail(
         "internal",
-        `os_publish (pull --rebase): ${rebased.error}. The commit is local; resolve by hand — nothing was force-pushed.`,
+        `os_publish (pull --rebase): ${rebased.error}. ${note}; the commit is local, resolve by hand — nothing was force-pushed.`,
       );
     }
     const pushed = await git(dir, ["push"]);

@@ -58,8 +58,11 @@ export const leads_query = defineVerb<LeadsQueryInput, Account[]>({
     const rows = await listAccounts(db, {
       ...(input.status !== undefined ? { status: input.status } : {}),
       ...(assignedTo !== undefined ? { assignedTo } : {}),
+      // The cap goes to the DATABASE, as activity_query already does. A
+      // rows.slice() here would pull the whole funnel back to drop most of it.
+      limit: clampLimit(input.limit),
     });
-    return ok(rows.slice(0, clampLimit(input.limit)));
+    return ok(rows);
   },
 });
 
