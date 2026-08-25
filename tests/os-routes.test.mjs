@@ -1,8 +1,7 @@
 /**
- * os-routes.test.mjs — the os-viewing route handlers ported from
- * project-dashboard's Astro API routes.
+ * os-routes.test.mjs — the project-readme route handler.
  *
- * Both handlers are pure adapters over already-tested libs, so what is checked
+ * The handler is a pure adapter over already-tested libs, so what is checked
  * here is the adapter's own contract: the status it picks, and that it reads its
  * root from OS_DIR at call time rather than at module load.
  *
@@ -14,7 +13,6 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { GET as graphGet } from "../app/api/graph/route.ts";
 import { GET as readmeGet } from "../app/api/project-readme/route.ts";
 
 let root;
@@ -37,28 +35,6 @@ after(() => {
 });
 
 const readme = (qs) => readmeGet(new Request(`http://localhost/api/project-readme${qs}`));
-
-describe("GET /api/graph", () => {
-  test("serves the graph over OS_DIR", async () => {
-    const body = await (await graphGet()).json();
-    assert.equal(body.ok, true);
-    // The two fixture notes, their folder, and the synthetic root.
-    assert.ok(body.nodes.some((n) => n.relPath === "knowledge/a.md"));
-    assert.ok(body.edges.some((e) => e.kind === "link"));
-    assert.ok(body.edges.some((e) => e.kind === "contains"));
-  });
-
-  test("an unreadable root is a 500 with a message, not a thrown request", async () => {
-    process.env.OS_DIR = join(root, "does-not-exist");
-    try {
-      const res = await graphGet();
-      assert.equal(res.status, 500);
-      assert.deepEqual(await res.json(), { ok: false, error: "Failed to build the graph." });
-    } finally {
-      process.env.OS_DIR = root;
-    }
-  });
-});
 
 describe("GET /api/project-readme", () => {
   test("renders a project README to sanitized html", async () => {
