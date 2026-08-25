@@ -78,12 +78,15 @@ function assertRlsBound(db: Client_, fn: string): void {
 export async function listInbox(
   db: Client_,
   profileId: string,
-  opts: { unreadOnly?: boolean; limit?: number; before?: string } = {},
+  opts: { unreadOnly?: boolean; kind?: string; limit?: number; before?: string } = {},
 ): Promise<InboxItemRow[]> {
   assertRlsBound(db, "listInbox");
   if (!isUuid(profileId)) throw new InvalidInputError(`bad profile id: ${profileId}`);
   let q = db.from("inbox_items").select(INBOX_COLUMNS).eq("profile_id", profileId);
   if (opts.unreadOnly) q = q.is("read_at", null);
+  // One kind of notice, for a surface that shows one kind — the briefing card
+  // wants this person's newest `daily_briefing` and not their newest anything.
+  if (opts.kind) q = q.eq("kind", opts.kind);
   // The cursor. `inbox_items` has no DELETE policy, so without one the 101st
   // notice a person ever receives is unreachable for the rest of their
   // employment. `before` is the last row's created_at from the previous page.

@@ -41,15 +41,7 @@ export function fakeDb(tables, opts = {}) {
     const rowsOf = () => (tables[table] ??= []);
 
     function selected() {
-      let rows = rowsOf().map(clone);
-      for (const f of st.filters) {
-        if (f.op === "eq") rows = rows.filter((r) => r[f.col] === f.val);
-        else if (f.op === "in") rows = rows.filter((r) => f.val.includes(r[f.col]));
-        else if (f.op === "is") rows = rows.filter((r) => r[f.col] === f.val);
-        else if (f.op === "neq") rows = rows.filter((r) => r[f.col] !== f.val);
-        // `lt` is how lib/inbox.ts pages backwards through a cursor.
-        else if (f.op === "lt") rows = rows.filter((r) => r[f.col] < f.val);
-      }
+      let rows = rowsOf().map(clone).filter((r) => matches(r, st.filters));
       for (const o of [...st.orders].reverse()) {
         rows.sort((a, b) => {
           const [x, y] = [a[o.col], b[o.col]];
@@ -77,15 +69,13 @@ export function fakeDb(tables, opts = {}) {
         return Promise.resolve({ data: clone(row), error: null });
       }
       if (st.mode === "update") {
-        const before = st.filters;
         let touched = [];
         for (const row of rowsOf()) {
-          const match = before.every((f) => {
-            if (f.op === "in") return f.val.includes(row[f.col]);
-            if (f.op === "neq") return row[f.col] !== f.val;
-            return row[f.col] === f.val;
-          });
-          if (match) {
+          // The SAME matcher the select path uses. An update whose filters are
+          // read more loosely than a select's is how a conditional write looks
+          // safe in a test and races in production — lib/briefing.ts's claim is
+          // exactly such a write.
+          if (matches(row, st.filters)) {
             Object.assign(row, st.payload);
             touched.push(clone(row));
           }
@@ -127,6 +117,7 @@ export function fakeDb(tables, opts = {}) {
       lt: (col, val) => (st.filters.push({ op: "lt", col, val }), rec.ops.push(["lt", col, val]), b),
       in: (col, val) => (st.filters.push({ op: "in", col, val }), rec.ops.push(["in", col, val]), b),
       is: (col, val) => (st.filters.push({ op: "is", col, val }), rec.ops.push(["is", col, val]), b),
+      or: (expr) => (st.filters.push({ op: "or", expr }), rec.ops.push(["or", expr]), b),
       order: (col, o = {}) => (st.orders.push({ col, ...o }), rec.ops.push(["order", col, o]), b),
       limit: (n) => ((st.limit = n), rec.ops.push(["limit", n]), b),
       range: (from, to) => ((st.range = [from, to]), rec.ops.push(["range", from, to]), b),
@@ -138,6 +129,34 @@ export function fakeDb(tables, opts = {}) {
   }
 
   return { from, calls };
+}
+
+/** One filter against one row. Shared by select and update — see the note there. */
+function matchOne(row, f) {
+  if (f.op === "in") return f.val.includes(row[f.col]);
+  if (f.op === "neq") return row[f.col] !== f.val;
+  if (f.op === "lt") return row[f.col] !== null && row[f.col] !== undefined && row[f.col] < f.val;
+  if (f.op === "or") return matchOr(row, f.expr);
+  // eq and is alike: the fake stores real nulls, so `is.null` IS an equality.
+  return row[f.col] === f.val;
+}
+
+const matches = (row, filters) => filters.every((f) => matchOne(row, f));
+
+/**
+ * PostgREST's `or=(a.op.v,b.op.v)` as supabase-js spells it: a comma-separated
+ * list of `column.operator.value`. Flat only — no nested `and(...)`, which
+ * nothing in this codebase writes. `null` is spelled `null`, as PostgREST does.
+ */
+function matchOr(row, expr) {
+  return String(expr)
+    .split(",")
+    .some((clause) => {
+      const [col, op, ...rest] = clause.split(".");
+      const raw = rest.join(".");
+      const val = raw === "null" ? null : raw;
+      return matchOne(row, { op, col, val });
+    });
 }
 
 /** Reproduce the two PostgREST embeds the data layer asks for. */

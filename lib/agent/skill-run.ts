@@ -60,8 +60,15 @@ export interface SkillRunDeps {
   run: SkillRunner;
 }
 
-/** Bookkeeping must never fail a run that already happened and already cost money. */
-async function openRun(
+/**
+ * Bookkeeping must never fail a run that already happened and already cost money.
+ *
+ * Exported because the daily briefing (lib/briefing.ts) is a skill run too, and
+ * "every run leaves a `job_runs` row, opened `running` before the agent starts"
+ * is a property of runs, not of this route. A second copy would be a second
+ * thing that can stop matching `job_runs_unfinished_idx`.
+ */
+export async function openRun(
   db: DbClient | null,
   skill: string,
   actor: string,
@@ -84,7 +91,7 @@ async function openRun(
   }
 }
 
-async function closeRun(
+export async function closeRun(
   db: DbClient | null,
   id: string | null,
   status: JobRunStatus,
