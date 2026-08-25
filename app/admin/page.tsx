@@ -19,7 +19,6 @@
 import { getViewer } from "@/lib/supabase-server";
 import { listProfiles } from "@/lib/profiles";
 import { allEnrollments } from "@/lib/agent/tokens";
-import { skillButtonsFor } from "@/lib/agent/skills";
 import {
   JOB_FUNCTIONS,
   listJobRuns,
@@ -29,7 +28,6 @@ import {
   type LeadTargetRow,
   type TokenPanelRow,
 } from "@/lib/admin";
-import SkillButtons from "../skill-buttons";
 import { JobHistory, TokenPanel } from "./panels";
 import { addTarget, setPersonJobFunction, setTargetActive } from "./actions";
 
@@ -90,12 +88,6 @@ export default async function AdminPage({
       <h1>Admin</h1>
 
       {searchParams?.error && <p role="alert">{searchParams.error}</p>}
-
-      {/* Admin-only by role, so job_function is not consulted: a null or
-          `developer` job_function must not strip an admin of their own
-          controls. Role grants these; job_function only ever narrows the
-          member-visible sets. */}
-      <SkillButtons buttons={skillButtonsFor("admin", role, null)} />
 
       {/* ------------------------------------------------- staff + function -- */}
       <section>

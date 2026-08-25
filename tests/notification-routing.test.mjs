@@ -36,7 +36,6 @@ import {
 } from "../lib/notify.ts";
 import { getMailer, nullMailer } from "../lib/mailer.ts";
 import { notifyTaskAssigned } from "../lib/agent/task-nudge.ts";
-import { handleSkillRun } from "../lib/agent/skill-run.ts";
 import { DEFAULT_ADMIN_EMAIL } from "../lib/env.ts";
 
 const NATE = "cccccccc-0000-4000-8000-000000000001";
@@ -119,30 +118,6 @@ describe("1. a FAILED job_runs row: one email to Nate, one inbox item", () => {
     assert.equal(outbox.length, 1);
     assert.equal(outbox[0].to_email, NATE_EMAIL);
     assert.equal(outbox[0].to_profile_id, null, "no profile row means no profile id, not a guess");
-  });
-
-  test("the real failing-run call site routes through the layer", async () => {
-    const db = service({ job_runs: [] });
-    const res = await handleSkillRun(
-      new Request("http://localhost/api/skills/run", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ skill: "pitch" }),
-      }),
-      {
-        viewer: { role: "member", userId: BRANDON, email: BRANDON_EMAIL, db: fakeDb({}) },
-        serviceDb: db,
-        run: async () => ({ ok: false, error: "claude CLI failed: boom" }),
-      },
-    );
-    assert.equal(res.status, 502);
-    const inbox = await all(db, "inbox_items");
-    const outbox = await all(db, "email_outbox");
-    // The person who pressed the button hears about it; the admin gets the mail.
-    assert.equal(inbox.length, 1);
-    assert.equal(inbox[0].profile_id, BRANDON, "the notice goes to whoever ran it");
-    assert.equal(outbox.length, 1);
-    assert.equal(outbox[0].to_email, NATE_EMAIL, "the email goes to the admin");
   });
 });
 

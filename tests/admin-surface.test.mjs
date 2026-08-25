@@ -491,9 +491,5 @@ describe("the job_function editor sets a hint, never a permission", () => {
       }
     }
     assert.doesNotMatch(src("lib/auth.ts"), /job_function/);
-    // And the skill route still authorizes on role alone: job_function is
-    // read by the BUTTON list, never by the thing that runs the skill.
-    assert.match(src("lib/agent/skills.ts"), /job_function|jobFunction/);
-    assert.doesNotMatch(src("app/api/skills/run/route.ts"), /job_function|jobFunction/);
   });
 });

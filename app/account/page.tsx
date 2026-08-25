@@ -113,8 +113,8 @@ export default async function AccountPage({
 
       <h2>Agent access</h2>
       <p>
-        Skill buttons, chat, and your morning briefing all run a Claude agent on
-        the server <strong>as you</strong>. That needs a token from your own
+        Your morning briefing runs a Claude agent on the server
+        <strong>as you</strong>. That needs a token from your own
         bcns Claude account — run <code>claude setup-token</code> on your laptop
         and paste what it prints.
       </p>

@@ -18,9 +18,7 @@ import { notFound } from "next/navigation";
 import { getClientBySlug, getAccount, isValidSlug, centsToDollars } from "@/lib/accounts";
 import { getViewer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/profiles";
-import { asJobFunction, skillButtonsFor } from "@/lib/agent/skills";
 import ActivityCapture from "../../activity-capture";
-import SkillButtons from "../../skill-buttons";
 
 export const dynamic = "force-dynamic";
 
@@ -36,14 +34,6 @@ export default async function ClientDetailPage({
   const { role, userId, client: db } = await getViewer();
   if (!db) notFound();
   const isAdmin = role === "admin";
-
-  // Which skill buttons this person gets. One row, and a failure to read it
-  // degrades to "no buttons" rather than taking the client page down — the
-  // record is the page's job, the buttons are a convenience on top of it.
-  const jobFunction = asJobFunction(
-    userId ? (await getProfile(db, userId).catch(() => null))?.job_function : null,
-  );
-  const clientSkills = skillButtonsFor("client", role, jobFunction);
 
   const client = await getClientBySlug(db, slug);
   if (!client) notFound();
@@ -84,10 +74,6 @@ export default async function ClientDetailPage({
         )}
         <dt>Closed</dt><dd>{account?.close_date ?? "—"}</dd>
       </dl>
-      {/* The run is about the ACCOUNT behind this client — that is the row
-          holding the business name, and the route resolves the name itself. */}
-      <SkillButtons buttons={clientSkills} accountId={client.account_id} />
-
       {/* Targeted by CLIENT id — the verb resolves it to the account, so
           nobody on this page has to know the two tables are joined. */}
       <ActivityCapture target={{ clientId: client.id }} />

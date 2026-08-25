@@ -25,7 +25,6 @@ import { listInbox, countUnread, countUnreadForOwner, setRead } from "../lib/inb
 import { cachedUnreadCount } from "../lib/inbox-badge.ts";
 import { markServiceClient, isServiceClient } from "../lib/service-client-mark.ts";
 import { listClientsByIds } from "../lib/accounts.ts";
-import { handleSkillRun } from "../lib/agent/skill-run.ts";
 
 const src = (rel) => readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), "utf8");
 /** Source with comments stripped — every assertion below is about behavior, not prose. */
@@ -272,47 +271,5 @@ describe("a notice cannot undo a write that already committed", () => {
     const text = code("app/inbox/actions.ts");
     const c = text.slice(text.indexOf("catch"), text.lastIndexOf("revalidateTag"));
     assert.doesNotMatch(c, /\breturn\b/, "a swallowed setRead failure skips the revalidate");
-  });
-});
-
-/* ======================================== 7. busy is backpressure, not failure */
-
-describe("a busy runner posts no permanent inbox row", () => {
-  const ACCT = "11111111-1111-4111-8111-111111111111";
-  const deps = (run) => {
-    const svc = fakeDb({ job_runs: [], inbox_items: [] });
-    return {
-      svc,
-      deps: {
-        viewer: {
-          role: "member",
-          userId: B,
-          email: "brandon@bcn-services.com",
-          db: fakeDb({ accounts: [{ id: ACCT, business_name: "Coventry Roofing" }] }),
-        },
-        serviceDb: svc,
-        run,
-      },
-    };
-  };
-  const post = () =>
-    new Request("http://localhost/api/skills/run", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ skill: "pitch" }),
-    });
-
-  test("503 busy writes nothing to the inbox — every client retry would add one", async () => {
-    const { deps: d, svc } = deps(async () => ({ ok: false, busy: true, error: "the agent is busy" }));
-    const res = await handleSkillRun(post(), d);
-    assert.equal(res.status, 503);
-    assert.equal(svc.calls.filter((c) => c.table === "inbox_items").length, 0, "backpressure posted a notice");
-  });
-
-  test("a real failure still tells the person", async () => {
-    const { deps: d, svc } = deps(async () => ({ ok: false, error: "the model refused" }));
-    const res = await handleSkillRun(post(), d);
-    assert.equal(res.status, 502);
-    assert.equal(svc.calls.filter((c) => c.table === "inbox_items").length, 1);
   });
 });
