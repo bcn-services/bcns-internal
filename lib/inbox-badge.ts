@@ -13,12 +13,24 @@
  * OTHER actor wrote (a job posting a notice). Everything this person does to
  * their own inbox calls `revalidateTag(unreadTag(id))` and is immediate.
  *
- * The loader is INJECTED so this file stays free of Supabase and of `cookies()`
- * — which matters twice: it is testable under plain node, and a cached function
- * may not touch request-scoped dynamic APIs anyway.
+ * THE VIEWER, NOT AN ID, AND NO CALLER-SUPPLIED QUERY. This count runs through
+ * the SERVICE-role client, which bypasses RLS, so the only thing scoping it is
+ * the profile id it is given. That id must come from a verified
+ * `auth.getUser()`. Taking the `getViewer()` RESULT rather than a string is
+ * what makes an unverified id unrepresentable instead of merely discouraged,
+ * and the query itself is built HERE (`countUnreadForOwner`) rather than passed
+ * in, so a caller cannot hand a cached, RLS-bypassing closure that reads
+ * something else. The only thing injected is the client FACTORY, because
+ * lib/supabase-admin.ts imports `server-only` and this module must stay
+ * loadable under plain node.
  */
 
 import { unstable_cache } from "next/cache";
+import { countUnreadForOwner } from "./inbox";
+
+/** Structural shape of the service client, mirroring lib/inbox.ts. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type InboxDb = { from(table: string): any };
 
 /** How long a badge may lag a row written by someone else. */
 export const BADGE_TTL_SECONDS = 60;
@@ -26,15 +38,34 @@ export const BADGE_TTL_SECONDS = 60;
 /** The tag every mutation of this person's inbox must revalidate. */
 export const unreadTag = (profileId: string): string => `inbox:${profileId}`;
 
+/** Whatever `getViewer()` returned. Only `userId` is read. */
+export type BadgeViewer = { userId: string | null };
+
 /**
- * The cached count. Returns 0 rather than throwing: a sidebar is not worth a
- * 500, and a badge that fails closed reads as "no mail", which is the honest
- * degraded answer.
+ * The cached count, or null when there is no number to show — signed out, no
+ * Supabase configured, or called outside a Next render.
+ *
+ * NULL IS NOT ZERO. "We do not know" and "no mail" are different facts, and the
+ * old code turned a permanently broken query into a permanently empty badge
+ * behind a console.warn. Only the one expected failure — `unstable_cache`
+ * outside a render, where Next throws about a missing incrementalCache — is
+ * swallowed. A failing QUERY is re-thrown: a badge that lies forever is worse
+ * than an error someone can see.
  */
 export async function cachedUnreadCount(
-  profileId: string,
-  load: () => Promise<number>,
-): Promise<number> {
+  viewer: BadgeViewer,
+  getServiceDb: () => InboxDb | null,
+): Promise<number | null> {
+  const profileId = viewer?.userId ?? null;
+  if (!profileId) return null;
+
+  // Built here, on purpose: see the header. Nothing about what is read or whose
+  // rows they are comes from the caller.
+  const load = async (): Promise<number> => {
+    const db = getServiceDb();
+    return db ? countUnreadForOwner(db, profileId) : 0;
+  };
+
   try {
     const read = unstable_cache(load, ["inbox-unread", profileId], {
       revalidate: BADGE_TTL_SECONDS,
@@ -42,7 +73,8 @@ export async function cachedUnreadCount(
     });
     return await read();
   } catch (err) {
-    console.warn("[inbox-badge] could not read the unread count:", err);
-    return 0;
+    if (!String((err as { message?: unknown })?.message ?? err).includes("incrementalCache")) throw err;
+    console.warn("[inbox-badge] no incremental cache; rendering no badge:", err);
+    return null;
   }
 }

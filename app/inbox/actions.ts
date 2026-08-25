@@ -28,8 +28,10 @@ async function markImpl(formData: FormData, read: boolean): Promise<void> {
     await setRead(client, id, read);
   } catch (err) {
     // A bad id is a malformed request, not something to 500 the page over.
+    // Logged and continued — but NOT returned early: the revalidation below is
+    // what makes the page show the true state, and skipping it leaves a button
+    // that silently appears to have done something.
     console.warn("[inbox] could not mark:", err);
-    return;
   }
   // The badge is cached (lib/inbox-badge.ts); without this the number a person
   // just changed would sit stale for up to a minute on their own screen.

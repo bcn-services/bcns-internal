@@ -160,27 +160,51 @@ describe("moves that are not a close", () => {
     test(`moving to ${status} posts nothing`, async () => {
       const tables = fixture();
       const before = tables.inbox_items.length;
+      const db = fakeDb(tables);
       const r = await tasks_write.run(
-        { caller: MEMBER, db: fakeDb(tables), serviceDb: fakeDb(tables) },
+        { caller: MEMBER, db, serviceDb: fakeDb(tables) },
         { id: TASK_MEMBERS, status },
       );
       assert.equal(r.ok, true, JSON.stringify(r.error));
       assert.equal(tables.inbox_items.length, before);
       assert.equal(tables.tasks.find((t) => t.id === TASK_MEMBERS).status, status);
+      // A status move that is not a close and touches no assignee needs neither
+      // idempotency fact, so it costs no extra read.
+      assert.equal(
+        db.calls.filter((c) => c.ops.some((o) => o[0] === "maybeSingle")).length,
+        0,
+        "a plain status move read the prior row for nothing",
+      );
     });
   }
 
-  test("a reassignment with no status change posts nothing and reads nothing extra", async () => {
+  test("re-saving the SAME assignee posts nothing — the dropdown is not a doorbell", async () => {
+    // The old version of this test reassigned to the CALLER, so the
+    // self-assign guard short-circuited before any notice and the double-notice
+    // path was never exercised. Here the assignee is unchanged and the caller is
+    // someone else, which is exactly the case a prior-assignee read is for.
     const tables = fixture();
-    const db = fakeDb(tables);
+    const before = tables.inbox_items.length;
     const r = await tasks_write.run(
-      { caller: ADMIN, db, serviceDb: fakeDb(tables) },
+      { caller: ADMIN, db: fakeDb(tables), serviceDb: fakeDb(tables) },
+      { id: TASK_MEMBERS, assignedTo: MEMBER.profileId },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r.error));
+    assert.equal(tables.inbox_items.length, before, "the same assignee was notified twice");
+  });
+
+  test("a real reassignment still posts exactly one notice, to the new holder", async () => {
+    const tables = fixture();
+    const before = tables.inbox_items.length;
+    const r = await tasks_write.run(
+      { caller: MEMBER, db: fakeDb(tables), serviceDb: fakeDb(tables) },
       { id: TASK_MEMBERS, assignedTo: ADMIN.profileId },
     );
     assert.equal(r.ok, true, JSON.stringify(r.error));
-    assert.equal(tables.inbox_items.length, 1);
-    // The prior-status read happens ONLY on the close path.
-    assert.equal(db.calls.filter((c) => c.ops.some((o) => o[0] === "maybeSingle")).length, 0);
+    const posted = tables.inbox_items.slice(before);
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].kind, TASK_ASSIGNED_KIND);
+    assert.equal(posted[0].profile_id, ADMIN.profileId);
   });
 
   test("creating a task that is already done does not nudge — nothing was closed", async () => {

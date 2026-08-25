@@ -99,15 +99,15 @@ export const tasks_write = defineVerb<TasksWriteInput, Task>({
     if (input.status !== undefined) patch.status = input.status;
     if (assignee !== undefined) patch.assigned_to = assignee;
 
-    // Read BEFORE the write, and only on the close path: re-saving a task that
-    // is already done must not send a second nudge, and that is the only fact
-    // the update's own return value cannot supply.
-    //
-    // ponytail: the assignment notice does NOT get a read of its own — a
-    // reassignment stays one statement. The cost is that re-saving the SAME
-    // person in the dropdown notices them twice. Give it the prior row here if
-    // that ever becomes noise; `previousTaskRow` already returns it.
-    const before = isCompletedStatus(input.status) ? await previousTaskRow(db, input.id) : null;
+    // Read BEFORE the write, for BOTH idempotency checks: re-saving a task that
+    // is already done must not send a second nudge, and re-saving the same
+    // assignee in the dropdown must not send a second assignment notice. Neither
+    // fact is in the update's own return value. Skipped entirely on the updates
+    // that need neither — a status move that is not a close.
+    const before =
+      isCompletedStatus(input.status) || assignee !== undefined
+        ? await previousTaskRow(db, input.id)
+        : null;
 
     const task = await updateTask(db, input.id, patch);
     // Best effort by design — the move landed, and a failed notice may not undo it.

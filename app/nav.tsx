@@ -31,7 +31,7 @@ const ADMIN_LINK = { href: "/admin", label: "Admin" } as const;
  */
 const ACCOUNT_LINK = { href: "/account", label: "Account" } as const;
 
-export default function Nav({ role, unread = 0 }: { role: Role | null; unread?: number }) {
+export default function Nav({ role, unread = null }: { role: Role | null; unread?: number | null }) {
   const pathname = usePathname();
 
   // Signed-out page: no shell chrome, the content takes the full width.
@@ -55,7 +55,7 @@ export default function Nav({ role, unread = 0 }: { role: Role | null; unread?: 
           const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
           // The count is passed in from the layout, already cached — this
           // component never fetches. See lib/inbox-badge.ts.
-          const badge = href === "/inbox" && unread > 0 ? unread : 0;
+          const badge = href === "/inbox" && unread !== null && unread > 0 ? unread : 0;
           return (
             <Link key={href} href={href} aria-current={active ? "page" : undefined}>
               {label}

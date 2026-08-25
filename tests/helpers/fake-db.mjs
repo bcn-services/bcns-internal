@@ -47,6 +47,8 @@ export function fakeDb(tables, opts = {}) {
         else if (f.op === "in") rows = rows.filter((r) => f.val.includes(r[f.col]));
         else if (f.op === "is") rows = rows.filter((r) => r[f.col] === f.val);
         else if (f.op === "neq") rows = rows.filter((r) => r[f.col] !== f.val);
+        // `lt` is how lib/inbox.ts pages backwards through a cursor.
+        else if (f.op === "lt") rows = rows.filter((r) => r[f.col] < f.val);
       }
       for (const o of [...st.orders].reverse()) {
         rows.sort((a, b) => {
@@ -122,6 +124,7 @@ export function fakeDb(tables, opts = {}) {
       update: (row) => ((st.mode = "update"), (st.payload = row), rec.ops.push(["update", row]), b),
       eq: (col, val) => (st.filters.push({ op: "eq", col, val }), rec.ops.push(["eq", col, val]), b),
       neq: (col, val) => (st.filters.push({ op: "neq", col, val }), rec.ops.push(["neq", col, val]), b),
+      lt: (col, val) => (st.filters.push({ op: "lt", col, val }), rec.ops.push(["lt", col, val]), b),
       in: (col, val) => (st.filters.push({ op: "in", col, val }), rec.ops.push(["in", col, val]), b),
       is: (col, val) => (st.filters.push({ op: "is", col, val }), rec.ops.push(["is", col, val]), b),
       order: (col, o = {}) => (st.orders.push({ col, ...o }), rec.ops.push(["order", col, o]), b),

@@ -60,17 +60,26 @@ const claimsB = { sub: B, app_metadata: { role: "member" }, email: "b@bcn-servic
 describe("item 6 QA — the badge cache is per-profile", () => {
   after(() => uninstallFakeIncrementalCache());
 
+  // The badge no longer takes a caller-supplied loader — an id plus an
+  // arbitrary closure over an RLS-bypassing client was a shape item 7 would
+  // have copied. It takes the getViewer() result and a client FACTORY, and
+  // builds the query itself. So these fixtures are rows, not numbers.
+  const unreadRows = (profileId, n, from = 1) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `${profileId.slice(0, 8)}-0000-4000-8000-${String(from + i).padStart(12, "0")}`,
+      profile_id: profileId, kind: "k", title: "t", body: null, source_job: null,
+      account_id: null, client_id: null, read_at: null, created_at: "2026-08-01T00:00:00Z",
+    }));
+
   test("two profiles never share a cache entry", async () => {
     const cache = installFakeIncrementalCache();
+    const db = fakeDb({ inbox_items: [...unreadRows(A, 7), ...unreadRows(B, 99)] });
 
-    const loadA = async () => 7;
-    const loadB = async () => 99;
-
-    assert.equal(await cachedUnreadCount(A, loadA), 7);
-    assert.equal(await cachedUnreadCount(B, loadB), 99, "B was served A's count");
+    assert.equal(await cachedUnreadCount({ userId: A }, () => db), 7);
+    assert.equal(await cachedUnreadCount({ userId: B }, () => db), 99, "B was served A's count");
 
     // Not merely "the numbers differ": the KEYS must differ, or the only reason
-    // B got 99 is that the two loaders happened to be different functions.
+    // B got 99 is that the two reads happened to run different code.
     const [keyA, keyB] = cache.keysSeen;
     assert.notEqual(keyA, keyB, "two profiles computed the same cache key");
     assert.ok(keyA.includes(A), "the viewer's profile id is not in the cache key");
@@ -78,41 +87,34 @@ describe("item 6 QA — the badge cache is per-profile", () => {
   });
 
   test("an IDENTICAL loader for two profiles still lands on separate entries", async () => {
-    // The teeth. `cb.toString()` is part of Next's key, so two DIFFERENT
-    // closures are told apart even when keyParts collide. Here the callback
-    // source text is identical for both viewers — the same arrow in the same
-    // layout — so keyParts is the only thing left that can separate them.
+    // The teeth, and now unavoidable rather than contrived: `cb.toString()` is
+    // part of Next's key, and since the loader is built INSIDE inbox-badge.ts
+    // its source text is byte-identical for every viewer. keyParts is the only
+    // thing left that can separate them.
     const cache = installFakeIncrementalCache();
+    const db = fakeDb({ inbox_items: [...unreadRows(A, 4), ...unreadRows(B, 41)] });
 
-    const counts = { [A]: 4, [B]: 41 };
-    const loaderFor = (id) => async () => counts[id];
-
-    assert.equal(await cachedUnreadCount(A, loaderFor(A)), 4);
-    assert.equal(await cachedUnreadCount(B, loaderFor(B)), 41, "B was served A's cached count");
+    assert.equal(await cachedUnreadCount({ userId: A }, () => db), 4);
+    assert.equal(await cachedUnreadCount({ userId: B }, () => db), 41, "B was served A's cached count");
     assert.equal(cache.store.size, 2, "two profiles shared one cache entry");
   });
 
   test("signing out and back in as someone else in the SAME process reads fresh", async () => {
     installFakeIncrementalCache();
-    const loaderFor = (id) => async () => (id === A ? 4 : 41);
+    const db = fakeDb({ inbox_items: [...unreadRows(A, 4), ...unreadRows(B, 41)] });
 
-    await cachedUnreadCount(A, loaderFor(A));      // session 1
-    await cachedUnreadCount(B, loaderFor(B));      // session 2, same process
-    assert.equal(await cachedUnreadCount(A, loaderFor(A)), 4, "A's badge changed under B");
-    assert.equal(await cachedUnreadCount(B, loaderFor(B)), 41, "B's badge changed under A");
+    await cachedUnreadCount({ userId: A }, () => db);      // session 1
+    await cachedUnreadCount({ userId: B }, () => db);      // session 2, same process
+    assert.equal(await cachedUnreadCount({ userId: A }, () => db), 4, "A's badge changed under B");
+    assert.equal(await cachedUnreadCount({ userId: B }, () => db), 41, "B's badge changed under A");
   });
 
   test("a warm entry issues NO query — that is what 'not one per page render' means", async () => {
     installFakeIncrementalCache();
-    let queries = 0;
-    // One loader identity across the whole navigation, as the layout has.
-    const load = async () => {
-      queries += 1;
-      return 3;
-    };
+    const db = fakeDb({ inbox_items: unreadRows(A, 3) });
     // Five page renders: the root layout runs on every navigation.
-    for (let i = 0; i < 5; i += 1) assert.equal(await cachedUnreadCount(A, load), 3);
-    assert.equal(queries, 1, `the badge issued ${queries} queries across 5 page renders`);
+    for (let i = 0; i < 5; i += 1) assert.equal(await cachedUnreadCount({ userId: A }, () => db), 3);
+    assert.equal(db.calls.length, 1, `the badge issued ${db.calls.length} queries across 5 page renders`);
   });
 
   test("a row written after the count was cached is not seen until the tag is revalidated", async () => {
@@ -120,13 +122,13 @@ describe("item 6 QA — the badge cache is per-profile", () => {
     // worse quietly. `BADGE_TTL_SECONDS` bounds the staleness; the mutation the
     // owner makes themselves goes through revalidateTag(unreadTag(id)).
     const cache = installFakeIncrementalCache();
-    let unread = 1;
-    const load = async () => unread;
-    assert.equal(await cachedUnreadCount(A, load), 1);
-    unread = 2; // a job posts a notice
-    assert.equal(await cachedUnreadCount(A, load), 1, "the cache is not actually caching");
+    const tables = { inbox_items: unreadRows(A, 1) };
+    const db = fakeDb(tables);
+    assert.equal(await cachedUnreadCount({ userId: A }, () => db), 1);
+    tables.inbox_items.push(...unreadRows(A, 1, 50)); // a job posts a notice
+    assert.equal(await cachedUnreadCount({ userId: A }, () => db), 1, "the cache is not actually caching");
     cache.store.clear(); // what revalidateTag(unreadTag(A)) amounts to here
-    assert.equal(await cachedUnreadCount(A, load), 2);
+    assert.equal(await cachedUnreadCount({ userId: A }, () => db), 2);
     assert.ok(BADGE_TTL_SECONDS > 0 && BADGE_TTL_SECONDS <= 300, "unbounded badge staleness");
   });
 
@@ -135,11 +137,15 @@ describe("item 6 QA — the badge cache is per-profile", () => {
     assert.ok(unreadTag(A).includes(A));
   });
 
-  test("a cache failure degrades to 0 rather than 500ing every page", async () => {
+  test("no incremental cache renders NO badge rather than a fake zero", async () => {
     uninstallFakeIncrementalCache(); // no store at all
-    assert.equal(await cachedUnreadCount(A, async () => 9), 0);
+    const db = fakeDb({ inbox_items: unreadRows(A, 9) });
+    // null, not 0: "we could not read it" and "you have no mail" are different
+    // facts, and only one of them should blank the badge silently.
+    assert.equal(await cachedUnreadCount({ userId: A }, () => db), null);
   });
 });
+
 
 /* ================================================== 2. RLS, forged claims == */
 

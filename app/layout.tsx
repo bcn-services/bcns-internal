@@ -4,7 +4,6 @@ import "./globals.css";
 import Nav from "./nav";
 import { getViewer } from "@/lib/supabase-server";
 import { getServiceClient } from "@/lib/supabase-admin";
-import { countUnread } from "@/lib/inbox";
 import { cachedUnreadCount } from "@/lib/inbox-badge";
 
 /*
@@ -37,22 +36,18 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // Read here rather than in Nav so the sidebar stays a client component for
   // usePathname. A null role is the signed-out or unprovisioned case, and it
   // gets the member sidebar — the gate, not the nav, is what turns it away.
-  const { role, userId } = await getViewer();
+  const viewer = await getViewer();
+  const { role } = viewer;
 
   /*
    * The badge, read ONCE here and cached — see lib/inbox-badge.ts for why it is
    * not a query per page. The count is taken through the SERVICE client rather
    * than the cookie-bound one on purpose: a cached function must not reach for
-   * request-scoped state, and the id it counts is `userId` from the verified
-   * session, so this reads nothing but the viewer's own unread total. No row
-   * content crosses this boundary, only an integer.
+   * request-scoped state. What keeps that safe is not this comment: the whole
+   * verified viewer goes in, the query is built inside inbox-badge.ts, and
+   * there is no id or closure for this file to get wrong. Null means "no badge".
    */
-  const unread = userId
-    ? await cachedUnreadCount(userId, async () => {
-        const svc = getServiceClient();
-        return svc ? countUnread(svc, userId) : 0;
-      })
-    : 0;
+  const unread = await cachedUnreadCount(viewer, getServiceClient);
 
   return (
     <html lang="en" className={`${display.variable} ${mono.variable}`}>

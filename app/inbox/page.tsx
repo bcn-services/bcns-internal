@@ -18,34 +18,51 @@
  */
 import Link from "next/link";
 import { getViewer } from "@/lib/supabase-server";
-import { listInbox, itemHref, replyTarget } from "@/lib/inbox";
-import { listClients } from "@/lib/accounts";
+import { listInbox, countUnread, itemHref, replyTarget } from "@/lib/inbox";
+import { listClientsByIds } from "@/lib/accounts";
 import ActivityCapture from "../activity-capture";
 import { markRead, markUnread } from "./actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function InboxPage() {
+/** One page of notices. The `before` cursor below walks back through the rest. */
+const PAGE_SIZE = 100;
+
+export default async function InboxPage({
+  searchParams,
+}: {
+  searchParams?: { before?: string };
+}) {
   const { userId, client: db } = await getViewer();
 
-  const items = db && userId ? await listInbox(db, userId) : [];
+  // PAGED, NOT CAPPED. `inbox_items` has no DELETE policy, so a hard limit of
+  // 100 makes the 101st notice a person ever receives permanently unreachable.
+  // `before` is the previous page's oldest created_at.
+  const before = searchParams?.before;
+  const items = db && userId ? await listInbox(db, userId, { limit: PAGE_SIZE, before }) : [];
 
-  // One read for the whole page rather than one per item. Only fetched when an
-  // item actually references a client — most notices reference neither.
-  const needsSlugs = items.some((i) => i.client_id);
+  // One read for the whole page rather than one per item, and only for the ids
+  // actually on it — most notices reference no client at all.
+  const clientIds = [...new Set(items.map((i) => i.client_id).filter((id): id is string => !!id))];
   const slugById = new Map<string, string>();
-  if (db && needsSlugs) {
-    for (const c of await listClients(db)) slugById.set(c.id, c.slug);
+  if (db) {
+    for (const c of await listClientsByIds(db, clientIds)) slugById.set(c.id, c.slug);
   }
 
-  const unread = items.filter((i) => i.read_at === null).length;
+  // Counted, not filtered from `items`: above one page the filtered number and
+  // the nav badge would disagree on screen at the same time.
+  const unread = db && userId ? await countUnread(db, userId) : 0;
+
+  const older = items.length === PAGE_SIZE ? (items.at(-1)?.created_at ?? null) : null;
 
   return (
     <main>
       <h1>Inbox</h1>
       <p>
-        {items.length} {items.length === 1 ? "notice" : "notices"}, {unread} unread.
+        {items.length} {items.length === 1 ? "notice" : "notices"} on this page, {unread} unread in
+        total.
       </p>
+      {before && <p><Link href="/inbox">Back to the newest</Link></p>}
 
       {!userId && <p>Sign in to read your inbox.</p>}
       {userId && items.length === 0 && <p>Nothing here yet.</p>}
@@ -82,6 +99,12 @@ export default async function InboxPage() {
           </article>
         );
       })}
+
+      {older && (
+        <p>
+          <Link href={`/inbox?before=${encodeURIComponent(older)}`}>Load older notices</Link>
+        </p>
+      )}
     </main>
   );
 }

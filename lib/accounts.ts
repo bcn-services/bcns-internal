@@ -299,6 +299,21 @@ export async function listClients(db: Client_): Promise<Client[]> {
   return rows.map(flattenClient);
 }
 
+/**
+ * Just the clients an inbox page (or any list) already has ids for. `.in()`
+ * rather than reading the whole table with its account embed to resolve one or
+ * two slugs. An empty list short-circuits — `.in("id", [])` is a round trip for
+ * a guaranteed-empty answer.
+ */
+export async function listClientsByIds(db: Client_, ids: string[]): Promise<Client[]> {
+  if (ids.length === 0) return [];
+  const rows = unwrap<(Client & { account?: AccountEmbed })[]>(
+    await db.from("clients").select(CLIENT_SELECT).in("id", ids),
+    "listClientsByIds",
+  );
+  return rows.map(flattenClient);
+}
+
 export async function getClientBySlug(db: Client_, slug: string): Promise<Client | null> {
   if (!isValidSlug(slug)) throw new InvalidInputError(`bad slug: ${slug}`);
   const res: Result<Client & { account?: AccountEmbed }> = await db

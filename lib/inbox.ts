@@ -1,13 +1,20 @@
 /**
  * inbox.ts — reading and marking one person's mail from the automation.
  *
- * PRIVACY IS RLS, NOT THIS FILE. `inbox_items_own_select` and
- * `inbox_items_own_update` (0009) both compare `profile_id = auth.uid()`, and
- * the UPDATE policy carries a WITH CHECK as well, so an owner can neither read
- * nor hand away someone else's row. There is deliberately no admin override.
- * The `.eq("profile_id", …)` calls below are therefore NOT the guard — they are
- * there to hit `inbox_items_profile_idx` and to make the badge count cheap.
- * `tests/inbox.test.mjs` proves the guard with a forged JWT against real
+ * WHICH CLIENT YOU HAND IN IS THE WHOLE SAFETY STORY, and it is NOT the same
+ * answer for every function here. Read the note on each one.
+ *
+ *   - `listInbox`, `countUnread`, `setRead` are RLS-BOUND. They take the
+ *     viewer's cookie-bound client, and `inbox_items_own_select` /
+ *     `inbox_items_own_update` (0009) compare `profile_id = auth.uid()`, so
+ *     the `.eq("profile_id", …)` in them is an index hint and not the guard.
+ *     They REFUSE a service-role client outright (lib/service-client-mark.ts)
+ *     — with that client the comment above would be a lie.
+ *
+ *   - `countUnreadForOwner` is the escalated one, for the sidebar badge, and
+ *     there the `.eq("profile_id", …)` IS the guard. See its own note.
+ *
+ * `tests/inbox.test.mjs` proves the RLS guard with a forged JWT against real
  * Postgres, never through these functions.
  *
  * Same platform rule as lib/profiles.ts: the Supabase client is INJECTED. This
@@ -19,6 +26,7 @@
  */
 
 import { InvalidInputError, isUuid } from "./accounts";
+import { isServiceClient } from "./service-client-mark";
 
 export interface InboxItemRow {
   id: string;
@@ -48,6 +56,21 @@ type Client_ = {
 };
 
 /**
+ * The RLS-bound functions' one precondition, checked rather than documented.
+ * A service-role client bypasses every policy on `inbox_items`, which would
+ * silently turn "the .eq is only an index hint" into "the .eq is the only
+ * thing scoping this query" — the exact mistake this throws on.
+ */
+function assertRlsBound(db: Client_, fn: string): void {
+  if (isServiceClient(db)) {
+    throw new Error(
+      `${fn}: refusing a service-role client — RLS is this function's guard. ` +
+        `Use countUnreadForOwner if you meant the badge's escalated count.`,
+    );
+  }
+}
+
+/**
  * The mail, newest first. `limit` is a real cap and not politeness: an inbox
  * grows for as long as someone works here, and PostgREST would otherwise
  * truncate at its own maximum and say nothing about it.
@@ -55,23 +78,55 @@ type Client_ = {
 export async function listInbox(
   db: Client_,
   profileId: string,
-  opts: { unreadOnly?: boolean; limit?: number } = {},
+  opts: { unreadOnly?: boolean; limit?: number; before?: string } = {},
 ): Promise<InboxItemRow[]> {
+  assertRlsBound(db, "listInbox");
   if (!isUuid(profileId)) throw new InvalidInputError(`bad profile id: ${profileId}`);
   let q = db.from("inbox_items").select(INBOX_COLUMNS).eq("profile_id", profileId);
   if (opts.unreadOnly) q = q.is("read_at", null);
+  // The cursor. `inbox_items` has no DELETE policy, so without one the 101st
+  // notice a person ever receives is unreachable for the rest of their
+  // employment. `before` is the last row's created_at from the previous page.
+  //
+  // ponytail: the cursor is created_at ALONE, so two notices written in the
+  // same microsecond could straddle a page boundary and one be skipped. The
+  // order below is (created_at desc, id desc) so the fix is a compound
+  // `.or("created_at.lt.X,and(created_at.eq.X,id.lt.Y)")` here — do it if the
+  // jobs ever post in batches that share a timestamp.
+  if (opts.before) q = q.lt("created_at", opts.before);
   const res: Result<InboxItemRow[]> = await q
     .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(opts.limit ?? 100);
   if (res.error) throw new Error(`listInbox: ${res.error.message}`);
   return res.data ?? [];
 }
 
 /**
- * How many are unread. `head: true` so the badge costs a count and not the
- * rows — this runs for the sidebar, which every page renders.
+ * How many are unread, for the VIEWER'S OWN client. `head: true` so it costs a
+ * count and not the rows.
+ *
+ * RLS-bound: the `.eq("profile_id", …)` here is an index hint, and deleting it
+ * would still return only your own rows. That is true because this function
+ * refuses a service-role client — see `countUnreadForOwner` for the case where
+ * the same filter is load-bearing.
  */
 export async function countUnread(db: Client_, profileId: string): Promise<number> {
+  assertRlsBound(db, "countUnread");
+  return countUnreadForOwner(db, profileId);
+}
+
+/**
+ * The sidebar badge's count, taken through the SERVICE-role client.
+ *
+ * HERE THE `.eq("profile_id", …)` IS THE GUARD. No policy applies to this
+ * query; that one filter is the only thing standing between this person's
+ * badge and the number of unread notices in the whole company. Do not remove
+ * it, and do not widen this function's parameters — `profileId` must come from
+ * a verified `auth.getUser()`, which lib/inbox-badge.ts enforces by taking the
+ * viewer object rather than a bare string.
+ */
+export async function countUnreadForOwner(db: Client_, profileId: string): Promise<number> {
   if (!isUuid(profileId)) throw new InvalidInputError(`bad profile id: ${profileId}`);
   const res: Result<null> = await db
     .from("inbox_items")
@@ -90,6 +145,7 @@ export async function countUnread(db: Client_, profileId: string): Promise<numbe
  * and "not yours" must look the same from outside.
  */
 export async function setRead(db: Client_, id: string, read: boolean, now = new Date()): Promise<boolean> {
+  assertRlsBound(db, "setRead");
   if (!isUuid(id)) throw new InvalidInputError(`bad inbox item id: ${id}`);
   const res: Result<InboxItemRow[]> = await db
     .from("inbox_items")

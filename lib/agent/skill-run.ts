@@ -213,9 +213,12 @@ export async function handleSkillRun(request: Request, deps: SkillRunDeps): Prom
 
   if (!result.ok) {
     await closeRun(serviceDb, runId, "error", result.error);
-    // Not-enrolled is the new-hire state, not a failure: the button already
-    // points them at /account, and a notice would be a second copy of that.
-    if (!result.notEnrolled) await notifyRunFailed(deps, name, result.error);
+    // Two states are not failures and get no notice. Not-enrolled is the
+    // new-hire state — the button already points them at /account. Busy is
+    // backpressure: the runner is at capacity, the client will retry, and a
+    // notice per retry fills an inbox with rows nobody can delete (there is no
+    // DELETE policy on inbox_items).
+    if (!result.notEnrolled && !result.busy) await notifyRunFailed(deps, name, result.error);
     // Not-enrolled is the new-hire state, not a fault: 409 so the button can
     // point at /account instead of showing a red error.
     const status = result.notEnrolled ? 409 : result.busy ? 503 : 502;

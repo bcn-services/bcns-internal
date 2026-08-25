@@ -22,7 +22,7 @@ import {
 import { listProfiles } from "@/lib/profiles";
 import { getServiceClient } from "@/lib/supabase-admin";
 import {
-  isCompletedStatus, notifyTaskAssigned, nudgeTaskClose, previousTaskStatus,
+  isCompletedStatus, notifyTaskAssigned, nudgeTaskClose, previousTaskRow, previousTaskStatus,
 } from "@/lib/agent/task-nudge";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -81,8 +81,9 @@ async function addTaskImpl(formData: FormData): Promise<ActionResult> {
       dueDate: orNull(formData.get("dueDate")),
       createdBy: await viewerProfileId(db, email),
     });
-    await notifyAssigned(role, email, task, null);
     revalidatePath("/tasks");
+    // AFTER the revalidate, and it cannot throw — see notifyAssigned.
+    await notifyAssigned(role, email, task, null);
     return { ok: true };
   } catch (e) {
     return toResult(e);
@@ -156,30 +157,38 @@ async function notifyAssigned(
   task: Awaited<ReturnType<typeof createTask>>,
   previousAssignee: string | null,
 ): Promise<void> {
-  const { userId } = await getViewer();
-  if (!userId || !email) return;
-  await notifyTaskAssigned({
-    serviceDb: getServiceClient() ?? undefined,
-    caller: { profileId: userId, email, role },
-    task,
-    previousAssignee,
-  });
+  // NEVER THROWS, and that is the whole point of the try being here rather than
+  // around the caller's write. The task is already committed by the time this
+  // runs; notifyTaskAssigned is itself best-effort, but getViewer() and
+  // getServiceClient() are not, and either one throwing used to turn a saved
+  // assignment into {ok:false} — which the person answers by saving again, and
+  // now there are two tasks.
+  try {
+    const { userId } = await getViewer();
+    if (!userId || !email) return;
+    await notifyTaskAssigned({
+      serviceDb: getServiceClient() ?? undefined,
+      caller: { profileId: userId, email, role },
+      task,
+      previousAssignee,
+    });
+  } catch (err) {
+    console.warn("[tasks] could not send the assignment notice:", err);
+  }
 }
 
 async function setAssigneeImpl(formData: FormData): Promise<ActionResult> {
   try {
     const { db, email, role } = await requireDb();
+    const taskId = String(formData.get("taskId") ?? "");
+    // Who held it BEFORE, so re-saving the same person in the dropdown is not a
+    // second notice. One SELECT, same read the tasks_write verb does.
+    const previousAssignee = (await previousTaskRow(db, taskId))?.assigned_to ?? null;
     // Empty means "back in the pool", which the data layer spells as null.
-    const task = await assignTask(
-      db,
-      String(formData.get("taskId") ?? ""),
-      orNull(formData.get("assignedTo")),
-    );
-    // ponytail: no prior-assignee read, so re-saving the same person in the
-    // dropdown notices them twice. One SELECT buys the dedupe — see the same
-    // note in lib/agent/verbs/tasks_write.ts.
-    await notifyAssigned(role, email, task, null);
+    const task = await assignTask(db, taskId, orNull(formData.get("assignedTo")));
     revalidatePath("/tasks");
+    // AFTER the revalidate, and it cannot throw — see notifyAssigned.
+    await notifyAssigned(role, email, task, previousAssignee);
     return { ok: true };
   } catch (e) {
     return toResult(e);
