@@ -65,6 +65,11 @@
  */
 
 import { claimRun, closeRun, type JobRunStatus } from "./agent/skill-run";
+// Item 10's two jobs. This import and lib/outreach.ts's import of `dailyWindow`
+// form a module cycle, and it is harmless BECAUSE every reference across it is
+// inside a function body: nothing here reads `outreachJob` until `jobRegistry`
+// is called, and nothing there reads `dailyWindow` until the factory runs.
+import { leadSweepJob, outreachJob, type Evaluator, type SiteReader } from "./outreach";
 import { timeoutFetch } from "./fetch-timeout";
 import { notifyJobRun, resolveAdmin, type NotifyOutcome, type Recipient } from "./notify";
 import { scrub, type Caller, type DbClient } from "./agent/verbs/types";
@@ -669,16 +674,30 @@ export function quietClientJob(
  * a test passes a fake and nothing leaves the process.
  */
 export function jobRegistry(
-  deps: { fetcher?: SiteFetcher; commits?: CommitReader } = {},
+  deps: {
+    fetcher?: SiteFetcher;
+    commits?: CommitReader;
+    readSite?: SiteReader;
+    evaluate?: Evaluator;
+  } = {},
 ): Record<string, JobDefinition> {
   const fetcher = deps.fetcher ?? realSiteFetcher;
   const commits = deps.commits ?? noCommitReader;
   return Object.fromEntries(
-    [siteHealthJob(fetcher), credentialExpiryJob(), quietClientJob(fetcher, commits)].map((j) => [
-      j.name,
-      j,
-    ]),
+    [
+      siteHealthJob(fetcher),
+      credentialExpiryJob(),
+      quietClientJob(fetcher, commits),
+      outreachJob({ readSite: deps.readSite, evaluate: deps.evaluate }),
+      leadSweepJob(),
+    ].map((j) => [j.name, j]),
   );
 }
 
-export const JOB_NAMES = ["site_health", "credential_expiry", "quiet_clients"] as const;
+export const JOB_NAMES = [
+  "site_health",
+  "credential_expiry",
+  "quiet_clients",
+  "lead_outreach",
+  "lead_sweep",
+] as const;

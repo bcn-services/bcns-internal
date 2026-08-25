@@ -1,7 +1,9 @@
 # Scheduled jobs
 
-Three jobs, one framework, and no scheduler. `lib/jobs.ts` holds the framework
-and all three jobs; `scripts/run-job.mjs` runs one of them once and exits.
+Five jobs, one framework, and no scheduler. `lib/jobs.ts` holds the framework
+and the first three; `lib/outreach.ts` holds the two lead jobs (item 10) and
+registers them in the same registry. `scripts/run-job.mjs` runs one of them
+once and exits.
 
 **Nothing in this repo installs a schedule.** There is no droplet yet, so the
 crontab lines below are text for a human to install, not code that installs
@@ -15,6 +17,18 @@ is the caller's business and nothing else's.
 | `site_health` | daily | HTTP-checks every client that has a `domain` or a `droplet_host` | a monitored site is down |
 | `credential_expiry` | weekly | watches `agent_tokens.expires_at` and the GitHub PAT (2026-10-31) | something expires within 30 days |
 | `quiet_clients` | daily | flags `onboarding` clients with no signal for more than 7 days | a client has gone quiet |
+| `lead_outreach` | daily | drafts the next touch for every lead in the `ai` lane; parks a lead as `no_response` after three touches with no reply | every due lead's website was unreadable |
+| `lead_sweep` | weekly | picks the next trade/town pairs from `lead_targets`, or from segments that have earned it | never — an empty target list is a gap, not an outage |
+
+**`lead_outreach` sends nothing.** It writes rows to `outreach_drafts`, which
+has no recipient column, no `sent_at` and no status — the table cannot
+represent a sent message. Whoever eventually sends one opens the lead to find
+out where it would go. The only network call is `read_site` (item 3, unchanged)
+against the lead's own website, and it is injected, so no test can make it.
+
+**`lead_sweep` selects a territory; it does not prospect one.** Running the
+real `leads` skill (Google Places, its own budget cap) stays a human action —
+duplicating it here would be a second thing to keep in step with the skill.
 
 `site_health` reports a client with neither a `domain` nor a `droplet_host` as
 **unmonitorable** — a third state, never rolled into healthy. Four of the five
@@ -29,6 +43,8 @@ client starts being monitored.
 corepack pnpm job site_health
 corepack pnpm job credential_expiry
 corepack pnpm job quiet_clients
+corepack pnpm job lead_outreach
+corepack pnpm job lead_sweep
 ```
 
 Safe to run any time. The second run inside the same window loses the race on

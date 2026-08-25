@@ -13,9 +13,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getViewer } from "@/lib/supabase-server";
 import {
-  setAccountStatus, logActivity, convertAccountToClient, assignAccount,
+  setAccountStatus, logActivity, convertAccountToClient, assignAccount, updateAccount,
   isStage, isUuid, InvalidInputError,
 } from "@/lib/accounts";
+import { isManualLaneMode } from "@/lib/outreach";
 
 /**
  * Shape returned by the internal implementations: either it worked, or here is
@@ -152,6 +153,35 @@ async function assignLeadImpl(formData: FormData): Promise<ActionResult> {
   }
 }
 
+/**
+ * The manual lane override: put the bot on this lead, take it over, or stop it.
+ *
+ * DELIBERATELY LOGS NO ACTIVITY. Every other action here leaves a trace,
+ * because every other action is a thing that happened TO the lead. This one is
+ * a control-plane setting, and an `account_activity` row would be worse than
+ * noise: 0015's trigger pauses any 'ai' lane the moment a human row lands, so
+ * logging this change would flip "put the bot back on" straight to 'paused'
+ * again. The lane column is its own record; `updated_at` says when it moved.
+ *
+ * Only the three lanes a person may choose are accepted. `no_response` is a
+ * conclusion the bot reached, not a setting — a rep un-parks a lead by
+ * choosing 'ai', which is the same control.
+ */
+async function setLaneImpl(formData: FormData): Promise<ActionResult> {
+  try {
+    const { db } = await requireDb();
+    const id = String(formData.get("accountId") ?? "");
+    if (!isUuid(id)) throw new InvalidInputError(`bad account id: ${id}`);
+    const mode = String(formData.get("outreachMode") ?? "");
+    if (!isManualLaneMode(mode)) return { ok: false, error: `Unknown outreach lane: ${mode}` };
+    await updateAccount(db, id, { outreach_mode: mode });
+    revalidatePath("/leads");
+    return { ok: true };
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 /** Admin-only in practice; enforced by RLS, not by a check here. */
 async function convertLeadImpl(formData: FormData): Promise<ActionResult> {
   try {
@@ -184,4 +214,7 @@ export async function convertLead(formData: FormData): Promise<void> {
 }
 export async function assignLead(formData: FormData): Promise<void> {
   finish(await assignLeadImpl(formData), "/leads");
+}
+export async function setLane(formData: FormData): Promise<void> {
+  finish(await setLaneImpl(formData), "/leads");
 }

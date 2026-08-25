@@ -27,11 +27,25 @@ import { listAccounts, STAGES, centsToDollars, type Stage } from "@/lib/accounts
 import { listProfiles } from "@/lib/profiles";
 import { getViewer } from "@/lib/supabase-server";
 import { asJobFunction, skillButtonsFor } from "@/lib/agent/skills";
-import { advanceStage, addNote, convertLead, assignLead } from "./actions";
+import { MANUAL_LANE_MODES } from "@/lib/outreach";
+import { advanceStage, addNote, convertLead, assignLead, setLane } from "./actions";
 import ActivityCapture from "../activity-capture";
 import SkillButtons from "../skill-buttons";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Plain English for the four lanes. `no_response` is shown but never offered:
+ * it is what the bot concluded after three touches with no reply, not a
+ * setting — and it has to be visible, because a lead the machine has given up
+ * on must not read as one it is still working.
+ */
+const LANE_LABEL: Record<string, string> = {
+  ai: "Bot",
+  human: "Person",
+  paused: "Paused",
+  no_response: "No response — parked after 3 touches",
+};
 
 export default async function LeadsPage({
   searchParams,
@@ -163,9 +177,37 @@ export default async function LeadsPage({
               </dd>
               <dt>Assigned to</dt>
               <dd>{(a.assigned_to && nameOf.get(a.assigned_to)) ?? "Unassigned"}</dd>
+              <dt>Outreach</dt>
+              <dd>{LANE_LABEL[a.outreach_mode ?? "ai"] ?? a.outreach_mode}</dd>
             </dl>
 
             <div>
+              {/* THE MANUAL LANE OVERRIDE. Three submit buttons rather than a
+                  select, because a select needs a defaultValue and a lead the
+                  bot has parked as `no_response` has no matching option — the
+                  same trap the owner form documents below. A button carries its
+                  own value only when it is the one clicked, so the current lane
+                  is simply the disabled one and nothing is submitted by
+                  accident. Choosing "Bot" is also how a parked lead is
+                  un-parked. This writes no activity row: see setLane. */}
+              <form action={setLane}>
+                <input type="hidden" name="accountId" value={a.id} />
+                <fieldset>
+                  <legend>Outreach lane</legend>
+                  {MANUAL_LANE_MODES.map((m) => (
+                    <button
+                      key={m}
+                      type="submit"
+                      name="outreachMode"
+                      value={m}
+                      disabled={(a.outreach_mode ?? "ai") === m}
+                    >
+                      {LANE_LABEL[m]}
+                    </button>
+                  ))}
+                </fieldset>
+              </form>
+
               {isAdmin && (
               <form action={assignLead}>
                 <input type="hidden" name="accountId" value={a.id} />
