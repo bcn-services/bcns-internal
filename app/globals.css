@@ -696,6 +696,30 @@ tbody tr:hover {
   color: var(--accent);
 }
 
+/* One outcome word, four slots. Used by /admin's job history and seat panels.
+   `attention` is deliberately --warn and not --danger: a run that came back
+   with findings is not a broken run, and colouring the two the same would
+   undo in CSS the distinction lib/agent/skill-run.ts's status vocabulary
+   exists to make. Colour is never the only signal — the word next to it says
+   the same thing, which is what a colour-blind reader and a grep both get. */
+[data-tone] {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.04em;
+}
+[data-tone="ok"] {
+  color: var(--good);
+}
+[data-tone="attention"] {
+  color: var(--warn);
+}
+[data-tone="bad"] {
+  color: var(--danger);
+}
+[data-tone="neutral"] {
+  color: var(--text-muted);
+}
+
 /* --- Focus & motion ------------------------------------------------------ */
 :focus-visible {
   outline: 2px solid var(--accent);
