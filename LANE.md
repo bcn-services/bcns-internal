@@ -32,7 +32,7 @@ Branch: `command-center`. Repo context: `CLAUDE.md` at root.
 - Writing outside `~/bcns-internal`
 
 **Baseline — pre-existing, not regressions. Do not "fix" these by editing assertions.**
-- 276 tests passing, 34 suites (was 217 before items 1–2 added tests)
+- 362 tests passing, 44 suites (was 217 at the start of the run)
 - Exactly 5 pre-existing lint errors: `lib/accounts.ts:141`, `lib/os/osFiles.ts:514`,
   `tests/accounts-data-layer.test.mjs:13`, `tests/rls-policies.test.mjs:66` and `:100`.
   (`pnpm lint` prints each twice — 10 problems, 5 unique. Do not "fix" them.)
@@ -142,7 +142,7 @@ figures must read visually distinct from member-visible ones.
     - `profiles_query` returns each profile's count of open assigned tasks, verified against a seeded fixture
     - `read_site` returns text for a local fixture served from disk and returns a typed error, not a hang, for an unreachable host
     - Existing passing tests remain passing
-  status: not started
+  status: done
   caution: true
 
 - task: Implement `log_activity` parsing and its capture UI. The verb takes free text
