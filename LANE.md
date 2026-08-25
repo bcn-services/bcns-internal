@@ -308,7 +308,7 @@ figures must read visually distinct from member-visible ones.
     - Hand-editing the prose body and re-running leaves that edit byte-identical
     - A client with a NULL monthly rate exports without a rate field rather than a zero or a guess
     - The generated frontmatter validates against every key in `~/os/clients/_TEMPLATE.md`
-  status: not started
+  status: done
 
 - task: Admin configuration surface. Extend `/admin` with: a `lead_targets` editor
     (add a trade and town, deactivate one), a `profiles.job_function` editor, job
