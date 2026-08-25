@@ -19,7 +19,6 @@ const LINKS = [
   { href: "/clients", label: "Clients" },
   { href: "/tasks", label: "Tasks" },
   { href: "/inbox", label: "Inbox" },
-  { href: "/chat", label: "Chat" },
 ] as const;
 
 const ADMIN_LINK = { href: "/admin", label: "Admin" } as const;
