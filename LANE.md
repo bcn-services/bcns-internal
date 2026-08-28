@@ -1,347 +1,316 @@
-# bcns Command Center — Automation Layer
+# bcns Outreach Pipeline — First Draft
 
-First draft, built in one unattended run. Goal is a working first look, not a
-finished product. Plan of record: `~/.claude/plans/command-center-automation.md`
-(schema, verbs, jobs, and the reasoning behind every decision). Design decisions
-were settled across nine rounds of interview — treat them as fixed, not as
-suggestions to re-derive.
+Rebuilds this repo from a paused Next.js app into a headless jobs runner for the
+two-mailbox cold-outreach pipeline. Full reasoning, diagrams, and phase
+sequencing live in the plan artifact — this file is the executable subset.
 
-Branch: `command-center`. Repo context: `CLAUDE.md` at root.
+The repo is currently on hold (`HOLD.md`). Nothing connects to Supabase, CI is
+disabled, and no process anywhere references it. That is the intended starting
+state: this round strips the app and builds the pipeline's foundation.
+
+**Scope of this round:** everything above the stop marker. Leads flow from Google
+Places into the database, get qualified with an email address discovered, and the
+clock that will drive everything is standing and tested. Sending, polling, and
+reply parsing are below the marker and are not touched.
+
+Repo context: `CLAUDE.md` at root (rewritten by item 1 — the current one is the
+stale client-app template and describes nothing in this repo).
 
 ## Global rules — apply to every item
 
 **Allowed without asking. Permission prompts are pre-approved.**
-- All code in `~/bcns-internal`
-- Authoring migrations and replaying them against a **local Postgres scratch DB**
-- Applying **additive** migrations to production Supabase after they pass locally
+- All code in `~/bcns-internal`, on a lane branch
+- Authoring SQL migrations as files
 - `git commit` on the lane branch
-- Running the `leads` skill (it has its own budget cap)
-- Sending a test email to `nseluga@g.hmc.edu` *if* a provider is configured
+- Installing the dependencies named in item 1
 
 **Forbidden. Mark the item `blocked`, write why, move on — never work around.**
-- Any irreversible action: `DROP`, `DELETE FROM` on a populated table, destructive
-  migration, force-push, history rewrite, touching `main`
-- Sending any message to a real lead or customer. Outreach is
-  draft-to-database only.
-- Any interactive login (Google, GCP, Gmail, `claude setup-token`, Resend signup)
-- Rotating, printing, or committing a credential. Never stage `.env`, `*.pem`,
-  `*.key`, `credentials*`, `secrets*`.
-- Vercel, DNS, registrar, or any droplet
-- Guessing a value recorded as unknown: client monthly rates, client `domain`,
-  `droplet_host`
-- Writing outside `~/bcns-internal`
+- Sending any email to any address, real or test. This round has no send path.
+- Applying any migration to the production Supabase project `knmgyxlrhjxaydliucbs`.
+  Migrations are authored as files and applied by a human.
+- Calling the real Google Places API, the real Anthropic API, or fetching any real
+  website. Every external dependency is injected and faked in tests.
+- Reading or rewriting the values in `.env.local`. The file stays as-is.
+- `DROP` or `DELETE FROM` against any live database, force-push, history rewrite,
+  or any commit to `main`.
+- Deleting anything under `supabase/migrations/`. The history is the only record
+  of the live schema.
 
-**Baseline — pre-existing, not regressions. Do not "fix" these by editing assertions.**
-- 679 tests passing, 108 suites (was 217 at the start of the run)
-- Exactly 5 pre-existing lint errors: `lib/accounts.ts:141`, `lib/os/osFiles.ts:514`,
-  `tests/accounts-data-layer.test.mjs:13`, `tests/rls-policies.test.mjs:66` and `:100`.
-  (`pnpm lint` reports 5 problems. Do not "fix" them.)
-- Test count is a **floor**. It must go up. Never delete a passing test to hold a number.
+**Testing conventions.**
+- `pnpm test` is `tsx --test tests/<file>.test.mjs …`. Every item that adds a test
+  file adds it to that list in `package.json`.
+- **Tests must be pure.** No network, no database, no filesystem outside a temp
+  dir. Every external boundary (Places, Claude, HTTP fetch, Postgres, SMTP) is a
+  function parameter with a fake supplied in the test.
+- A test that needs a live service is the wrong test. Assert on the request the
+  code *would* have made instead.
 
-**Every item additionally:** `tsc --noEmit` clean · existing passing tests remain
-passing · no sixth lint error · `git diff --stat` confined to this repo.
+## Conventions this round establishes
 
-**Testing constraint:** a headless subagent cannot run `next dev`. Every `done when:`
-criterion must be checkable by a unit test, a direct DB query, or a `next build`.
-Never write a criterion that needs a live server.
-
-**Design, for every UI item:** dark token system, hand-rolled CSS only. No Tailwind.
-Do not import `@nseluga/ui` — it is an unused dependency and stays unused. Preserve
-the existing `--fs-*`, `--s1`–`--s7`, `--radius`, `--sidebar-w`, `--measure` scales
-and the `--good` / `--warn` / `--danger` slots in `app/globals.css`. Admin-only
-figures must read visually distinct from member-visible ones.
-
-## Not yet specified
-
-- Exact briefing copy, item ordering, and length — taste, settled after Nate reads one
-- Whether `log_activity` parse confidence needs a threshold before auto-commit —
-  revisit after item 4
-- Assignment-proposal heuristics — dormant until there is more than one employee
-
-## Out of scope
-
-- Droplet provisioning and real cron — deferred until there are employees to use it
-- Voice and chat surfaces (original plan Phase 7) — independent, not part of this draft
-- Proactive bug fixing — it is a periodic cloud subagent reading email, downstream of
-  Gmail access, not triggered from this app
-- os documentation page (original plan Phase 12) — independent
-- Gmail API impersonation — blocked on a GCP org policy, interactive
-- Any real outbound send
+- Jobs live in `jobs/<name>.mjs`, each exporting `run(deps)` and taking every
+  external dependency in `deps`. No module reaches for a global client.
+- Shared helpers live in `lib/`. `lib/db.mjs` is the only module that builds SQL.
+- Every job writes at least one row to `events` — job name, kind, detail JSON.
+  A job that did nothing writes a `skipped` event saying why.
+- `DRY_RUN` defaults to on everywhere. A job must opt into side effects.
 
 ---
 
-- task: Build a local Postgres migration harness and backfill the production
-    migration ledger. The Supabase project has NO `supabase_migrations.schema_migrations`
-    table — migrations 0001–0008 in `supabase/migrations/` were applied by hand, so
-    `supabase db push` would try to replay from 0001 and fail. Docker is unavailable
-    and there is no `supabase/config.toml`, so `supabase start` is not an option;
-    use the homebrew `psql`/`pg_ctl` already installed. Write a script that creates a
-    throwaway database, replays every file in `supabase/migrations/` in order, and
-    reports the first failure with its filename. Then generate the ledger backfill SQL
-    for production. Connection details for production live in the repo's env files —
-    read them, never print or commit them.
+- task: Strip the repo to a headless jobs runner. Delete the Next.js app and
+    everything that served it — `app/`, `lib/`, `tests/`, `public/`,
+    `os-staging/`, `scripts/`, `middleware.ts`, `next.config.mjs`,
+    `eslint.config.mjs`, `next-env.d.ts`, `tsconfig.tsbuildinfo`, `TEMPLATE.md`,
+    `DEPLOY.md`, `REVIEW.md`, `STANDARDS.md`, `HOLD.md`. Rewrite `package.json`:
+    drop `next`, `react`, `react-dom`, `@supabase/ssr`, `@supabase/supabase-js`,
+    `server-only`, `@nseluga/ui`, and every Next-related dev dependency; add
+    `imapflow`, `mailparser`, and `postgres`; keep `nodemailer` and `tsx`; replace
+    the `scripts` block with `test`, `job`, and `lint`, where `test` lists only
+    this round's new test files. Rewrite `CLAUDE.md` to describe what this repo
+    actually is now — a jobs runner driven by GitHub Actions, no server, no
+    frontend, no PM2, no Resend — replacing the stale client-app template text.
+    Create empty `jobs/`, `lib/`, and `tests/` directories with a placeholder
+    smoke test so `pnpm test` has something to run.
   guardrails:
-    - The scratch database is created and dropped by the script; never point it at production
-    - The ledger backfill INSERTs rows only. It must not alter, reorder, or re-run any migration.
-    - Never edit an already-applied migration file in place
+    - Never delete or edit anything under `supabase/migrations/` — it is the only
+      record of the live schema and later items depend on it
+    - `.env.local`, `.env.example`, `.npmrc`, `.github/`, `pnpm-workspace.yaml`,
+      `README.md`, `LANE.md`, and `LANE_PROGRESS.md` all survive untouched
+    - `docs/` survives — `docs/NOTIFICATIONS.md` holds the mailbox and app-password
+      setup steps that phase 1 still needs
+    - Deletions are `git rm`, so every removal is recoverable from history
   done when:
-    - The harness script replays 0001–0008 against a fresh scratch database and exits 0
-    - Introducing a deliberate syntax error into a migration makes the harness exit non-zero and name that file
-    - `supabase_migrations.schema_migrations` exists in production and lists all 8 applied versions
-    - Existing passing tests remain passing
-  status: done
+    - `pnpm install` completes without error and `node_modules` contains
+      `imapflow`, `mailparser`, and `postgres`
+    - `pnpm test` runs the placeholder smoke test and exits zero
+    - `git log --stat` shows zero changes under `supabase/migrations/`
+    - No file outside `node_modules` imports `next`, `react`, or `@supabase/ssr`
   caution: true
+  status: not started
 
-- task: Migration 0009 — the automation schema. Add `accounts.outreach_mode` as a
-    text column constrained to `ai` / `human` / `paused`, default `ai`. Extend the
-    `account_activity.kind` CHECK constraint, which today allows only
-    `call | email | meeting | note | status_change`, to also allow `ai_email_sent`,
-    `ai_email_reply`, and `agent_run`. Add `profiles.job_function` constrained to
-    `developer` / `sales` / `ops`, nullable. Add `profiles.last_briefed_at` timestamptz,
-    nullable. Create `inbox_items` (id, profile_id FK profiles, kind, title, body,
-    source_job, account_id nullable FK, client_id nullable FK, read_at nullable,
-    created_at). Create `lead_targets` (id, trade, town, active boolean default true,
-    created_by, created_at). Create `job_runs` (id, job, started_at, finished_at
-    nullable, status, actor, log). Add RLS policies: `inbox_items` readable and
-    updatable ONLY by the owning profile — reuse the existing `role_claim()` /
-    `is_admin()` / `is_staff()` helpers in `supabase/migrations/0002_rls_policies.sql`
-    and match their `set search_path = ''` convention. `lead_targets` and `job_runs`
-    are admin-write, staff-read.
+- task: Author the two schema migrations as files. `0017_reset.sql` drops the
+    command-center application tables that migrations 0001–0016 created, leaving
+    Supabase's own `auth` and `storage` schemas untouched. `0018_pipeline.sql`
+    creates the pipeline schema: `businesses` (identity, `stage`, `next_touch_at`,
+    `touches`, `suppressed_at`, `research jsonb`, `place_id`, `source_query`),
+    `mailboxes` (address, domain, `daily_cap`, `sent_today`, `warmed_at`,
+    `status`), `search_grid` (trade, town, state, `exhausted_at`, `last_run_at`,
+    `new_rows_last_run`), `email_threads` (`message_id` primary key,
+    `business_id`, direction, mailbox), `events` (bigserial, job, kind,
+    `detail jsonb`), and `alerts` (unique `fingerprint`, repo, source, status,
+    `pr_url`, `hits`). Add a partial unique index on `lower(email)`, a unique
+    index on `place_id`, a partial index on `next_touch_at` for unsuppressed rows,
+    a `stage` check constraint, and the `selectable_businesses` view defined as
+    every column of `businesses` where `suppressed_at is null`. Seed `mailboxes`
+    with exactly one row for `outreach@send.bcn-services.com`. RLS on with
+    deny-all policies — every job connects as the service role.
   guardrails:
-    - Purely additive. No column drops, no data deletion, no type changes to existing columns.
-    - Extending the kind CHECK must preserve all five existing values
-    - Every new policy uses `set search_path = ''` like the existing helpers
-    - Admin is not exempt from inbox privacy — an admin must not read another profile's inbox items
+    - Author files only. Never connect to, or apply anything against, the live
+      Supabase project — a human applies these
+    - `suppressed_at` is a timestamp, never a stage value, and nothing in the
+      schema provides a way to clear it
+    - Never edit an already-applied migration; 0017 and 0018 are new files
   done when:
-    - The harness from item 1 replays 0001 through 0009 on a fresh scratch database and exits 0
-    - Inserting an `account_activity` row with kind `agent_run` succeeds; kind `nonsense` is rejected
-    - A test using an authenticated client scoped to profile A selecting `inbox_items` belonging to profile B returns 0 rows
-    - Inserting an `accounts` row with `outreach_mode = 'invalid'` is rejected; omitting it yields `ai`
-  status: done
+    - A test reads `0018_pipeline.sql` and asserts the `selectable_businesses`
+      view filters on `suppressed_at is null`, and that `businesses` carries the
+      `stage` check constraint listing all eleven stages
+    - A test asserts `0018_pipeline.sql` creates a unique index over
+      `lower(email)` and one over `place_id`
+    - A test asserts `0017_reset.sql` contains no reference to the `auth` or
+      `storage` schemas
+    - Both files are valid SQL as judged by a parse that rejects unbalanced
+      parentheses and unterminated statements
   caution: true
+  status: not started
 
-- task: Build the agent verb layer in `lib/agent/verbs/` — the typed tool surface
-    an agent calls instead of a shell. One module per verb, each authorizing on the
-    caller's role before touching data. Verbs: `leads_query`, `leads_write`,
-    `leads_stats`, `clients_query`, `clients_write`, `tasks_query`, `tasks_write`,
-    `activity_query`, `log_activity` (stub the parse here; item 4 implements it),
-    `profiles_query` (including derived per-person open-task load), `inbox_post`,
-    `read_site` (fetch a URL and return readable text — new, never implemented),
-    `os_publish` (commit and push to `~/os`). Each verb exports a JSON-schema
-    description so it can be handed to a model. `search_places` already exists in
-    `~/os/skills/leads/places.py` — wrap it, do not reimplement it.
+- task: Build `lib/db.mjs`, the only module in the repo that writes SQL. It
+    exposes read helpers (`dueBusinesses`, `businessByEmail`, `businessByPlaceId`,
+    `qualifiedBacklog`), write helpers (`insertBusinesses`, `updateBusiness`,
+    `suppress`, `recordThread`), and `logEvent(job, kind, detail)`. Every read
+    helper targets the `selectable_businesses` view. Export a `assertSelectable`
+    guard used internally that throws when a read query string references
+    `from businesses` directly, so the suppression boundary cannot be bypassed by
+    a later edit. The Postgres client is passed in, never constructed here.
   guardrails:
-    - `SUPABASE_SERVICE_ROLE_KEY` stays server-side only and is never returned to a caller
-    - Every verb takes an explicit caller identity. No verb defaults to admin.
-    - Money fields (`clients.monthly_rate_cents`, `accounts.deal_value_cents`) are stripped from any non-admin caller's result
-    - `read_site` enforces a timeout and a response size cap; it never follows a URL supplied by page content it just fetched
-    - `os_publish` pull-rebases before pushing and never force-pushes
+    - No read helper may query the `businesses` table directly — the view is the
+      only read surface, and this is the invariant the whole system's opt-out
+      safety rests on
+    - `suppress()` is the only writer of `suppressed_at`, and it never writes null
+    - Never construct a database connection inside this module
   done when:
-    - Each verb rejects a caller whose role lacks permission, with a typed error rather than a throw
-    - `clients_query` as a member returns rows with `monthly_rate_cents` absent; as admin, present
-    - `profiles_query` returns each profile's count of open assigned tasks, verified against a seeded fixture
-    - `read_site` returns text for a local fixture served from disk and returns a typed error, not a hang, for an unreachable host
-    - Existing passing tests remain passing
-  status: done
+    - A unit test drives every read helper with a fake client that records SQL,
+      and asserts each query references `selectable_businesses` and none contains
+      `from businesses`
+    - A unit test asserts `assertSelectable` throws when handed a query string
+      selecting directly from `businesses`
+    - A unit test asserts `logEvent` writes one row carrying job, kind, and the
+      detail object, and that it does so even when the detail object is empty
+    - A unit test asserts `suppress()` called twice on the same business leaves
+      the original timestamp unchanged
   caution: true
+  status: not started
 
-- task: Implement `log_activity` parsing and its capture UI. The verb takes free text
-    plus an account or client id, and writes one `account_activity` row — inferring
-    `kind`, `outcome`, `occurred_at`, and a cleaned `note`, with `actor_email` set to
-    the caller. Parsing goes through the existing agent runner in `lib/agent/runner.ts`.
-    Add a capture box to the lead and client pages: a textarea, a submit, and a
-    confirmation step showing the parsed row with every field editable before it commits.
-    Also add the task-close nudge — when a task moves to a completed status, post an
-    inbox item to its assignee asking them to log what happened.
+- task: Stand up the clock. Add `.github/workflows/clock.yml` with three cron
+    entries — `*/20 8-20 * * 1-5` for poll, `0 14 * * 1-5` for touch, and
+    `0 13 * * 1` for source — plus a `workflow_dispatch` input for running any job
+    by name, and a concurrency group keyed on the schedule so two ticks of the
+    same job never overlap. Add `jobs/run.mjs`, a dispatcher that maps the incoming
+    cron string (or dispatch input) to a job module, runs it, and exits non-zero on
+    an unknown name. Add `jobs/heartbeat.mjs`, which writes a dated file to
+    `outputs/heartbeat` and is what the weekly source run commits to keep GitHub
+    from disabling the schedule after sixty days of repo inactivity. Every job runs
+    under `timeout-minutes: 10`.
   guardrails:
-    - Nothing commits to `account_activity` without the user seeing the parsed row first
-    - A parse failure surfaces the raw text for manual entry; it never silently drops the input
-    - A relative date in the text resolves against the submitter's local date, not UTC midnight
-    - `actor_email` is always the authenticated caller, never inferred from the text
+    - The workflow must not reference any secret that does not yet exist — it is
+      committed before the secrets are set, and must parse regardless
+    - Never add a cron more frequent than every twenty minutes; anything tighter
+      exceeds the free Actions allowance
+    - `jobs/run.mjs` never catches and swallows a job's error — a failed job must
+      fail the workflow run
   done when:
-    - Given "called Mike at Coventry Tuesday, wants a quote by Friday", the parse yields kind `call`, `occurred_at` on that Tuesday, and a note retaining "quote"
-    - Given text with no recognisable event, the verb returns a typed parse-failure and writes no row
-    - Moving a task to completed creates exactly one `inbox_items` row addressed to its `assigned_to` profile
-    - Submitting the confirmation step writes exactly one `account_activity` row with the edited values, not the parsed ones
-  status: done
+    - A test parses `clock.yml` as YAML and asserts exactly the three cron
+      expressions above, a `workflow_dispatch` trigger, and a concurrency block
+    - A unit test asserts the dispatcher maps each of the three cron strings to
+      the correct job name, and exits non-zero for an unrecognised one
+    - A unit test asserts `heartbeat` writes a file whose contents include the
+      run date and that running it twice in one day leaves one file
+  status: not started
+
+- task: Build weekly sourcing over a search grid, with exhausted-cell detection.
+    Add `lib/grid.mjs` holding the trade-by-town grid as data (start with the eight
+    trades and the Connecticut and Rhode Island towns the `leads` skill already
+    names) and two pure functions — `pickNextCell(cells)`, which returns the least
+    recently run cell that is not exhausted, and `evaluateRun(cell, results)`,
+    which marks a cell exhausted when a run returns more than ninety percent
+    already-known `place_id`s. Add `jobs/source.mjs`: check the Places monthly
+    budget first and stop without calling Places if the remaining allowance is
+    short, pick a cell, search it, drop results whose `place_id` is already known,
+    insert the rest at stage `sourced`, record the outcome on the grid row, and
+    write an `events` row either way. The Places client and the budget reader are
+    injected.
+  guardrails:
+    - The grid is data this repo owns — never let the job invent a trade or a town
+      that is not already a row in the grid
+    - The monthly Places budget is checked before the first call and between
+      pages; a job that cannot read the budget must not spend
+    - Never re-insert a `place_id` that already exists; dedupe before writing
+  done when:
+    - A unit test with a fake Places client returning entirely known `place_id`s
+      asserts the cell is marked exhausted and that `pickNextCell` never returns
+      it again
+    - A unit test asserts `pickNextCell` returns the least recently run
+      unexhausted cell, and returns null when every cell is exhausted
+    - A unit test with a fake budget reader below the required allowance asserts
+      the Places client is never called and a `skipped` event is written
+    - A unit test asserts inserted rows carry `place_id`, `source_query`, and
+      stage `sourced`, and that a result already in the database is not inserted twice
+  status: not started
+
+- task: Build qualification — one fetch, one Claude call, per business. Add
+    `lib/trim.mjs`, which converts an HTML page to plain text, strips `script`,
+    `style`, `nav`, and `footer` content, collapses whitespace, and caps the result
+    at 7000 characters. Add `jobs/qualify.mjs`: for each business at stage
+    `sourced`, fetch the homepage and one likely contact page, trim both, and make a
+    single Claude call returning an email address, three to five specific facts
+    about the business, and a fit judgement. Write the facts to `research`, the
+    address to `email`, and move the row to stage `qualified`. A business with no
+    discoverable email moves to stage `call_due` with its phone preserved — it is a
+    calling lead, not a dead one. The fetcher and the Claude client are injected.
+  guardrails:
+    - Never guess or construct an email address from the domain — an unverified
+      guess is a bounce, and bounces are what destroy sending reputation
+    - The text sent to Claude is capped; a large page must never produce a large
+      prompt
+    - A site that fails to fetch produces no email and no facts — never a fabricated
+      one. The row stays at `sourced` and an error event is written
+  done when:
+    - A unit test asserts `trim` on a 500KB HTML page yields at most 7000
+      characters and that the output contains no `script` or `style` content
+    - A unit test with a fake fetcher and a fake Claude client asserts a qualified
+      row carries an email and at least three entries in `research`
+    - A unit test asserts a business whose page yields no email lands at stage
+      `call_due` with its `phone` value unchanged and its `email` still null
+    - A unit test asserts a fetch that throws leaves the row at stage `sourced`
+      and writes one `error` event naming the business
   caution: true
+  status: not started
 
-- task: Skill buttons and job-function gating. Add a run-skill control to the pages
-    where each skill's work happens: `pitch` and `quote` on lead and client pages,
-    `intake` on a client page, `improve-system` on admin, `leads` on the leads page.
-    Each button calls `runAsEmployee` in `lib/agent/tokens.ts` — which is defined and
-    currently has ZERO callers; this item is its first. Visibility is gated by
-    `profiles.job_function`: sales and admin see pitch/quote/intake, admin alone sees
-    leads and improve-system, developers see no skill buttons at all (every developer
-    skill needs a cloned repo and a worktree, so none belong in this app). Gating is
-    UI convenience only — the API route still authorizes on admin/member as it does today.
-  guardrails:
-    - Do not add job_function to RLS or to the JWT. Button visibility is not a security boundary.
-    - The API route must still reject an unauthorized skill run even when the button was hidden
-    - A run in flight must be cancellable and must not block the page
-    - No developer skill (`dev-team`, `dt-*`, `lane`, `map`, `ship`, `branch`, `merge-lane`, `foundation`, `new-client-repo`) gets a button
-  done when:
-    - A member with job_function `developer` receives zero skill buttons in the rendered output
-    - A POST to the skill-run route for `leads` as a non-admin returns 403 regardless of UI state
-    - A successful run writes a `job_runs` row naming the skill and the invoking actor
-    - `next build` succeeds
-  status: done
+> **⚠️ AUTONOMOUS RUN — STOP HERE**
 
-- task: Build the inbox. Add an `/inbox` route listing the signed-in person's
-    `inbox_items` newest first, with read/unread state and a count badge in the nav.
-    Each item links to whatever it references — an account, a client, or a job run.
-    Replying to an item routes its text through `log_activity` (the same verb as item 4,
-    second surface). Add `inbox_post` calls wherever the system already knows something
-    happened.
+- task: Verify discovered email addresses before any of them are ever mailed — MX
+    lookup plus an SMTP `RCPT TO` probe that disconnects without sending, with the
+    resolver and the SMTP socket injected.
   guardrails:
-    - Privacy is enforced by RLS, not by the query. An admin must not see another person's items.
-    - Marking read must not be inferable as a write path into another profile's rows
-    - The nav badge must not issue a query on every render of every page
+    - The probe must never transmit a message body
   done when:
-    - An authenticated client for profile A cannot read or update profile B's `inbox_items`, proven by direct query against RLS rather than through the UI
-    - Replying to an item creates exactly one `account_activity` row linked to that item's account
-    - The unread count matches a seeded fixture of read and unread rows
-    - `next build` succeeds
-  status: done
-  caution: true
+    - A unit test with a fake resolver asserts a domain with no MX record is
+      rejected without opening a socket
+    - A unit test asserts the probe issues `RCPT TO` and then `QUIT`, never `DATA`
+  status: not started
 
-- task: Notification routing. Build the decision layer that turns an event into an
-    inbox item, an email, or both. Rules, settled and not to be re-derived: email to
-    Nate for a scheduled run that FAILED, for a task assigned (all employees get this
-    one), and for a lead replying wanting a meeting. No email for a daily briefing, a
-    successful run, or an agent proposal. Everything goes to the inbox regardless.
-    NOTE: no mail provider is configured — no Resend, no nodemailer, no key in any env
-    file. Build the routing and the rendered payload; make sending a single adapter
-    behind an interface, and mark the item's send half blocked with instructions for
-    configuring Resend.
+- task: Build personalization — the single Claude call that produces the cold
+    email copy and the demo slot values together, using hand-written example emails
+    as the voice reference, keeping a buffer of ready-to-send drafts.
   guardrails:
-    - Never send to any address other than a configured test address in this run
-    - A missing provider must degrade to inbox-only and log, never throw or lose the event
-    - Email templates carry no money figures unless the recipient is admin
+    - One Claude call per business, never a generation call plus a humanizer pass
+    - Every factual claim in the email traces to a field in `research`
   done when:
-    - A failed `job_runs` row produces exactly one email payload addressed to Nate and one inbox item
-    - A successful `job_runs` row produces an inbox item and zero email payloads
-    - A task assigned to any profile produces an email payload for that assignee
-    - With no provider configured, every one of the above still writes its inbox item and records the undelivered email
-  status: done (send half resolved 2026-08-25 — SMTP through the bot mailbox,
-          not Resend; needs the mailbox created per docs/NOTIFICATIONS.md)
+    - A unit test asserts one Claude call per business
+    - A unit test asserts a business with fewer than three `research` facts is
+      skipped rather than written with thin copy
+  status: not started
 
-- task: Build the daily briefing skill and its delivery. Write a new
-    `~/os/skills/briefing/SKILL.md` — it does not exist yet — that reads a person's
-    tasks, assigned leads, and clients through the verb layer and composes a scoped
-    briefing. Delivery is async on login: the page renders immediately, the briefing
-    card shows a building state, and it fills in when the run finishes. Throttle to one
-    run per profile per 20 hours. The window is everything since `profiles.last_briefed_at`,
-    never "since yesterday" — an absence of a week yields one briefing covering the week,
-    not seven stale ones. Add a manual refresh control.
+- task: Build the sender — round-robin across `mailboxes` rows with remaining
+    daily capacity, per-mailbox warming ramp, jittered send times.
   guardrails:
-    - The briefing must never block a page render. An agent run takes 10-60s.
-    - `last_briefed_at` advances only on a successful run, so a failure does not swallow a window
-    - The briefing is scoped to the requesting person and must not include another employee's tasks or leads
-    - Writing the skill file follows `~/os/skills/INDEX.md` conventions and updates the index in the same change
+    - A mailbox at its `daily_cap` is never selected, and the cap is never exceeded
+      by a concurrent run
+    - The thread row and the counter update commit in the same transaction as the send
   done when:
-    - With `last_briefed_at` set 7 days back and 3 tasks created inside that window, the briefing includes exactly those 3 and nothing created before it
-    - Two login triggers inside 20 hours produce exactly one `job_runs` row
-    - A briefing run that throws leaves `last_briefed_at` unchanged
-    - The route returns in under 200ms with a briefing still building, proven by measurement not inspection
-  status: done (skill file staged in os-staging/, not installed into ~/os)
+    - A unit test asserts a mailbox at capacity is skipped and the next is chosen
+    - A unit test asserts the warming ramp yields the per-mailbox cap for a given
+      `warmed_at` age
+  status: not started
 
-- task: Build the job runner framework and the three jobs that need no new data.
-    A job is a script invoked by an external scheduler — never an inline timer — that
-    opens a `job_runs` row, executes, closes the row with a status, and routes
-    notifications through item 7. Then implement: site health sweep (HTTP check every
-    client with a `domain` or `droplet_host`, daily); credential expiry (weekly, watches
-    `agent_tokens.expires_at` and the GitHub PAT expiring 2026-10-31, warns 30 days out);
-    quiet-client detector (daily, `onboarding` clients only, 7-day threshold, Tier 1
-    signals = repo commits via `clients.repo` and site health, Tier 2 = logged contact
-    and open tasks). Four of five clients have no `domain` and no `droplet_host` — the
-    health sweep must report those as unmonitorable, not as healthy.
+- task: Build the poller and the reply parser — IMAP over the `pipeline` label,
+    thread mapping by `In-Reply-To` then `References`, routing by `Delivered-To`,
+    with suppression checked before any other branch.
   guardrails:
-    - Every job is idempotent. Running it twice in one window produces one notification, not two.
-    - A job that throws still closes its `job_runs` row with a failed status
-    - A client with no domain and no droplet_host is reported unmonitorable, never healthy
-    - No job schedules itself. Scheduling is the caller's job.
+    - Opt-out detection runs and commits before classification, always
+    - An unmatched message is forwarded for a human to read, never guessed at
   done when:
-    - A job that throws mid-run leaves a `job_runs` row with status failed and a non-null `finished_at`
-    - The health sweep on a seeded fixture of one reachable domain, one unreachable, and three with no domain yields exactly one healthy, one down, three unmonitorable
-    - The credential job warns for an `agent_tokens` row expiring in 29 days and stays silent for one expiring in 31
-    - The quiet detector flags an `onboarding` client with no activity for 8 days and not one at 6 days, and ignores `active` and `churned` clients entirely
-  status: done
+    - A unit test asserts a message containing opt-out intent sets `suppressed_at`
+      even when classification throws
+    - A unit test asserts an out-of-office reply changes no stage
+  status: not started
 
-- task: Lead outreach lanes and the sweep. Implement lane state: every lead starts
-    `outreach_mode = 'ai'`; any `account_activity` row written by a human on that lead
-    flips it to `paused`; three bot touches with no reply parks it as `no_response`
-    with no fourth touch. Add a manual lane override control on the leads page. Build
-    the outreach job to compose personalised drafts using `read_site` from item 3 —
-    per the settled decision, it evaluates each lead's website and writes useful notes
-    and an accurate business description, not just a deterministic pull. Drafts are
-    written to the database only; nothing sends. Build the lead sweep job reading
-    targets from `lead_targets`, and switching to evidence-driven selection when a
-    segment reaches `enough_data: true` per `~/os/skills/leads/SKILL.md`. Running the
-    real `leads` skill once is permitted; it has its own budget cap.
-  guardrails:
-    - Nothing sends to a real lead. Drafts are rows, never messages.
-    - Never invent a territory. Targets come from `lead_targets` or from stats evidence, per the skill.
-    - The 5 `won` accounts and any `human` or `paused` lead are never touched by the bot
-    - Respect the leads skill's existing budget cap. Do not raise it.
-  done when:
-    - Writing a human `account_activity` row on an `ai` lead sets `outreach_mode` to `paused`, and the outreach job then selects 0 rows for it
-    - A lead with 3 bot activity rows and no reply is set to `no_response` and receives no 4th draft
-    - An outreach draft for a lead with a reachable website contains a business description derived from that site's content, not from its `source_query`
-    - The sweep with zero `enough_data: true` segments draws every target from `lead_targets` and invents none
-  status: done
-  caution: true
+- task: Build the four notification emails — batch approval, call task, meeting,
+    and quote handoff.
+  status: not started
 
-- task: README export generator. Reads Supabase and writes client frontmatter into
-    delimited markers in `~/os/clients/<slug>/README.md`. Strictly one-way — the
-    generator never reads the file as input and never touches the hand-written prose
-    body. Read `~/os/clients/_TEMPLATE.md` first and match its frontmatter shape
-    exactly; new detail belongs in `next_step`, never in an appended body section.
-    Commits nightly via `os_publish` as `bcns-os-bot`, with the real actor named in
-    the commit body when a change traces to a person.
+- task: Build alert triage — `alerts@` messages become draft pull requests,
+    never merges, capped at three triage runs per day.
   guardrails:
-    - One-way only. Supabase is authoritative; the file is a read-only export.
-    - Never write outside the generated markers. A hand-edited prose body survives every run.
-    - Never write a client's `monthly_rate_cents` into a tracked file
-    - Do not touch personal-overlay paths in `~/os` — they are gitignored and absent on other clones
-  done when:
-    - Running the generator twice with no data change produces no diff on the second run
-    - Hand-editing the prose body and re-running leaves that edit byte-identical
-    - A client with a NULL monthly rate exports without a rate field rather than a zero or a guess
-    - The generated frontmatter validates against every key in `~/os/clients/_TEMPLATE.md`
-  status: done
+    - Never push to `main` and never merge a pull request
+  status: not started
 
-- task: Admin configuration surface. Extend `/admin` with: a `lead_targets` editor
-    (add a trade and town, deactivate one), a `profiles.job_function` editor, job
-    history from `job_runs` with each run's log, and per-employee token status from
-    `agent_tokens.expires_at` with a re-enroll prompt. Token expiry fails loudly with
-    no fallback to an admin token — a person's jobs stop until they re-enroll, by design.
-  guardrails:
-    - Admin-only, enforced by RLS and by the route, not by hiding a nav link
-    - Never render a token value, sealed or otherwise. Status and expiry date only.
-    - The re-enroll control gives instructions; it cannot itself perform an interactive login
-    - Deactivating a lead target must not delete historical leads sourced from it
-  done when:
-    - A member requesting `/admin` receives a 403, not a redirect
-    - Deactivating a `lead_targets` row makes the sweep skip it while leaving prior accounts intact
-    - The token panel shows expiry status for a seeded row expiring in 10 days and never renders the sealed value
-    - `next build` succeeds
-  status: done
+---
 
-- task: Final integration pass and the review handoff. Run the full suite, `tsc --noEmit`,
-    lint, and `next build`. Seed the database with realistic fixture data so every surface
-    renders with content rather than empty states. Write `REVIEW.md` at the repo root:
-    what was built, every item that ended blocked and why, every deliberate omission,
-    the exact commands to start the app and reach each new surface, and a numbered list
-    of what to click to see each feature working. Note the two data gaps that block jobs
-    rather than builds — four clients missing `domain` and `droplet_host`, and
-    `assigned_to` / `consult_date` empty across all 50 accounts.
-  guardrails:
-    - Fixture data is clearly synthetic. Never seed a real person's contact details.
-    - REVIEW.md states what is actually verified and what is merely built, and does not blur the two
-    - A blocked item is reported as blocked, never softened into done
-  done when:
-    - `pnpm test` passes with a count above 217, `tsc --noEmit` is clean, lint shows exactly the 5 known errors, and `next build` succeeds
-    - REVIEW.md lists every item with its final status and a reason for each non-done one
-    - Every new route renders with seeded content, verified by build output rather than a live server
-  status: done
+## Not yet specified
+
+- Whether the demo template is one layout with swapped content or a small set
+  chosen by trade — revisit after the personalization item, when real output
+  exists to judge
+- How `search_grid` gets seeded beyond the initial Connecticut and Rhode Island
+  towns — revisit once one real sourcing run shows the duplicate rate
+- What the fit judgement from qualification is actually used for; it is recorded
+  this round and acted on in no item
+
+## Out of scope
+
+- Retiring the Google Sheet funnel and porting `sheets.py stats` onto SQL —
+  agreed, but it is `~/os` work, not this repo's
+- Google Workspace aliases, DNS records, GitHub secrets, Workload Identity
+  Federation, and applying migrations — all require a human at a console
+- Multiple sending domains and mailboxes — the schema supports it from day one
+  with a single seeded row; buying and warming them is a later, funded decision
+- Any web interface. This repo has no server in it after item 1
