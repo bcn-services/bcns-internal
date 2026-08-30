@@ -147,7 +147,7 @@ stale client-app template and describes nothing in this repo).
     - A unit test asserts `suppress()` called twice on the same business leaves
       the original timestamp unchanged
   caution: true
-  status: not started
+  status: done
 
 - task: Stand up the clock. Add `.github/workflows/clock.yml` with three cron
     entries — `*/20 8-20 * * 1-5` for poll, `0 14 * * 1-5` for touch, and
