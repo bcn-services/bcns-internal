@@ -21,7 +21,19 @@ export function jobName({ schedule = '', job = '' } = {}) {
 
 export async function main(env = process.env, load = (n) => import(`./${n}.mjs`)) {
   const name = jobName({ schedule: env.SCHEDULE, job: env.JOB })
-  const mod = await load(name)
+
+  // A job below the stop marker is not built yet. That is not a failure: the
+  // clock is deliberately standing before the jobs it will drive, and a red X
+  // every twenty minutes would train everyone to ignore this workflow. A job
+  // that EXISTS and throws still fails the run, which is the case that matters.
+  let mod
+  try {
+    mod = await load(name)
+  } catch (err) {
+    if (err?.code !== 'ERR_MODULE_NOT_FOUND') throw err
+    console.log(`job ${name} is not built yet — nothing to run`)
+    return { skipped: 'not-built', job: name }
+  }
   if (typeof mod.run !== 'function') throw new Error(`job ${name} exports no run()`)
 
   const deps = {}

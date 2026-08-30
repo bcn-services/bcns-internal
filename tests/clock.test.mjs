@@ -104,3 +104,26 @@ test('authcheck fails loudly when the identity exchange did not run', async () =
   await assert.rejects(run({ env: {} }), /workload identity/)
   assert.equal((await run({ env: { CLOUDSDK_AUTH_ACCESS_TOKEN: 'ya29.x' } })).ok, true)
 })
+
+test('a job that is not built yet is skipped, not a failure', async () => {
+  const { main } = await import('../jobs/run.mjs')
+  const notFound = Object.assign(new Error('nope'), { code: 'ERR_MODULE_NOT_FOUND' })
+  const out = await main({ SCHEDULE: '*/20 8-20 * * 1-5' }, async () => { throw notFound })
+  assert.deepEqual(out, { skipped: 'not-built', job: 'poll' })
+})
+
+test('a job that exists and throws still fails the run', async () => {
+  const { main } = await import('../jobs/run.mjs')
+  await assert.rejects(
+    main({ JOB: 'source' }, async () => ({ run: async () => { throw new Error('real failure') } })),
+    /real failure/
+  )
+})
+
+test('an unrelated import error is never mistaken for an unbuilt job', async () => {
+  const { main } = await import('../jobs/run.mjs')
+  await assert.rejects(
+    main({ JOB: 'source' }, async () => { throw new SyntaxError('bad module') }),
+    /bad module/
+  )
+})
