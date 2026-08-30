@@ -4,8 +4,8 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
-- Status: outreach pipeline round, items 1-4 of 12 done. Autonomous stop marker sits after item 6.
-- Next: item 5 — weekly sourcing over the search grid (`lib/grid.mjs`, `jobs/source.mjs`).
+- Status: outreach pipeline round, items 1-5 of 12 done. Autonomous stop marker sits after item 6.
+- Next: item 6 — qualification (`lib/trim.mjs`, `jobs/qualify.mjs`), the last item above the stop marker.
 - Human step waiting: apply `0017_reset.sql` and `0018_pipeline.sql` to the Supabase project by hand.
 - Blockers: none in code. Waiting on Nate for a fresh SMTP app password, and for 3–5 hand-written example emails before item 8.
 - Last updated: 2026-08-30
@@ -18,7 +18,7 @@ LANE.md wins for scope.
 | 2. Two schema migrations (files only) | done — two SQL files are written and ready for a human to apply: one clears out the old dashboard tables, the other creates the pipeline's own six tables. Nobody can be mailed twice, an opt-out can never be undone, and every job reads leads through a view that hides opted-out people automatically. Nothing was applied to the live database. |
 | 3. lib/db.mjs — the only SQL writer | done — all database access now runs through one module, and it refuses at runtime to look up a lead in a way that could show someone who opted out. Opting out is one-way: asking twice does not move the date, and nothing in the code can clear it. The module never opens its own connection. |
 | 4. Clock workflow + job dispatcher + heartbeat | done — the pipeline now has a clock: GitHub runs it every twenty minutes on weekday daytimes, once each weekday afternoon, and once on Monday mornings, and you can also run any job by hand from the Actions tab. Two runs of the same schedule can never overlap. A weekly dated file gets committed so GitHub never switches the schedule off for inactivity, and a failing job fails the run loudly instead of looking green. A hand-run `authcheck` job proves the keyless Google sign-in works. |
-| 5. Weekly sourcing over a search grid | not started |
+| 5. Weekly sourcing over a search grid | done — every Monday the pipeline searches one trade-and-town pair from a fixed list of 64 (eight trades across seven Connecticut towns and Providence) and adds the businesses it has not seen before. It checks the Google budget before spending anything and stops rather than guessing if it cannot read it. When a search comes back more than ninety percent already-known businesses the pair is marked used up and never searched again. It cannot search a town or trade that is not on the list. |
 | 6. Qualification — fetch + one Claude call | not started |
 | 7. Email verification before any send | skipped — below stop marker |
 | 8. Personalization — the cold email itself | skipped — below stop marker |

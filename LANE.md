@@ -203,7 +203,7 @@ stale client-app template and describes nothing in this repo).
       the Places client is never called and a `skipped` event is written
     - A unit test asserts inserted rows carry `place_id`, `source_query`, and
       stage `sourced`, and that a result already in the database is not inserted twice
-  status: not started
+  status: done
 
 - task: Build qualification — one fetch, one Claude call, per business. Add
     `lib/trim.mjs`, which converts an HTML page to plain text, strips `script`,

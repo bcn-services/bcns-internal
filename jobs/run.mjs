@@ -31,6 +31,7 @@ export async function main(env = process.env, load = (n) => import(`./${n}.mjs`)
       import('../lib/db.mjs'),
     ])
     deps.sql = postgres(env.DATABASE_URL)
+    deps.db = db
     deps.logEvent = db.logEvent
   }
   deps.dryRun = env.DRY_RUN !== 'false'
