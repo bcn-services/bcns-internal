@@ -45,6 +45,7 @@ jobs:
       # Skipped when the vars are unset so the workflow still parses and runs
       # before anyone configures GCP.
       - name: Authenticate to Google Cloud
+        id: auth
         if: vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
         uses: google-github-actions/auth@v2
         with:
@@ -57,6 +58,9 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+          # The auth action returns the minted token as a step output, not an
+          # env var; a token here is proof the OIDC exchange actually ran.
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
           SCHEDULE: ${{ github.event.schedule }}
           JOB: ${{ inputs.job }}
         run: pnpm job
