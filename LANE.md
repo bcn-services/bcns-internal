@@ -232,7 +232,7 @@ stale client-app template and describes nothing in this repo).
     - A unit test asserts a fetch that throws leaves the row at stage `sourced`
       and writes one `error` event naming the business
   caution: true
-  status: not started
+  status: done
 
 > **⚠️ AUTONOMOUS RUN — STOP HERE**
 

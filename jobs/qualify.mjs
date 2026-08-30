@@ -1,0 +1,107 @@
+// Qualification: one page fetch pair, one Claude call, per business.
+//
+// The rule that matters: an email address is only ever taken from something
+// the site actually published. Constructing info@<domain> is a guess, a guess
+// is a bounce, and bounces are what kill a sending domain. A business with no
+// discoverable address is a calling lead, not a dead one.
+
+import { trim } from '../lib/trim.mjs'
+
+export const CONTACT_PATHS = ['/contact', '/contact-us', '/about']
+
+const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
+
+export const PROMPT = `You are reading the website of a local trade business.
+
+Return ONLY minified JSON of this exact shape:
+{"email": string|null, "facts": string[], "fit": "good"|"weak"|"no", "reason": string}
+
+Rules:
+- "email" must be an address that appears verbatim in the page text below. If no
+  address appears, return null. Never construct one from the domain.
+- "facts" is three to five specific, checkable things about THIS business drawn
+  from the page — services, years in business, towns served, named staff,
+  certifications. No generic filler.
+- "fit" judges whether this business would benefit from a new website or an
+  internal tool.
+
+PAGE TEXT:
+`
+
+export async function run({
+  sql,
+  db,
+  fetchPage,
+  claude,
+  limit = 25,
+  contactPaths = CONTACT_PATHS,
+} = {}) {
+  const log = (kind, detail) => db.logEvent(sql, 'qualify', kind, detail)
+  const businesses = await db.sourcedBacklog(sql, { limit })
+
+  if (!businesses.length) {
+    await log('skipped', { reason: 'no businesses at stage sourced' })
+    return { qualified: 0, callDue: 0, errors: 0 }
+  }
+
+  let qualified = 0
+  let callDue = 0
+  let errors = 0
+
+  for (const b of businesses) {
+    try {
+      const home = await fetchPage(homepage(b))
+      let contact = ''
+      for (const path of contactPaths) {
+        try {
+          contact = await fetchPage(homepage(b) + path)
+          if (contact) break
+        } catch {
+          // A missing contact page is normal, not a failure of the business.
+        }
+      }
+
+      const text = `${trim(home)}\n\n${trim(contact)}`.trim()
+      const answer = await claude.ask(PROMPT + text)
+      const parsed = typeof answer === 'string' ? JSON.parse(answer) : answer
+
+      const facts = Array.isArray(parsed.facts) ? parsed.facts : []
+      // Trust nothing: the address must be well-formed AND actually present in
+      // the text we sent, or the model invented it.
+      const claimed = typeof parsed.email === 'string' ? parsed.email.trim() : ''
+      const email =
+        claimed && EMAIL_RE.test(claimed) && text.toLowerCase().includes(claimed.toLowerCase())
+          ? claimed
+          : null
+
+      if (email) {
+        await db.updateBusiness(sql, b.id, {
+          email,
+          stage: 'qualified',
+          research: JSON.stringify({ facts, fit: parsed.fit ?? null, reason: parsed.reason ?? null }),
+        })
+        qualified++
+        await log('qualified', { business: b.id, facts: facts.length })
+      } else {
+        // phone is deliberately not written — it stays exactly as sourced.
+        await db.updateBusiness(sql, b.id, {
+          stage: 'call_due',
+          research: JSON.stringify({ facts, fit: parsed.fit ?? null, reason: parsed.reason ?? null }),
+        })
+        callDue++
+        await log('call_due', { business: b.id, reason: 'no discoverable email' })
+      }
+    } catch (err) {
+      errors++
+      await log('error', { business: b.id, name: b.name, error: String(err?.message ?? err) })
+      // The row is left untouched, so it stays at stage sourced and is retried.
+    }
+  }
+
+  return { qualified, callDue, errors }
+}
+
+function homepage(b) {
+  if (!b.domain) throw new Error(`business ${b.id} has no domain`)
+  return b.domain.startsWith('http') ? b.domain.replace(/\/$/, '') : `https://${b.domain}`
+}

@@ -4,8 +4,8 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
-- Status: outreach pipeline round, items 1-5 of 12 done. Autonomous stop marker sits after item 6.
-- Next: item 6 — qualification (`lib/trim.mjs`, `jobs/qualify.mjs`), the last item above the stop marker.
+- Status: outreach pipeline round, items 1-6 of 12 done — everything above the autonomous stop marker. Autonomous stop marker sits after item 6.
+- Next: stop marker reached. Items 7-12 need a human to restart the run.
 - Human step waiting: apply `0017_reset.sql` and `0018_pipeline.sql` to the Supabase project by hand.
 - Blockers: none in code. Waiting on Nate for a fresh SMTP app password, and for 3–5 hand-written example emails before item 8.
 - Last updated: 2026-08-30
@@ -19,7 +19,7 @@ LANE.md wins for scope.
 | 3. lib/db.mjs — the only SQL writer | done — all database access now runs through one module, and it refuses at runtime to look up a lead in a way that could show someone who opted out. Opting out is one-way: asking twice does not move the date, and nothing in the code can clear it. The module never opens its own connection. |
 | 4. Clock workflow + job dispatcher + heartbeat | done — the pipeline now has a clock: GitHub runs it every twenty minutes on weekday daytimes, once each weekday afternoon, and once on Monday mornings, and you can also run any job by hand from the Actions tab. Two runs of the same schedule can never overlap. A weekly dated file gets committed so GitHub never switches the schedule off for inactivity, and a failing job fails the run loudly instead of looking green. A hand-run `authcheck` job proves the keyless Google sign-in works. |
 | 5. Weekly sourcing over a search grid | done — every Monday the pipeline searches one trade-and-town pair from a fixed list of 64 (eight trades across seven Connecticut towns and Providence) and adds the businesses it has not seen before. It checks the Google budget before spending anything and stops rather than guessing if it cannot read it. When a search comes back more than ninety percent already-known businesses the pair is marked used up and never searched again. It cannot search a town or trade that is not on the list. |
-| 6. Qualification — fetch + one Claude call | not started |
+| 6. Qualification — fetch + one Claude call | done — each newly found business gets its website read and summarised into three to five real facts about it, with an email address picked up only if the site actually publishes one. An address the model made up is thrown away: if it does not appear on the page it does not get written, so nobody is mailed at a guessed address. A business with no published address becomes a calling lead with its phone number intact, not a discard. A site that will not load leaves the record exactly as it was and logs the failure. Claude runs through the Claude Code CLI on the existing subscription, so none of this bills the API. |
 | 7. Email verification before any send | skipped — below stop marker |
 | 8. Personalization — the cold email itself | skipped — below stop marker |
 | 9. The sender — round-robin across mailboxes | skipped — below stop marker |

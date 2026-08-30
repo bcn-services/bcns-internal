@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   assertSelectable, dueBusinesses, businessByEmail, businessByPlaceId,
-  qualifiedBacklog, suppress, logEvent, recordThread,
+  qualifiedBacklog, sourcedBacklog, suppress, logEvent, recordThread,
 } from '../lib/db.mjs'
 
 // A postgres.js-shaped tagged-template fake. Records the static text of every
@@ -24,6 +24,7 @@ const READERS = [
   ['businessByEmail', (sql) => businessByEmail(sql, 'a@b.com')],
   ['businessByPlaceId', (sql) => businessByPlaceId(sql, 'place-1')],
   ['qualifiedBacklog', (sql) => qualifiedBacklog(sql)],
+  ['sourcedBacklog', (sql) => sourcedBacklog(sql)],
 ]
 
 test('every read helper goes through selectable_businesses', async () => {

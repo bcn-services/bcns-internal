@@ -1,0 +1,161 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { trim, MAX_CHARS } from '../lib/trim.mjs'
+import { run as qualify, PROMPT } from '../jobs/qualify.mjs'
+
+test('trim caps a 500KB page at 7000 characters', () => {
+  const big = '<p>' + 'word '.repeat(120_000) + '</p>'
+  assert.ok(big.length > 500_000)
+  const out = trim(big)
+  assert.ok(out.length <= MAX_CHARS, `got ${out.length}`)
+})
+
+test('trim removes script, style, nav and footer content', () => {
+  const html = `
+    <html><head><style>.a{color:red}SECRETSTYLE</style></head>
+    <body><nav>SECRETNAV</nav>
+    <p>Acme Roofing serves Milford.</p>
+    <script>var x = 'SECRETSCRIPT';</script>
+    <footer>SECRETFOOTER</footer></body></html>`
+  const out = trim(html)
+  for (const s of ['SECRETSTYLE', 'SECRETNAV', 'SECRETSCRIPT', 'SECRETFOOTER']) {
+    assert.ok(!out.includes(s), `${s} survived the trim`)
+  }
+  assert.match(out, /Acme Roofing serves Milford\./)
+})
+
+test('trim leaks nothing from an unclosed script tag', () => {
+  assert.ok(!trim('<p>hi</p><script>var x = "SECRET"').includes('SECRET'))
+})
+
+test('trim collapses whitespace and decodes common entities', () => {
+  assert.equal(trim('<p>a  &amp;   b</p>\n\n\n<p>c</p>'), 'a & b\nc')
+  assert.equal(trim(''), '')
+})
+
+test('trim does not fuse words across block tags', () => {
+  assert.match(trim('<li>Roofing</li><li>Siding</li>'), /Roofing\nSiding/)
+})
+
+// --- jobs/qualify.mjs ------------------------------------------------------
+
+const PAGE = (extra = '') => `<html><body><p>Acme Roofing, family run since 1998,
+  serves Milford and Stratford CT. GAF certified.</p>${extra}</body></html>`
+
+function harness({ rows, pages = {}, answer, fetchThrows = false } = {}) {
+  const events = []
+  const updates = []
+  let asks = 0
+  return {
+    events, updates, get asks() { return asks },
+    deps: {
+      sql: {},
+      db: {
+        logEvent: (_s, job, kind, detail) => events.push({ job, kind, detail }),
+        sourcedBacklog: async () => rows,
+        updateBusiness: async (_s, id, patch) => { updates.push({ id, patch }); return [] },
+      },
+      fetchPage: async (url) => {
+        if (fetchThrows) throw new Error('ECONNREFUSED')
+        if (url in pages) return pages[url]
+        const path = url.replace(/^https:\/\/[^/]+/, '')
+        if (path === '') return pages.home ?? PAGE()
+        throw new Error('404')
+      },
+      claude: { ask: async () => { asks++; return typeof answer === 'function' ? answer() : answer } },
+    },
+  }
+}
+
+const acme = { id: 'b1', name: 'Acme Roofing', domain: 'acme.example', phone: '555-0100', email: null }
+
+test('a qualified row carries an email and at least three research facts', async () => {
+  const h = harness({
+    rows: [acme],
+    pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+    answer: JSON.stringify({
+      email: 'hello@acme.example',
+      facts: ['Family run since 1998', 'Serves Milford and Stratford CT', 'GAF certified'],
+      fit: 'good', reason: 'dated site',
+    }),
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.qualified, 1)
+  const { patch } = h.updates[0]
+  assert.equal(patch.stage, 'qualified')
+  assert.equal(patch.email, 'hello@acme.example')
+  assert.ok(JSON.parse(patch.research).facts.length >= 3)
+})
+
+test('exactly one Claude call per business', async () => {
+  const h = harness({
+    rows: [acme, { ...acme, id: 'b2' }],
+    pages: { home: PAGE('<p>hello@acme.example</p>') },
+    answer: JSON.stringify({ email: 'hello@acme.example', facts: ['a', 'b', 'c'], fit: 'good' }),
+  })
+  await qualify(h.deps)
+  assert.equal(h.asks, 2)
+})
+
+test('no discoverable email lands at call_due with phone untouched and email still null', async () => {
+  const h = harness({
+    rows: [acme],
+    answer: JSON.stringify({ email: null, facts: ['a', 'b', 'c'], fit: 'weak' }),
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.callDue, 1)
+  const { patch } = h.updates[0]
+  assert.equal(patch.stage, 'call_due')
+  assert.ok(!('email' in patch), 'call_due wrote an email field')
+  assert.ok(!('phone' in patch), 'call_due touched the phone number')
+})
+
+test('an email not present in the page text is refused, never written', async () => {
+  const h = harness({
+    rows: [acme],
+    // Well-formed, plausible, and nowhere on the page: a constructed guess.
+    answer: JSON.stringify({ email: 'info@acme.example', facts: ['a', 'b', 'c'], fit: 'good' }),
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.qualified, 0)
+  assert.equal(out.callDue, 1)
+  assert.equal(h.updates[0].patch.stage, 'call_due')
+})
+
+test('a fetch that throws leaves the row at sourced and writes one error event', async () => {
+  const h = harness({ rows: [acme], fetchThrows: true })
+  const out = await qualify(h.deps)
+  assert.equal(out.errors, 1)
+  assert.equal(h.updates.length, 0, 'a failed fetch changed the row')
+  const errs = h.events.filter((e) => e.kind === 'error')
+  assert.equal(errs.length, 1)
+  assert.equal(errs[0].detail.business, 'b1')
+  assert.equal(errs[0].detail.name, 'Acme Roofing')
+})
+
+test('an unparseable Claude answer is an error, not a half-written row', async () => {
+  const h = harness({ rows: [acme], answer: 'sorry, I cannot do that' })
+  const out = await qualify(h.deps)
+  assert.equal(out.errors, 1)
+  assert.equal(h.updates.length, 0)
+})
+
+test('an empty backlog writes a skipped event', async () => {
+  const h = harness({ rows: [] })
+  await qualify(h.deps)
+  assert.deepEqual(h.events.map((e) => e.kind), ['skipped'])
+})
+
+test('the prompt forbids constructing an address from the domain', () => {
+  assert.match(PROMPT, /Never construct one from the domain/i)
+  assert.match(PROMPT, /appears verbatim/i)
+})
+
+test('the page text sent to Claude is capped', async () => {
+  let sent = ''
+  const h = harness({ rows: [acme], answer: JSON.stringify({ email: null, facts: [], fit: 'no' }) })
+  h.deps.fetchPage = async () => '<p>' + 'x '.repeat(400_000) + '</p>'
+  h.deps.claude = { ask: async (p) => { sent = p; return JSON.stringify({ email: null, facts: [], fit: 'no' }) } }
+  await qualify(h.deps)
+  assert.ok(sent.length <= PROMPT.length + 2 * MAX_CHARS + 4, `prompt was ${sent.length}`)
+})
