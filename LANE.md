@@ -173,7 +173,7 @@ stale client-app template and describes nothing in this repo).
       the correct job name, and exits non-zero for an unrecognised one
     - A unit test asserts `heartbeat` writes a file whose contents include the
       run date and that running it twice in one day leaves one file
-  status: not started
+  status: done
 
 - task: Build weekly sourcing over a search grid, with exhausted-cell detection.
     Add `lib/grid.mjs` holding the trade-by-town grid as data (start with the eight
