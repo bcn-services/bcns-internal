@@ -4,8 +4,9 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
-- Status: outreach pipeline round, item 1 of 12 done. Autonomous stop marker sits after item 6.
-- Next: item 2 — author `0017_reset.sql` and `0018_pipeline.sql` as files; a human applies them.
+- Status: outreach pipeline round, items 1-2 of 12 done. Autonomous stop marker sits after item 6.
+- Next: item 3 — `lib/db.mjs`, the only module in the repo that writes SQL.
+- Human step waiting: apply `0017_reset.sql` and `0018_pipeline.sql` to the Supabase project by hand.
 - Blockers: none in code. Waiting on Nate for a fresh SMTP app password, and for 3–5 hand-written example emails before item 8.
 - Last updated: 2026-08-30
 
@@ -14,7 +15,7 @@ LANE.md wins for scope.
 | Item | Status |
 |------|--------|
 | 1. Strip the repo to a headless jobs runner | done — the old dashboard app is gone and the repo is now just a jobs runner: no web pages, no server, no Next.js. Dependencies are down to the four the pipeline actually needs, `pnpm test` runs, and every migration file was left exactly as it was. |
-| 2. Two schema migrations (files only) | not started |
+| 2. Two schema migrations (files only) | done — two SQL files are written and ready for a human to apply: one clears out the old dashboard tables, the other creates the pipeline's own six tables. Nobody can be mailed twice, an opt-out can never be undone, and every job reads leads through a view that hides opted-out people automatically. Nothing was applied to the live database. |
 | 3. lib/db.mjs — the only SQL writer | not started |
 | 4. Clock workflow + job dispatcher + heartbeat | not started |
 | 5. Weekly sourcing over a search grid | not started |

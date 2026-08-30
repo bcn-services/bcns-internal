@@ -120,7 +120,7 @@ stale client-app template and describes nothing in this repo).
     - Both files are valid SQL as judged by a parse that rejects unbalanced
       parentheses and unterminated statements
   caution: true
-  status: not started
+  status: done
 
 - task: Build `lib/db.mjs`, the only module in the repo that writes SQL. It
     exposes read helpers (`dueBusinesses`, `businessByEmail`, `businessByPlaceId`,
