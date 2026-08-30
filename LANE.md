@@ -85,7 +85,7 @@ stale client-app template and describes nothing in this repo).
     - `git log --stat` shows zero changes under `supabase/migrations/`
     - No file outside `node_modules` imports `next`, `react`, or `@supabase/ssr`
   caution: true
-  status: not started
+  status: done
 
 - task: Author the two schema migrations as files. `0017_reset.sql` drops the
     command-center application tables that migrations 0001–0016 created, leaving

@@ -4,6 +4,30 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
+- Status: outreach pipeline round, item 1 of 12 done. Autonomous stop marker sits after item 6.
+- Next: item 2 — author `0017_reset.sql` and `0018_pipeline.sql` as files; a human applies them.
+- Blockers: none in code. Waiting on Nate for a fresh SMTP app password, and for 3–5 hand-written example emails before item 8.
+- Last updated: 2026-08-30
+
+## Round 2 — outreach pipeline (in progress)
+
+| Item | Status |
+|------|--------|
+| 1. Strip the repo to a headless jobs runner | done — the old dashboard app is gone and the repo is now just a jobs runner: no web pages, no server, no Next.js. Dependencies are down to the four the pipeline actually needs, `pnpm test` runs, and every migration file was left exactly as it was. |
+| 2. Two schema migrations (files only) | not started |
+| 3. lib/db.mjs — the only SQL writer | not started |
+| 4. Clock workflow + job dispatcher + heartbeat | not started |
+| 5. Weekly sourcing over a search grid | not started |
+| 6. Qualification — fetch + one Claude call | not started |
+| 7. Email verification before any send | skipped — below stop marker |
+| 8. Personalization — the cold email itself | skipped — below stop marker |
+| 9. The sender — round-robin across mailboxes | skipped — below stop marker |
+| 10. Poller and reply parser | skipped — below stop marker |
+| 11. The four notification emails | skipped — below stop marker |
+| 12. Alert triage into draft pull requests | skipped — below stop marker |
+
+## Round 1 — command center (shipped 2026-08-25)
+
 - Status: all 13 items done. Item 7's send half is now built (SMTP, 2026-08-25); items 7, 8 and 11 each have a manual setup step left. See REVIEW.md.
 - Next: read REVIEW.md and click through its numbered list — ten of twelve surfaces are proven only to compile, not to paint.
 - Blockers: none in code. Item 7 needs the bot mailbox `bot@bcn-services.com` created and five values put in `.env.local` before mail leaves the queue. See docs/NOTIFICATIONS.md.

@@ -1,41 +1,21 @@
 {
-  "name": "@nseluga/hosted-web-template",
+  "name": "bcns-outreach-pipeline",
   "version": "0.0.0",
   "private": true,
   "packageManager": "pnpm@11.15.1",
   "scripts": {
-    "dev": "next dev -p 3100",
-    "build": "next build",
-    "start": "next start -p 3100",
-    "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/os-port.test.mjs tests/seed.test.mjs tests/accounts-data-layer.test.mjs tests/leads-import.test.mjs tests/auth-gating.test.mjs tests/auth-redirect.test.mjs tests/core-schema-migration.test.mjs tests/rls-policies.test.mjs tests/project-manual-migration.test.mjs tests/staff-tasks-migration.test.mjs tests/own-tasks-migration.test.mjs tests/agent-tokens-migration.test.mjs tests/automation-schema-migration.test.mjs tests/seed-clients-migration.test.mjs tests/tasks-data-layer.test.mjs tests/agent-secrets.test.mjs tests/agent-runner.test.mjs tests/agent-verbs.test.mjs tests/agent-verbs-io.test.mjs tests/activity-parse.test.mjs tests/task-close-nudge.test.mjs tests/activity-capture-qa.test.mjs tests/migration-replay.test.mjs tests/activity-audit-trail-migration.test.mjs tests/audit-trail-guards.test.mjs tests/inbox.test.mjs tests/inbox-qa.test.mjs tests/inbox-hardening.test.mjs tests/notification-routing.test.mjs tests/admin-surface.test.mjs tests/email-outbox-migration.test.mjs tests/briefing.test.mjs tests/briefing-claim-migration.test.mjs tests/jobs.test.mjs tests/job-window-migration.test.mjs tests/outreach.test.mjs tests/outreach-lanes-migration.test.mjs tests/outreach-verify.test.mjs tests/outreach-review-fixes.test.mjs tests/readme-export.test.mjs tests/seed-dev.test.mjs tests/mailer-smtp.test.mjs",
-    "clean": "rm -rf .next .turbo node_modules",
-    "test:db": "tsx --test tests/os-port.test.mjs tests/seed.test.mjs tests/accounts-data-layer.test.mjs tests/leads-import.test.mjs tests/auth-gating.test.mjs tests/auth-redirect.test.mjs tests/core-schema-migration.test.mjs tests/rls-policies.test.mjs tests/project-manual-migration.test.mjs tests/staff-tasks-migration.test.mjs tests/own-tasks-migration.test.mjs tests/agent-tokens-migration.test.mjs tests/automation-schema-migration.test.mjs tests/seed-clients-migration.test.mjs tests/tasks-data-layer.test.mjs tests/agent-secrets.test.mjs tests/agent-runner.test.mjs tests/agent-verbs.test.mjs tests/agent-verbs-io.test.mjs tests/activity-parse.test.mjs tests/task-close-nudge.test.mjs tests/activity-capture-qa.test.mjs tests/migration-replay.test.mjs tests/activity-audit-trail-migration.test.mjs tests/audit-trail-guards.test.mjs tests/inbox.test.mjs tests/inbox-qa.test.mjs tests/inbox-hardening.test.mjs tests/notification-routing.test.mjs tests/admin-surface.test.mjs tests/email-outbox-migration.test.mjs tests/briefing.test.mjs tests/briefing-claim-migration.test.mjs tests/jobs.test.mjs tests/job-window-migration.test.mjs tests/outreach.test.mjs tests/outreach-lanes-migration.test.mjs tests/outreach-verify.test.mjs tests/outreach-review-fixes.test.mjs tests/readme-export.test.mjs tests/seed-dev.test.mjs tests/mailer-smtp.test.mjs",
-    "backfill-leads": "tsx scripts/backfill-leads.mjs",
-    "provision-user": "tsx scripts/provision-user.mjs",
-    "job": "tsx scripts/run-job.mjs",
-    "seed-dev": "node scripts/seed-dev.mjs"
+    "test": "tsx --test tests/smoke.test.mjs",
+    "job": "tsx jobs/run.mjs",
+    "lint": "for f in jobs/*.mjs lib/*.mjs tests/*.mjs; do [ -f \"$f\" ] || continue; node --check \"$f\" || exit 1; done"
   },
   "dependencies": {
-    "@nseluga/app-core": "^0.2.0",
-    "@nseluga/ui": "^0.1.0",
-    "@supabase/ssr": "^0.12.4",
-    "@supabase/supabase-js": "^2.112.3",
-    "next": "14.2.18",
+    "imapflow": "^1.0.198",
+    "mailparser": "^3.7.4",
     "nodemailer": "^9.0.5",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "server-only": "^0.0.1"
+    "postgres": "^3.4.7"
   },
   "devDependencies": {
-    "@nseluga/config": "^0.1.0",
     "@types/node": "^22.20.1",
-    "@types/nodemailer": "^8.0.1",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "eslint": "^9.15.0",
-    "tsx": "^4.23.1",
-    "typescript": "^5.9.3"
+    "tsx": "^4.23.1"
   }
 }
