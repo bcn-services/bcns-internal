@@ -10,6 +10,9 @@ import {
 function fakeClient(handler = () => []) {
   const calls = []
   const sql = (strings, ...values) => {
+    // postgres.js overloads the client: called with an array of rows and column
+    // names it is a value helper, not a query. Only real tagged calls are queries.
+    if (!Array.isArray(strings?.raw)) return { helper: strings, cols: values }
     const text = strings.join(' ? ')
     calls.push({ text, values })
     return Promise.resolve(handler(text, values) ?? [])
@@ -105,4 +108,21 @@ test('nothing in lib/db.mjs opens a connection', async () => {
     fs.readFileSync(new URL('../lib/db.mjs', import.meta.url), 'utf8'))
   assert.ok(!/from ['"]postgres['"]/.test(src), 'db.mjs imports a driver')
   assert.ok(!/DATABASE_URL/.test(src), 'db.mjs reaches for a connection string')
+})
+
+test('upsertCells never duplicates a grid cell', async () => {
+  const { upsertCells, allCells, saveCell } = await import('../lib/db.mjs')
+  const sql = fakeClient()
+  sql.calls.length = 0
+  await upsertCells(sql, [{ trade: 'roofers', town: 'Milford', state: 'CT' }])
+  assert.match(sql.calls[0].text, /on conflict \(trade, town, state\) do nothing/i)
+  assert.deepEqual(await upsertCells(sql, []), [])
+
+  const reader = fakeClient()
+  await allCells(reader)
+  assert.match(reader.calls[0].text, /from search_grid/i)
+
+  const writer = fakeClient()
+  await saveCell(writer, { trade: 'roofers', town: 'Milford', state: 'CT', exhausted_at: null })
+  assert.match(writer.calls[0].text, /update search_grid/i)
 })

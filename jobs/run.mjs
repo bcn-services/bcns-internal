@@ -33,6 +33,14 @@ export async function main(env = process.env, load = (n) => import(`./${n}.mjs`)
     deps.sql = postgres(env.DATABASE_URL)
     deps.db = db
     deps.logEvent = db.logEvent
+    // The grid lives in code; the table only tracks run state, so every run
+    // reconciles the two before reading.
+    const { GRID } = await import('../lib/grid.mjs')
+    deps.loadCells = async () => {
+      await db.upsertCells(deps.sql, GRID)
+      return db.allCells(deps.sql)
+    }
+    deps.saveCell = (cell) => db.saveCell(deps.sql, cell)
   }
   deps.dryRun = env.DRY_RUN !== 'false'
 
