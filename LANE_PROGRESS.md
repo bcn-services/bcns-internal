@@ -4,9 +4,10 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
-- Status: outreach pipeline round, items 1-6 of 12 done. Migrations 0017 and 0018 are APPLIED to production; 45 pre-existing leads carried over and the 64-cell grid seeded. Autonomous stop marker sits after item 6.
-- Next: `clock.yml` must reach the default branch before any job can be dispatched — GitHub only accepts workflow_dispatch for workflows on `main`. That merge is a human call.
-- Blocked on Nate: 3-5 example emails (item 8) and a fresh SMTP app password (item 9). Items 7, 10, 11, 12 can be built without either.
+- Status: items 1-6 of 12 done and MERGED TO MAIN (Nate overrode the no-main rule so workflow_dispatch would work). Migrations 0017/0018 applied to production. The clock is live and proven: authcheck and poll both pass on main, CI re-enabled and green. Autonomous stop marker sits after item 6.
+- Next: paused at Nate's request. When resumed: build the real Places client and budget reader (jobs/source.mjs still has no live ones), then items 7, 10, 11, 12.
+- Blocked on Nate: 3-5 example emails (item 8) and a fresh SMTP app password (item 9).
+- Live-system note: the crons are firing. poll and touch do not exist yet and are skipped cleanly rather than failing; source will skip on missing deps. Nothing sends.
 - Last updated: 2026-08-30
 
 ## Round 2 — outreach pipeline (in progress)
