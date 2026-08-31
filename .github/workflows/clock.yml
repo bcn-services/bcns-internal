@@ -40,6 +40,20 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # lib/claude.mjs shells out to the `claude` binary — it is not a repo
+      # dependency and ubuntu-latest does not ship it. qualify, personalize
+      # and poll all fail without this step.
+      - name: Install the Claude Code CLI
+        run: npm i -g @anthropic-ai/claude-code
+
+      # ~/os, for the skills the jobs shell out to (/pitch, /quote) and the
+      # voice rules personalize reads. NOT WIRED YET: bcns-os is private and
+      # the bcn-services org has deploy keys disabled, so this needs a
+      # fine-grained PAT as `OS_TOKEN` before the step can be added. Gate it on
+      # `vars.OS_REPO`, not the secret — the `secrets` context is not available
+      # in a step-level `if`. Until then `OS_DIR` does not exist on the runner
+      # and every job falls back to what it carries itself.
+
       # Keyless: no service account key exists, and none can be created —
       # the org enforces iam.managed.disableServiceAccountKeyCreation.
       # Skipped when the vars are unset so the workflow still parses and runs
@@ -61,6 +75,9 @@ jobs:
           # The auth action returns the minted token as a step output, not an
           # env var; a token here is proof the OIDC exchange actually ran.
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          # Always set. The clone is optional, so a job tests for the
+          # directory rather than trusting the variable.
+          OS_DIR: ${{ github.workspace }}/os
           SCHEDULE: ${{ github.event.schedule }}
           JOB: ${{ inputs.job }}
         run: pnpm job

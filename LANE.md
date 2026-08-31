@@ -74,6 +74,16 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
 - Every job writes at least one row to `events` — job name, kind, detail JSON.
   A job that did nothing writes a `skipped` event saying why.
 - `DRY_RUN` defaults to on everywhere. A job must opt into side effects.
+- `~/os` reaches the runner as a git clone, not a vendored copy — decided
+  2026-08-31. `clock.yml` will check out `bcn-services/bcns-os` to `$OS_DIR`,
+  gated on the `OS_REPO` variable. **Not wired yet:** the repo is private and
+  the `bcn-services` org has deploy keys disabled, so it needs a fine-grained
+  PAT as `OS_TOKEN` that only a human can mint. Until then `$OS_DIR` is absent.
+  Every job that wants it tests for the directory and degrades — a missing
+  `~/os` is a `skipped` event, never a throw.
+- The Claude Code CLI is installed by `clock.yml`. `lib/claude.mjs` shells out
+  to a `claude` binary that `ubuntu-latest` does not ship, so items 9, 10 and 12
+  all fail on a runner without that step.
 
 ---
 
@@ -304,8 +314,9 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
     business that fills the single generated sentence in the template held in
     `~/os/skills/outreach/SKILL.md` (copy the template into `lib/template.mjs`; the
     skill is the authoring source, this repo is the runtime copy). The voice
-    reference is `knowledge/library/bcns-voice/nate-emails.md`, present on the
-    runner only if `~/os` is cloned — fall back to the fixed blocks alone. Write
+    reference is `$OS_DIR/knowledge/library/bcns-voice/voice-rules.md`, present
+    only when the `~/os` clone step ran — fall back to the fixed blocks alone.
+    Never `nate-emails.md`: it is gitignored and reaches no runner, ever. Write
     the result to `research.draft` and stage `drafted`, keeping a buffer of at
     most 25 drafts ahead of the sender. No demo, no link, no attachment.
   guardrails:
@@ -458,9 +469,6 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
 - What the fit judgement from qualification is actually used for; it is recorded
   and acted on in no item — revisit after the sender item, when `fit=false` rows
   would otherwise be mailed
-- How `~/os` reaches the runner for the `/pitch` and `/quote` calls (clone step
-  in `clock.yml` with a deploy key, or vendored copies of the two skills) —
-  revisit at the notification item
 
 ## Out of scope
 
