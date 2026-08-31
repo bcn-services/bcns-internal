@@ -50,6 +50,9 @@ test('the dispatcher maps each cron to its job', () => {
   assert.equal(jobName({ schedule: '0 14 * * 1-5' }), 'touch')
   assert.equal(jobName({ schedule: '0 13 * * 1' }), 'source')
   assert.equal(Object.keys(SCHEDULES).length, 3)
+  // The 20-minute tick is a chain: poll reads the inbox, notify reports on what
+  // poll left behind, in that order.
+  assert.deepEqual(jobNames({ schedule: '*/20 8-20 * * 1-5' }), ['poll', 'notify'])
 })
 
 test('a dispatch input overrides the schedule, and an unknown name throws', () => {
@@ -122,7 +125,7 @@ test('authcheck reports the os clone without depending on it', async () => {
 test('a job that is not built yet is skipped, not a failure', async () => {
   const { main } = await import('../jobs/run.mjs')
   const notFound = Object.assign(new Error('nope'), { code: 'ERR_MODULE_NOT_FOUND' })
-  const out = await main({ SCHEDULE: '*/20 8-20 * * 1-5' }, async () => { throw notFound })
+  const out = await main({ JOB: 'poll' }, async () => { throw notFound })
   assert.deepEqual(out, { skipped: 'not-built', job: 'poll' })
 })
 
