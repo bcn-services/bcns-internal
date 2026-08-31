@@ -1,8 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { toMessage } from '../jobs/run.mjs'
 import {
   run as poll,
+  isOptOutMessage,
+  OPT_OUT_PATTERNS,
   stripQuoted,
   isOptOut,
   isAutoReply,
@@ -100,7 +103,7 @@ function harness({
       markSeen: async (uid) => seen.push(uid),
       close: async () => {},
     }),
-    claude: { ask: classify },
+    claude: classify === null ? null : { ask: classify },
     notify: async (m) => forwards.push(m),
     allowedRecipients: allowed,
     dryRun,
@@ -567,13 +570,13 @@ test('qa: a bare "> stop" quote line at the foot of a friendly reply does not su
 })
 
 test('qa: the classifier is the backstop when the regex misses the phrasing', async () => {
-  // "we don't want any more emails" is NOT in OPT_OUT_PATTERNS today; the
-  // second pass must still suppress it. If this ever goes red the phrasing
-  // has no line of defence left at all.
-  assert.equal(isOptOut("we don't want any more emails"), false)
+  // "kindly refrain from further correspondence" is NOT in OPT_OUT_PATTERNS
+  // today; the second pass must still suppress it. If this ever goes red the
+  // phrasing has no line of defence left at all.
+  assert.equal(isOptOut('Kindly refrain from further correspondence'), false)
 
   const h = harness({
-    messages: [msg({ text: "Thanks, but we don't want any more emails." })],
+    messages: [msg({ text: 'Kindly refrain from further correspondence.' })],
     classify: async () => 'opt_out',
   })
 
@@ -676,4 +679,172 @@ test('qa: a prospect opt-out with no thread is forwarded and suppresses nothing 
   assert.deepEqual(h.suppressions, [])
   assert.deepEqual(h.updates, [])
   assert.equal(result.forwarded, 1)
+})
+
+// --- review fixes ----------------------------------------------------------
+// Every test below pins a fix from review-report.md and fails if it regresses.
+
+// CRITICAL — an html-only multipart/related reply (an Outlook or Gmail reply
+// carrying an inline image) arrives from mailparser with NO `text` field. The
+// fixtures above all supply one, which is exactly how this hid.
+const htmlOnly = (html, over = {}) =>
+  toMessage(
+    {
+      from: { value: [{ address: 'dana@acmeroofing.example' }] },
+      subject: 'Re: a question about Acme Roofing',
+      html,
+      inReplyTo: FIRST_ID,
+      references: [],
+      headers: new Map([['delivered-to', OUTREACH]]),
+      ...over,
+    },
+    7
+  )
+
+test('review: an html-only reply with no text part still suppresses on an opt-out', async () => {
+  const message = htmlOnly('<div>Hi Nate,</div><div>Please remove from your list.</div><img src="cid:sig">')
+  assert.equal(message.text.includes('Please remove from your list'), true)
+
+  const h = harness({ messages: [message] })
+
+  const result = await poll(h.deps)
+
+  assert.equal(h.store.get('b1').suppressed_at instanceof Date, true)
+  assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'reply opt-out' }])
+  assert.equal(result.suppressed, 1)
+  assert.deepEqual(h.updates, [])
+})
+
+test('review: an html-only reply whose body reads empty is forwarded, never classified', async () => {
+  const h = harness({
+    messages: [htmlOnly('<img src="cid:signature">')],
+    classify: async () => {
+      throw new Error('the classifier must not be reached for an unreadable body')
+    },
+  })
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.forwarded, 1)
+  assert.deepEqual(h.updates, [])
+  assert.deepEqual(h.suppressions, [])
+  assert.equal(h.store.get('b1').stage, 'sent')
+  assert.equal(
+    h.events.some((e) => e.kind === 'forwarded' && /body is empty/.test(e.detail.reason)),
+    true
+  )
+})
+
+test('review: a subject-only UNSUBSCRIBE suppresses', async () => {
+  assert.equal(isOptOutMessage({ subject: 'UNSUBSCRIBE', text: 'Sent from my iPhone' }), true)
+  assert.equal(isOptOutMessage({ subject: 'Re: a question', text: 'sure, call me' }), false)
+
+  const h = harness({ messages: [msg({ subject: 'Re: a question about Acme Roofing - UNSUBSCRIBE', text: 'Sent from my iPhone' })] })
+
+  const result = await poll(h.deps)
+
+  assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'reply opt-out' }])
+  assert.equal(result.suppressed, 1)
+})
+
+test('review: the five measured recall gaps now match on the keyword pass', async () => {
+  const phrasings = [
+    "we don't want any more emails",
+    'Please remove this email address from your distribution',
+    'Please remove from your list',
+    'Please cease all communication',
+    'Please do not send us anything further',
+  ]
+  for (const p of phrasings) assert.equal(isOptOut(p), true, p)
+
+  // ...and a benign reply is still not an opt-out, so recall did not eat precision.
+  assert.equal(isOptOut('Sounds interesting, can you send times? Please send more info.'), false)
+  assert.equal(OPT_OUT_PATTERNS.length, 21)
+
+  for (const text of phrasings) {
+    const h = harness({ messages: [msg({ text })], classify: async () => 'interested' })
+
+    await poll(h.deps)
+
+    assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'reply opt-out' }], text)
+    assert.deepEqual(h.updates, [], text)
+  }
+})
+
+test('review: with no classifier the job says so and forwards the reply for a human', async () => {
+  const h = harness({ messages: [msg()], classify: null })
+
+  const result = await poll(h.deps)
+
+  assert.equal(
+    h.events.some((e) => e.kind === 'degraded' && /no classifier/.test(e.detail.reason)),
+    true
+  )
+  assert.equal(result.forwarded, 1)
+  assert.equal(h.forwards.length, 2)
+})
+
+test('review: an empty allow-list logs an error, not a forward nobody receives', async () => {
+  const h = harness({
+    messages: [msg({ inReplyTo: '<unknown@x>', references: '', text: 'unsubscribe' })],
+    allowed: [],
+  })
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.forwarded, 0)
+  assert.equal(result.errors, 1)
+  assert.equal(h.forwards.length, 0)
+  assert.equal(
+    h.events.some((e) => e.kind === 'error' && e.detail.reason === 'no allow-listed recipient'),
+    true
+  )
+  assert.equal(h.events.some((e) => e.kind === 'forwarded'), false)
+})
+
+test('review: a message is marked seen before it is handled, so a crash cannot loop it', async () => {
+  const h = harness({ messages: [msg()] })
+  h.deps.db.businessById = async () => {
+    throw new Error('db is down mid-handle')
+  }
+
+  const result = await poll(h.deps)
+
+  assert.deepEqual(h.seen, [7])
+  assert.equal(result.errors, 1)
+})
+
+test('review: a bare local-part Delivered-To takes no privileged path', async () => {
+  const h = harness({
+    messages: [msg({ deliveredTo: 'bot@anything.example', from: 'bchung@bcn-services.com', text: 'won 2400' })],
+    rows: [biz({ stage: 'call_due' })],
+  })
+
+  const result = await poll(h.deps)
+
+  assert.equal(h.store.get('b1').stage, 'call_due')
+  assert.deepEqual(h.updates, [])
+  assert.equal(result.commands, 0)
+  assert.equal(result.forwarded, 1)
+})
+
+test('review: a forward nobody accepted is not counted as delivered', async () => {
+  const h = harness({ messages: [msg({ inReplyTo: '<unknown@x>', references: '' })] })
+  h.deps.notify = async () => {
+    throw new Error('smtp is down')
+  }
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.forwarded, 0)
+  assert.equal(result.errors, 2) // one per allow-listed human
+})
+
+test('review: the same note re-processed twice is stored once', async () => {
+  const note = teammate({ text: 'notes: called, left a voicemail' })
+  const h = harness({ messages: [note, { ...note, uid: 8 }] })
+
+  await poll(h.deps)
+
+  assert.deepEqual(JSON.parse(h.store.get('b1').research).notes, ['called, left a voicemail'])
 })

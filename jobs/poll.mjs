@@ -74,11 +74,25 @@ export const OPT_OUT_PATTERNS = [
   /\bdo not (?:wish|want) to (?:receive|be contacted|hear)/i,
   /^[ \t]*(?:please[ \t]+)?stop\b[^\n]{0,30}$/im, // a line that is just "STOP"
   /\bstop\b[^\n]{0,25}\b(?:list|e-?mails?)\b/i,
+  // Measured recall gaps: "remove this email address from your distribution",
+  // "remove from your list", "cease all communication", "we don't want any more
+  // emails", "do not send us anything further".
+  /\bremove\b[^\n]{0,40}\b(?:list|distribution|database|mailing)/i,
+  /\bcease\b[^\n]{0,20}\b(?:communication|contact)/i,
+  /\bdo ?n[o']?t (?:want|need)\b[^\n]{0,25}\b(?:e-?mails?|contact)/i,
+  /\b(?:do ?n[o']?t) send\b[^\n]{0,25}\b(?:anything|any)\b[^\n]{0,15}\b(?:further|more|else)/i,
 ]
 
 export function isOptOut(text) {
   const clean = stripQuoted(text)
   return OPT_OUT_PATTERNS.some((re) => re.test(clean))
+}
+
+// A subject-only "UNSUBSCRIBE" is an opt-out too — the subject is unquoted by
+// construction, so it is read alongside the stripped body, the same way
+// `isAutoReply` already reads it.
+export function isOptOutMessage(message = {}) {
+  return isOptOut(`${message.subject ?? ''}\n${message.text ?? ''}`)
 }
 
 // --- auto-replies ----------------------------------------------------------
@@ -234,8 +248,22 @@ export async function run({
   // A forward is a record first and an email second: if SMTP is down the human
   // still has the event, and nothing is silently dropped.
   const forward = async (message, reason, extra = {}) => {
-    result.forwarded++
+    if (!allowedRecipients.length) {
+      // Nobody to forward to is a failure, not a forward: an unmatched opt-out
+      // would otherwise be counted as delivered and reach no human at all.
+      result.errors++
+      await log('error', {
+        stage: 'forward',
+        reason: 'no allow-listed recipient',
+        forward_reason: reason,
+        from: message.from,
+        subject: message.subject,
+        ...extra,
+      })
+      return
+    }
     await log('forwarded', { reason, from: message.from, subject: message.subject, ...extra })
+    let delivered = false
     for (const to of allowedRecipients) {
       try {
         await send({
@@ -243,11 +271,13 @@ export async function run({
           subject: `[pipeline] needs a human: ${message.subject ?? '(no subject)'}`,
           text: `Forwarded because: ${reason}\n\nFrom: ${message.from}\nDelivered-To: ${message.deliveredTo}\n\n${stripQuoted(message.text)}`,
         })
+        delivered = true
       } catch (err) {
         result.errors++
         await log('error', { stage: 'forward', to, error: String(err?.message ?? err) })
       }
     }
+    if (delivered) result.forwarded++
   }
 
   const client = await imap()
@@ -267,16 +297,21 @@ export async function run({
         const [thread] = ids.length ? ((await db.threadByMessageIds(sql, ids)) ?? []) : []
         const businessId = thread?.business_id ?? null
 
-        const local = to.split('@')[0]
-        if (to === addr(botAddress) || local === addr(botAddress).split('@')[0]) {
+        // Seen BEFORE handling: a second poller overlapping this tick must not
+        // re-forward and re-append the same message. The cost is that a crash
+        // mid-handle drops the message, which the `error` event still records.
+        if (!dryRun) await client.markSeen?.(message.uid)
+
+        // Full addresses only. A bare local-part match let
+        // `bot@anything.example` take the teammate path; anything unrecognised
+        // now falls through to a human.
+        if (to === addr(botAddress)) {
           await handleTeammate({ message, businessId })
-        } else if (to === addr(outreachAddress) || local === addr(outreachAddress).split('@')[0]) {
+        } else if (to === addr(outreachAddress)) {
           await handleProspect({ message, businessId })
         } else {
           await forward(message, 'unrecognised Delivered-To', { delivered_to: to })
         }
-
-        if (!dryRun) await client.markSeen?.(message.uid)
       } catch (err) {
         result.errors++
         await log('error', { uid: message?.uid, error: String(err?.message ?? err) })
@@ -294,7 +329,7 @@ export async function run({
 
     // FIRST, and committed before anything that can fail. The classifier is not
     // constructed, called or trusted until this has already run.
-    if (isOptOut(message.text)) {
+    if (isOptOutMessage(message)) {
       result.suppressed++
       if (!dryRun) await db.suppress(sql, businessId, 'reply opt-out')
       await log(dryRun ? 'would_suppress' : 'suppressed', { business: businessId, by: 'keyword' })
@@ -309,15 +344,28 @@ export async function run({
       return
     }
 
+    const body = stripQuoted(message.text)
+    // An empty body is not a classifiable reply — it is an html part we could
+    // not read, or an attachment-only message. Never guessed at.
+    if (!body) {
+      await forward(message, 'reply body is empty — read this one by hand', { business: businessId })
+      return
+    }
+
     let category = 'other'
     if (claude) {
       try {
-        category = readCategory(await claude.ask(classifyPrompt(stripQuoted(message.text))))
+        category = readCategory(await claude.ask(classifyPrompt(body)))
       } catch (err) {
         // A dead classifier is not a reason to lose the reply.
         await log('error', { stage: 'classify', business: businessId, error: String(err?.message ?? err) })
         await forward(message, 'classifier failed — read this one by hand', { business: businessId })
       }
+    } else {
+      // Without a classifier the regex is the only opt-out defence. Say so, and
+      // put every reply in front of a human rather than filing it silently.
+      await log('degraded', { business: businessId, reason: 'no classifier — keyword opt-out is the only defence' })
+      await forward(message, 'no classifier configured — read this one by hand', { business: businessId })
     }
 
     if (category === 'opt_out') {
@@ -379,7 +427,7 @@ export async function run({
       const research = parseResearch(row.research)
       patch.research = JSON.stringify({
         ...research,
-        notes: [...(research.notes ?? []), cmd.notes].filter(Boolean),
+        notes: [...new Set([...(research.notes ?? []), cmd.notes])].filter(Boolean),
       })
     }
 

@@ -145,6 +145,63 @@ export async function buildDeps(env = process.env) {
   return deps
 }
 
+// mailparser only html→text converts when the html node is the root or a
+// text/plain part exists, so an html-only `multipart/related` reply (an Outlook
+// or Gmail reply carrying an inline image) arrives with `parsed.text ===
+// undefined`. An empty body reads as "not an opt-out", which is precisely the
+// invisible false negative this pipeline cannot afford, so the text is derived
+// from the html here instead. No new dependency: html-to-text is only a
+// mailparser transitive and importing it directly would make it undeclared.
+const BLOCK = /<\/?(?:br|p|div|tr|li|h[1-6]|table|blockquote)\b[^>]*>/gi
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#160': ' ' }
+
+export function htmlToText(html) {
+  return String(html ?? '')
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(BLOCK, '\n')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (m, e) => ENTITIES[e.toLowerCase()] ?? m)
+    .replace(/[ \t\u00a0]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+// The plain object the poller sees. Pure, so the html-only case is testable
+// without a mailbox.
+export function toMessage(parsed, uid, header) {
+  const get = header ?? ((name) => {
+    const v = parsed.headers?.get?.(name)
+    return Array.isArray(v) ? v[0] : v
+  })
+  return {
+    uid,
+    from: parsed.from?.value?.[0]?.address ?? '',
+    deliveredTo: String(get('delivered-to') ?? get('x-original-to') ?? ''),
+    subject: parsed.subject ?? '',
+    text: parsed.text || htmlToText(parsed.html),
+    inReplyTo: parsed.inReplyTo ?? '',
+    references: [parsed.references ?? []].flat().join(' '),
+    headers: Object.fromEntries(
+      ['auto-submitted', 'x-autoreply', 'x-autorespond'].map((n) => [n, String(get(n) ?? '')])
+    ),
+  }
+}
+
+// One tick is bounded: an unbounded drain can outrun the 20-minute cron and let
+// two pollers work the same backlog. The remainder waits for the next tick.
+export const MAX_MESSAGES_PER_TICK = 100
+
+export async function drainMessages(source, parse, limit = MAX_MESSAGES_PER_TICK) {
+  const out = []
+  for await (const msg of source) {
+    out.push(toMessage(await parse(msg.source), msg.uid))
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 // The IMAP boundary, kept as thin as it can be: connect, hand back plain
 // objects, close. Everything downstream of this is a pure function of those
 // objects, which is what lets the poller be tested without a mailbox.
@@ -162,31 +219,16 @@ export function createImap({ host, port, user, pass, mailbox }) {
       logger: false,
     })
     await client.connect()
-    const lock = await client.getMailboxLock(mailbox)
+    let lock
+    try {
+      lock = await client.getMailboxLock(mailbox)
+    } catch (err) {
+      await client.logout()
+      throw err
+    }
     return {
-      async messages() {
-        const out = []
-        for await (const msg of client.fetch({ seen: false }, { uid: true, source: true })) {
-          const parsed = await simpleParser(msg.source)
-          const header = (name) => {
-            const v = parsed.headers.get(name)
-            return Array.isArray(v) ? v[0] : v
-          }
-          out.push({
-            uid: msg.uid,
-            from: parsed.from?.value?.[0]?.address ?? '',
-            deliveredTo: String(header('delivered-to') ?? header('x-original-to') ?? ''),
-            subject: parsed.subject ?? '',
-            text: parsed.text ?? '',
-            inReplyTo: parsed.inReplyTo ?? '',
-            references: [parsed.references ?? []].flat().join(' '),
-            headers: Object.fromEntries(
-              ['auto-submitted', 'x-autoreply', 'x-autorespond'].map((n) => [n, String(header(n) ?? '')])
-            ),
-          })
-        }
-        return out
-      },
+      messages: () =>
+        drainMessages(client.fetch({ seen: false }, { uid: true, source: true }), simpleParser),
       markSeen: (uid) => client.messageFlagsAdd({ uid: String(uid) }, ['\\Seen'], { uid: true }),
       async close() {
         lock.release()
