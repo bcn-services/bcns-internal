@@ -1,20 +1,31 @@
-# bcns Outreach Pipeline — First Draft
+# bcns Outreach Pipeline
 
 Rebuilds this repo from a paused Next.js app into a headless jobs runner for the
-two-mailbox cold-outreach pipeline. Full reasoning, diagrams, and phase
-sequencing live in the plan artifact — this file is the executable subset.
+cold-outreach pipeline. This file is the contract; the "Pipeline Wiring"
+artifact (2026-08-30) is the explanation. Older artifacts are superseded.
 
-The repo is currently on hold (`HOLD.md`). Nothing connects to Supabase, CI is
-disabled, and no process anywhere references it. That is the intended starting
-state: this round strips the app and builds the pipeline's foundation.
+**Status 2026-08-30:** items 1–6 are on `main`; item 7 is on `outreach-pipeline`,
+one commit ahead, unmerged. Migrations 0017/0018 are applied to production. The
+clock fires and `authcheck` is green. Nothing else has run live: `run.mjs`
+injects only `sql, db, logEvent, loadCells, saveCell, dryRun`, so `source`
+no-ops on a missing budget reader and `qualify` is in no schedule at all.
 
-**Scope of this round:** everything above the stop marker. Leads flow from Google
-Places into the database, get qualified with an email address discovered, and the
-clock that will drive everything is standing and tested. Sending, polling, and
-reply parsing are below the marker and are not touched.
+**Scope of this round:** items above the stop marker were the autonomous run.
+Everything below it is the same pipeline, continued by hand or by a restarted
+run once Nate moves the marker.
 
-Repo context: `CLAUDE.md` at root (rewritten by item 1 — the current one is the
-stale client-app template and describes nothing in this repo).
+**Mail architecture (decided 2026-08-30, supersedes "two mailboxes"):** one
+Google Workspace seat — Nate's — with two aliases. `outreach@send.bcn-services.com`
+is the send-as address for cold mail (DKIM signs as `send.`, DNS live).
+`bot@bcn-services.com` receives Brandon's replies and sends internal notices. A
+Gmail filter labels every reply `pipeline`. One app password on Nate's account
+is both `SMTP_PASS` and `IMAP_PASS`. Trade-off accepted: a reputation strike
+lands on Nate's account; mitigated by `NOTIFY_ALLOWED_RECIPIENTS`, the warming
+ramp, and a per-mailbox cap. The `mailboxes` table already abstracts the sender,
+so moving `outreach@send` to a non-Google host (Zoho, ~$1/mo) later is a row
+change, not a rewrite. No second Google seat.
+
+Repo context: `CLAUDE.md` at root.
 
 ## Global rules — apply to every item
 
@@ -32,7 +43,8 @@ stale client-app template and describes nothing in this repo).
   website. Every external dependency is injected and faked in tests.
 - Reading or rewriting the values in `.env.local`. The file stays as-is.
 - `DROP` or `DELETE FROM` against any live database, force-push, history rewrite,
-  or any commit to `main`.
+  or any commit to `main`. (Nate merges to `main` by hand — GitHub only honours
+  `workflow_dispatch` and cron on the default branch.)
 - Deleting anything under `supabase/migrations/`. The history is the only record
   of the live schema.
 
@@ -84,7 +96,6 @@ stale client-app template and describes nothing in this repo).
     - `pnpm test` runs the placeholder smoke test and exits zero
     - `git log --stat` shows zero changes under `supabase/migrations/`
     - No file outside `node_modules` imports `next`, `react`, or `@supabase/ssr`
-  caution: true
   status: done
 
 - task: Author the two schema migrations as files. `0017_reset.sql` drops the
@@ -119,7 +130,6 @@ stale client-app template and describes nothing in this repo).
       `storage` schemas
     - Both files are valid SQL as judged by a parse that rejects unbalanced
       parentheses and unterminated statements
-  caution: true
   status: done
 
 - task: Build `lib/db.mjs`, the only module in the repo that writes SQL. It
@@ -231,10 +241,7 @@ stale client-app template and describes nothing in this repo).
       `call_due` with its `phone` value unchanged and its `email` still null
     - A unit test asserts a fetch that throws leaves the row at stage `sourced`
       and writes one `error` event naming the business
-  caution: true
   status: done
-
-> **⚠️ AUTONOMOUS RUN — STOP HERE**
 
 - task: Verify discovered email addresses before any of them are ever mailed — MX
     lookup plus an SMTP `RCPT TO` probe that disconnects without sending, with the
@@ -247,70 +254,193 @@ stale client-app template and describes nothing in this repo).
     - A unit test asserts the probe issues `RCPT TO` and then `QUIT`, never `DATA`
   status: done
 
-- task: Build personalization — the single Claude call that produces the cold
-    email copy and the demo slot values together, using hand-written example emails
-    as the voice reference, keeping a buffer of ready-to-send drafts.
+- task: Wire sourcing to the real world. Add `lib/places.mjs` — a Places API
+    (New) text-search client that takes the Workload Identity access token from
+    `GOOGLE_OAUTH_ACCESS_TOKEN` (no API key) and exposes `search(query)` returning
+    `{place_id, name, phone, website, address, rating, review_count}` rows — and
+    `lib/budget.mjs`, a `readBudget()` that ports `~/os/skills/leads/places.py
+    budget` (Cloud Billing / usage read for the month). Inject both from
+    `jobs/run.mjs` so the Monday cron actually runs `source`.
+  guardrails:
+    - No Places API key anywhere; the token comes from the auth step or the job skips
+    - The unit tests still never touch the network — the HTTP `fetch` is a parameter
+  done when:
+    - A unit test with a fake `fetch` asserts `search` builds a Places API (New)
+      text-search request carrying the bearer token and the field mask, and maps
+      the response to the row shape above
+    - A unit test asserts `readBudget` returns `{remaining, month}` from a fake
+      billing response and throws (never returns a number) on a malformed one
+    - `run.mjs`'s deps object carries `places` and `readBudget` when the token is
+      present, asserted by a test that builds deps with a fake env
+  status: not started
+
+- task: Wire qualification into the clock. Add `qualify` to `SCHEDULES` under the
+    Monday cron, run after `source` in the same tick, and inject `fetchPage`
+    (a capped `fetch` wrapper) and `claude` (from `lib/claude.mjs`) from
+    `jobs/run.mjs`. Then run `verify` (item 7) over each newly qualified row in the
+    same job and move a row whose address fails to `call_due`.
+  guardrails:
+    - `qualify` never runs without both deps present — a missing one is a `skipped`
+      event, not a throw
+    - `claude` is only ever the Claude Code CLI on the OAuth token; no API key
+  done when:
+    - A test asserts the Monday cron string maps to `source` then `qualify`, in order
+    - A unit test asserts a row whose verify result is `invalid` lands at `call_due`
+      with `email` cleared and `phone` intact, and a `unknown` result leaves the row
+      `qualified`
+    - Existing passing tests remain passing
+  status: not started
+
+- task: Build personalization — `jobs/personalize.mjs`, one Claude call per
+    business that fills the single generated sentence in the template held in
+    `~/os/skills/outreach/SKILL.md` (copy the template into `lib/template.mjs`; the
+    skill is the authoring source, this repo is the runtime copy). The voice
+    reference is `knowledge/library/bcns-voice/nate-emails.md`, present on the
+    runner only if `~/os` is cloned — fall back to the fixed blocks alone. Write
+    the result to `research.draft` and stage `drafted`, keeping a buffer of at
+    most 25 drafts ahead of the sender. No demo, no link, no attachment.
   guardrails:
     - One Claude call per business, never a generation call plus a humanizer pass
-    - Every factual claim in the email traces to a field in `research`
+    - Every claim in the generated sentence traces to a field in `research`
+    - The fixed blocks of the template are byte-identical in every draft; only the
+      generated sentence and the slots vary
+    - Never emit a URL, a price, a named competitor, or a demo claim
   done when:
     - A unit test asserts one Claude call per business
     - A unit test asserts a business with fewer than three `research` facts is
       skipped rather than written with thin copy
+    - A unit test asserts a draft containing `http`, `$`, or `demo is ready` is
+      rejected and an `error` event written
+    - A unit test asserts the buffer stops at 25 undelivered drafts
   status: not started
 
-- task: Build the sender — round-robin across `mailboxes` rows with remaining
-    daily capacity, per-mailbox warming ramp, jittered send times.
+- task: Build the sender — `jobs/touch.mjs` on the 14:00 weekday cron. Each run
+    picks rows due today: first sends from the `drafted` buffer, and bumps where
+    `next_touch_at` has passed. Round-robin across `mailboxes` rows with remaining
+    daily capacity, per-mailbox warming ramp from `warmed_at`, jittered send times
+    over the hour. A send sets `stage=sent`, `touches+=1`, `next_touch_at=+7d`,
+    and records the thread. Bumps reply in the same thread (`In-Reply-To`), under
+    40 words, no new argument. After the second bump with no reply the row moves to
+    `call_due`. SMTP as `outreach@send.bcn-services.com` via `SMTP_PASS`.
   guardrails:
     - A mailbox at its `daily_cap` is never selected, and the cap is never exceeded
       by a concurrent run
     - The thread row and the counter update commit in the same transaction as the send
+    - Never send to a row with `suppressed_at`, a row that has replied, or an
+      address outside `NOTIFY_ALLOWED_RECIPIENTS` while `DRY_RUN` is on
+    - Exactly two bumps; a third touch is a `call_due` transition, never a send
   done when:
     - A unit test asserts a mailbox at capacity is skipped and the next is chosen
     - A unit test asserts the warming ramp yields the per-mailbox cap for a given
       `warmed_at` age
+    - A unit test asserts a row at `touches=3` with no reply lands at `call_due`
+      and no SMTP command is issued for it
+    - A unit test asserts a bump carries `In-Reply-To` of the first message
   status: not started
 
-- task: Build the poller and the reply parser — IMAP over the `pipeline` label,
-    thread mapping by `In-Reply-To` then `References`, routing by `Delivered-To`,
-    with suppression checked before any other branch.
+- task: Build the poller and the reply parser — `jobs/poll.mjs` on the 20-minute
+    cron, IMAP over the `pipeline` label via `IMAP_PASS`, thread mapping by
+    `In-Reply-To` then `References`, routing by `Delivered-To`. Prospect replies
+    (to `outreach@send`): suppression checked first, then one Claude call
+    classifies; any non-opt-out reply sets `stage=replied` and stops the sequence.
+    Teammate replies (to `bot@`, from an address in `NOTIFY_ALLOWED_RECIPIENTS`):
+    parse the first line as a command — `yes`, `no`, `no answer`, `stop`,
+    `won <amount>`, `notes` — and apply it to the business the thread maps to.
+    Strip quoted regions before any keyword match.
   guardrails:
     - Opt-out detection runs and commits before classification, always
-    - An unmatched message is forwarded for a human to read, never guessed at
+    - A command is only honoured from an allow-listed sender; anything else on
+      `bot@` is forwarded for a human, never guessed at
+    - An unmatched prospect message is forwarded for a human to read, never guessed at
   done when:
     - A unit test asserts a message containing opt-out intent sets `suppressed_at`
       even when classification throws
     - A unit test asserts an out-of-office reply changes no stage
+    - A unit test asserts `Reply "stop"` inside a quoted region does not suppress
+    - A unit test asserts `won 2400` from an allow-listed sender sets `stage=won`
+      and the same line from an unknown sender changes nothing
+  caution: true
   status: not started
 
-- task: Build the four notification emails — batch approval, call task, meeting,
-    and quote handoff.
+- task: Build the notification emails — `jobs/notify.mjs`, run at the end of each
+    `poll` tick, sending as `bot@bcn-services.com` to Nate and Brandon only: batch
+    approval (tomorrow's drafts, reply `yes`/`no`), call task (a `call_due` row
+    with phone, facts, and the `/pitch` script when `~/os` is available), meeting
+    (a `replied` row with the thread), and quote handoff (a `quoting` row with
+    Brandon's notes). Each row is notified once per stage; the send is recorded
+    in `events`.
+  guardrails:
+    - Recipients are only ever `NOTIFY_ALLOWED_RECIPIENTS`; a prospect address is
+      never a notify recipient
+    - Notify never changes a business's stage — it reads what `poll` and `touch`
+      wrote
+  done when:
+    - A unit test asserts a `call_due` row produces exactly one call-task email
+      across two consecutive runs
+    - A unit test asserts an email addressed to any address outside the allow-list
+      is refused before SMTP is opened
+    - A unit test asserts the four templates render with the row fields and none
+      contains a prospect email address as a recipient
+  status: not started
+
+> **⚠️ AUTONOMOUS RUN — STOP HERE**
+
+- task: Build the quote handoff — when `poll` receives `notes` from Brandon for a
+    business at `call_due` or `replied`, save the body to `research.notes`, set
+    `stage=quoting`, and run `claude -p "/quote --notes <file> <slug>"` with `~/os`
+    cloned into the runner, then email Brandon the draft plus its open questions
+    from `bot@`. Nate is cc'd.
+  guardrails:
+    - The quote is a draft for review; nothing here sends anything to the prospect
+    - Depends on `/quote` growing a headless `--notes` mode in `~/os` (see Out of
+      scope); until then the job writes the notes and emails them back with a
+      `skipped` event
+  done when:
+    - A unit test asserts `notes` on a `call_due` row sets `quoting` and stores the
+      body, and on a `sourced` row is refused with an `error` event
+    - A unit test asserts the handoff email goes only to allow-listed recipients
+      and carries the notes verbatim
   status: not started
 
 - task: Build alert triage — `alerts@` messages become draft pull requests,
     never merges, capped at three triage runs per day.
   guardrails:
     - Never push to `main` and never merge a pull request
+  done when:
+    - A unit test asserts a fourth alert in one day writes a `skipped` event and
+      opens nothing
+    - A unit test asserts the same `fingerprint` twice increments `hits` and opens
+      one PR, not two
   status: not started
 
 ---
 
 ## Not yet specified
 
-- Whether the demo template is one layout with swapped content or a small set
-  chosen by trade — revisit after the personalization item, when real output
-  exists to judge
 - How `search_grid` gets seeded beyond the initial Connecticut and Rhode Island
   towns — revisit once one real sourcing run shows the duplicate rate
 - What the fit judgement from qualification is actually used for; it is recorded
-  this round and acted on in no item
+  and acted on in no item — revisit after the sender item, when `fit=false` rows
+  would otherwise be mailed
+- How `~/os` reaches the runner for the `/pitch` and `/quote` calls (clone step
+  in `clock.yml` with a deploy key, or vendored copies of the two skills) —
+  revisit at the notification item
 
 ## Out of scope
 
+- A demo link or attachment in cold mail, and a `demos.bcn-services.com` host —
+  decided against 2026-08-30 in `~/os/skills/outreach`; `/pitch` builds the demo
+  after a reply
+- Won → `/new-client-repo` + `/intake` automation (Nate's step 7) — deferred; the
+  quote handoff ends with Brandon holding a draft and Nate cc'd
+- `~/os` skill changes this pipeline needs: `/quote --notes <file>` headless
+  mode; `/pitch` resolving a lead from Postgres (or a JSON row) instead of the
+  Sheet — they are `~/os` work, not this repo's
 - Retiring the Google Sheet funnel and porting `sheets.py stats` onto SQL —
   agreed, but it is `~/os` work, not this repo's
 - Google Workspace aliases, DNS records, GitHub secrets, Workload Identity
   Federation, and applying migrations — all require a human at a console
-- Multiple sending domains and mailboxes — the schema supports it from day one
-  with a single seeded row; buying and warming them is a later, funded decision
+- A second Google seat, or a separate mailbox for `outreach@send` — the schema
+  supports more mailboxes with a single seeded row; moving off Google is a later,
+  funded decision driven by Postmaster reputation
 - Any web interface. This repo has no server in it after item 1

@@ -4,11 +4,12 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
-- Status: items 1-7 of 12 done and MERGED TO MAIN (Nate overrode the no-main rule so workflow_dispatch would work). Migrations 0017/0018 applied to production. The clock is live and proven: authcheck and poll both pass on main, CI re-enabled and green. Autonomous stop marker sits after item 6.
-- Next: items 8, 9, 10, 11, 12 remain, plus the real Places client and budget reader (jobs/source.mjs still has no live ones). Item 12 (alert triage) needs nothing from Nate and is the next buildable one.
-- Blocked on Nate: 3-5 example emails (item 8); and for items 9/10/11, the mailbox outreach@send.bcn-services.com must be created in Google Admin and given its own app password. An app password made under Nate's own account would send cold mail as him and is the wrong credential.
-- Live-system note: the crons are firing. poll and touch do not exist yet and are skipped cleanly rather than failing; source will skip on missing deps. Nothing sends.
-- Last updated: 2026-08-30
+- Status: items 1-6 of 15 done and on `main` (Nate overrode the no-main rule so workflow_dispatch would work). Item 7 is done on `outreach-pipeline`, one commit ahead of `main`, not yet merged. Migrations 0017/0018 applied to production. The clock fires and `authcheck` is green. 75 tests pass. Autonomous stop marker sits after item 6. LANE.md was re-scoped 2026-08-30: two wiring items added (8, 9), the demo removed from personalization, Brandon's reply commands added to the poller, a quote-handoff item added (14).
+- Next: merge item 7 to `main`, then item 8 (real Places client + budget reader) — nothing downstream has rows until it runs. Then 9, 10, 11, 12, 13, 14, 15 in order.
+- Blocked on Nate (mail state verified 2026-08-31 in the work Chrome profile): `outreach@send.bcn-services.com` is a verified Gmail send-as and MX/SPF/DKIM/DMARC are live on both `bcn-services.com` and `send.bcn-services.com`. Still missing: `bot@bcn-services.com` is NOT a send-as and is unconfirmed as an alias; the `pipeline` filter matches `to:(outreach@send…)` only, so a `bot@` reply is never labelled; no `SMTP_PASS`/`IMAP_PASS` anywhere — absent from `.env.local` and unreferenced by `clock.yml`, which cites only `CLAUDE_CODE_OAUTH_TOKEN`, `DATABASE_URL` and the three GCP vars. So: revoke the leaked app password, confirm/create both aliases, add `bot@` as a send-as, widen the filter to both addresses, mint ONE app password and set it as both secrets (needed from item 11); trimmed Gmail signature for `NATE_SIGNATURE` (item 10). Google Admin and the app-passwords page both demand a password re-auth, so only a human can read or change any of this. The example-emails blocker is cleared — `~/os/knowledge/library/bcns-voice/nate-emails.md` exists.
+- Team sizing revised 2026-08-31: `caution: true` now sits on items 3 and 12 only. Items 1, 2 and 6 lost it retrospectively (already done, no effect on any future run); the stop marker moved to after item 13, so an auto pass covers items 8-13 (the full loop) and leaves 14/15 for later; item 11 lost caution deliberately — the first sends go only to Nate via `NOTIFY_ALLOWED_RECIPIENTS`, and he reviews before any real client is mailed.
+- Live-system note: the crons are firing but nothing does work yet. `poll` and `touch` do not exist and are skipped cleanly; `source` no-ops because `run.mjs` does not inject `places`/`readBudget`; `qualify` is in no schedule. Nothing sends.
+- Last updated: 2026-08-30 (evening reconciliation)
 
 ## Round 2 — outreach pipeline (in progress)
 
@@ -20,12 +21,15 @@ LANE.md wins for scope.
 | 4. Clock workflow + job dispatcher + heartbeat | done — the pipeline now has a clock: GitHub runs it every twenty minutes on weekday daytimes, once each weekday afternoon, and once on Monday mornings, and you can also run any job by hand from the Actions tab. Two runs of the same schedule can never overlap. A weekly dated file gets committed so GitHub never switches the schedule off for inactivity, and a failing job fails the run loudly instead of looking green. A hand-run `authcheck` job proves the keyless Google sign-in works. |
 | 5. Weekly sourcing over a search grid | done — every Monday the pipeline searches one trade-and-town pair from a fixed list of 64 (eight trades across seven Connecticut towns and Providence) and adds the businesses it has not seen before. It checks the Google budget before spending anything and stops rather than guessing if it cannot read it. When a search comes back more than ninety percent already-known businesses the pair is marked used up and never searched again. It cannot search a town or trade that is not on the list. |
 | 6. Qualification — fetch + one Claude call | done — each newly found business gets its website read and summarised into three to five real facts about it, with an email address picked up only if the site actually publishes one. An address the model made up is thrown away: if it does not appear on the page it does not get written, so nobody is mailed at a guessed address. A business with no published address becomes a calling lead with its phone number intact, not a discard. A site that will not load leaves the record exactly as it was and logs the failure. Claude runs through the Claude Code CLI on the existing subscription, so none of this bills the API. |
-| 7. Email verification before any send | done — before any address is ever mailed, the pipeline checks it is real. First it asks whether the domain can receive mail at all; if it cannot, nothing is contacted and no connection is opened. Only a domain that passes gets a short conversation with its mail server, which asks "would you accept mail for this person?" and then hangs up. It can never send a message: the command that begins a message body is blocked in code, and the tests fail if that block is removed. A "maybe" answer — a server that is rate-limiting, or one that accepts everything — is recorded as unknown and never counted as a yes. |
-| 8. Personalization — the cold email itself | skipped — below stop marker |
-| 9. The sender — round-robin across mailboxes | skipped — below stop marker |
-| 10. Poller and reply parser | skipped — below stop marker |
-| 11. The four notification emails | skipped — below stop marker |
-| 12. Alert triage into draft pull requests | skipped — below stop marker |
+| 7. Email verification before any send | done (on `outreach-pipeline`, not yet merged) — before any address is ever mailed, the pipeline checks it is real. First it asks whether the domain can receive mail at all; if it cannot, nothing is contacted and no connection is opened. Only a domain that passes gets a short conversation with its mail server, which asks "would you accept mail for this person?" and then hangs up. It can never send a message: the command that begins a message body is blocked in code, and the tests fail if that block is removed. A "maybe" answer — a server that is rate-limiting, or one that accepts everything — is recorded as unknown and never counted as a yes. |
+| 8. Wire sourcing to the real world — Places client + budget reader | not started |
+| 9. Wire qualification into the clock | not started |
+| 10. Personalization — the cold email itself | not started |
+| 11. The sender — `touch` job, round-robin, 2 bumps | not started |
+| 12. Poller and reply parser, incl. Brandon's commands | not started |
+| 13. The notification emails | not started |
+| 14. Quote handoff — notes → /quote → Brandon | not started |
+| 15. Alert triage into draft pull requests | not started |
 
 ## Round 1 — command center (shipped 2026-08-25)
 
