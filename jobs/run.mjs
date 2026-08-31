@@ -216,6 +216,7 @@ export function toMessage(parsed, uid, header) {
     deliveredTo: String(get('delivered-to') ?? get('x-original-to') ?? ''),
     subject: parsed.subject ?? '',
     text: parsed.text || htmlToText(parsed.html),
+    messageId: parsed.messageId ?? '',
     inReplyTo: parsed.inReplyTo ?? '',
     references: [parsed.references ?? []].flat().join(' '),
     headers: Object.fromEntries(

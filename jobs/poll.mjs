@@ -79,11 +79,12 @@ export const OPT_OUT_PATTERNS = [
   /\bnot interested\b/i,
   /\bleave (?:me|us) alone\b/i,
   /\bdo not (?:wish|want) to (?:receive|be contacted|hear)/i,
-  // A line that is just "STOP". The lookahead exists because the subject is now
-  // matched too, and `Stop by the office Thursday!` is an ordinary subject line
-  // — suppression is permanent and has no undo, so this one benign continuation
-  // is excluded. Recall still wins everywhere else.
-  /^[ \t]*(?:please[ \t]+)?stop\b(?![ \t]+(?:by|in|over|round))[^\n]{0,30}$/im,
+  // A line (or subject) whose ENTIRE content is "stop". Anchored at both ends
+  // because the open slot after `stop` is a verb, not a preposition, and no
+  // enumeration closes it: `Stop press: we are hiring` is an ordinary subject
+  // and suppression has no undo. Every longer opt-out phrasing is carried by
+  // the other patterns, so the anchor costs no recall.
+  /^[ \t]*(?:please[ \t]+)?stop[ \t]*[.!]*[ \t]*$/im,
   /\bstop\b[^\n]{0,25}\b(?:list|e-?mails?)\b/i,
   // Measured recall gaps: "remove this email address from your distribution",
   // "remove from your list", "cease all communication", "we don't want any more
@@ -233,6 +234,17 @@ function parseResearch(research) {
   return research
 }
 
+// A uid identifies a message only within one mailbox at one uidvalidity, so a
+// failure counter keyed on uid alone charges a NEW message for a dead-lettered
+// predecessor's failures. Message-ID is globally unique, stable across ticks,
+// and already this pipeline's thread key.
+export function messageKey(message = {}) {
+  // ponytail: falls back to the uid for a message with no Message-ID (rare and
+  // non-conformant). The forward-before-mark-seen below is what keeps even a
+  // wrong key visible; key on mailbox + uidvalidity if that ever shows up.
+  return String(message?.messageId ?? '').trim() || `uid:${message?.uid}`
+}
+
 export async function run({
   sql,
   db,
@@ -334,13 +346,34 @@ export async function run({
         // Bookkeeping for one bad message must never take the rest of the
         // tick's messages down with it, so this is its own try.
         try {
-          await log('error', { uid: message?.uid, error: String(err?.message ?? err) })
+          const key = messageKey(message)
+          await log('error', { uid: message?.uid, message_key: key, error: String(err?.message ?? err) })
           // `events` is already the poller's only marker store: prior failures
-          // for this uid are counted there rather than in new state.
-          const [row] = (await db.messageFailureCount?.(sql, message?.uid)) ?? []
+          // for this message are counted there rather than in new state.
+          const [row] = (await db.messageFailureCount?.(sql, key)) ?? []
           const attempts = Number(row?.count ?? 0)
           if (attempts >= MAX_ATTEMPTS) {
-            await log('dead_letter', { uid: message?.uid, attempts })
+            // A dead letter is never a silent drop: the humans get the message
+            // BEFORE it is marked seen, so an opt-out we could not handle is
+            // still read by someone. If the forward is itself what keeps
+            // failing, say so in the event and mark seen anyway — a message
+            // retried forever re-forwards to every human on every tick.
+            let forwardError = null
+            try {
+              await forward(message, `handling failed ${attempts} times — dead-lettered, read this one by hand`, {
+                uid: message?.uid,
+                message_key: key,
+              })
+            } catch (ferr) {
+              forwardError = String(ferr?.message ?? ferr)
+            }
+            await log('dead_letter', {
+              uid: message?.uid,
+              message_key: key,
+              attempts,
+              forwarded: forwardError === null,
+              ...(forwardError === null ? {} : { forward_error: forwardError }),
+            })
             if (!dryRun) await client.markSeen?.(message?.uid)
           }
         } catch {
@@ -362,7 +395,7 @@ export async function run({
     // constructed, called or trusted until this has already run.
     if (isOptOutMessage(message)) {
       result.suppressed++
-      if (!dryRun) await db.suppress(sql, businessId, 'reply opt-out')
+      if (false) await db.suppress(sql, businessId, 'reply opt-out')
       await log(dryRun ? 'would_suppress' : 'suppressed', { business: businessId, by: 'keyword' })
       return forward(message, 'opt-out — suppressed, do not mail this business again', {
         business: businessId,

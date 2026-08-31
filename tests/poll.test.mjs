@@ -17,7 +17,12 @@ import {
   NO_ANSWER_DAYS,
   MAX_ATTEMPTS,
 } from '../jobs/poll.mjs'
-import { threadByMessageIds, businessById, assertSelectable } from '../lib/db.mjs'
+import {
+  threadByMessageIds,
+  businessById,
+  assertSelectable,
+  messageFailureCount,
+} from '../lib/db.mjs'
 
 const NOW = new Date('2026-09-02T09:00:00Z')
 const ALLOWED = ['nseluga@bcn-services.com', 'bchung@bcn-services.com']
@@ -45,6 +50,7 @@ function biz(over = {}) {
 function msg(over = {}) {
   return {
     uid: 7,
+    messageId: '<reply-7@acmeroofing.example>',
     from: 'dana@acmeroofing.example',
     deliveredTo: OUTREACH,
     subject: 'Re: a question about Acme Roofing',
@@ -79,15 +85,15 @@ function harness({
         return Promise.resolve([])
       },
       // Counts the same rows lib/db.mjs's query counts: poll error/dead_letter
-      // events carrying this uid.
-      messageFailureCount: (_s, uid) =>
+      // events carrying this message key (the Message-ID, not the uid).
+      messageFailureCount: (_s, key) =>
         Promise.resolve([
           {
             count: events.filter(
               (e) =>
                 e.job === 'poll' &&
                 (e.kind === 'error' || e.kind === 'dead_letter') &&
-                String(e.detail?.uid) === String(uid)
+                String(e.detail?.message_key) === String(key)
             ).length,
           },
         ]),
@@ -503,6 +509,13 @@ test('businessById reads the view, and threadByMessageIds keeps caller order', a
   assert.match(text, /array_position/)
   assert.match(text, /email_threads/)
   assert.deepEqual(await threadByMessageIds(sql, []), [])
+
+  // GATING — keyed on the message key, never the uid: a uid is unique only per
+  // mailbox per uidvalidity, and `events` keeps every row forever.
+  const [{ v }] = await messageFailureCount(sql, '<reply-7@acmeroofing.example>')
+  assert.match(text, /detail->>'message_key' =\s+\?/)
+  assert.doesNotMatch(text, /detail->>'uid'/)
+  assert.deepEqual(v, ['<reply-7@acmeroofing.example>'])
 })
 
 // ===========================================================================
@@ -1022,9 +1035,156 @@ test('review: a message that always throws is dead-lettered instead of retried f
   for (let tick = 0; tick < 5; tick++) await poll(h.deps)
 
   assert.deepEqual(h.seen, [7], 'dead-lettered once, then never fetched again')
-  assert.equal(h.forwards.length, 6, '2 humans x 3 attempts, then it stops')
+  // 2 humans x 3 attempts, plus the 2 dead-letter forwards, then it stops.
+  assert.equal(h.forwards.length, 8)
   const dead = h.events.filter((e) => e.kind === 'dead_letter')
   assert.equal(dead.length, 1)
-  assert.deepEqual(dead[0].detail, { uid: 7, attempts: 3 })
+  assert.deepEqual(dead[0].detail, {
+    uid: 7,
+    message_key: '<reply-7@acmeroofing.example>',
+    attempts: 3,
+    forwarded: true,
+  })
   assert.equal(h.events.filter((e) => e.kind === 'error' && e.detail.uid === 7).length, 3)
+})
+
+// GATING — the dead letter is forwarded to the humans BEFORE the message is
+// marked seen. A visible drop is acceptable; an invisible one is not.
+test('qa: a dead letter reaches the allow-listed humans before markSeen', async () => {
+  const h = harness({ classify: null })
+  const order = []
+  const logEvent = h.deps.db.logEvent
+  h.deps.db.logEvent = (sql, job, kind, detail) => {
+    if (kind === 'replied') throw new Error('deterministic failure on every tick')
+    if (kind === 'dead_letter') order.push('dead_letter')
+    return logEvent(sql, job, kind, detail)
+  }
+  const notify = h.deps.notify
+  h.deps.notify = async (m) => {
+    order.push(`forward:${m.to}`)
+    return notify(m)
+  }
+  h.deps.imap = async () => ({
+    messages: async () => (h.seen.includes(7) ? [] : [msg()]),
+    markSeen: async (uid) => {
+      order.push('markSeen')
+      h.seen.push(uid)
+    },
+    close: async () => {},
+  })
+
+  for (let tick = 0; tick < 4; tick++) await poll(h.deps)
+
+  assert.deepEqual(order.slice(-4), [
+    'forward:nseluga@bcn-services.com',
+    'forward:bchung@bcn-services.com',
+    'dead_letter',
+    'markSeen',
+  ])
+  const last = h.forwards.at(-1)
+  assert.equal(last.to, 'bchung@bcn-services.com')
+  assert.match(last.text, /handling failed 3 times — dead-lettered, read this one by hand/)
+})
+
+// GATING — the counter was keyed on the uid alone, so a NEW message re-using a
+// dead-lettered uid (uidvalidity reset, or a second mailbox) was dead-lettered
+// on its FIRST transient failure: marked seen, never re-fetched, its opt-out
+// lost silently. Keyed on the Message-ID it cannot happen.
+test('qa: a new message re-using a dead-lettered uid is still processed, opt-out and all', async () => {
+  const h = harness({ classify: null })
+  const events = h.events
+  const logEvent = h.deps.db.logEvent
+  let poison = true
+  h.deps.db.logEvent = (sql, job, kind, detail) => {
+    if (poison && kind === 'replied') throw new Error('deterministic failure on every tick')
+    return logEvent(sql, job, kind, detail)
+  }
+  h.deps.imap = async () => ({
+    messages: async () => (h.seen.includes(7) ? [] : [msg()]),
+    markSeen: async (uid) => h.seen.push(uid),
+    close: async () => {},
+  })
+  for (let tick = 0; tick < 4; tick++) await poll(h.deps)
+  assert.deepEqual(h.seen, [7], 'the first message is dead-lettered')
+
+  // Same uid, different message: a uidvalidity reset or a second mailbox.
+  poison = false
+  h.deps.db.logEvent = logEvent
+  const fresh = msg({ uid: 7, messageId: '<fresh-7@other.example>', text: 'unsubscribe' })
+  const suppress = h.deps.db.suppress
+  let transient = 1
+  h.deps.db.suppress = (sql, id, reason) => {
+    if (transient-- > 0) throw new Error('transient blip')
+    return suppress(sql, id, reason)
+  }
+  h.deps.imap = async () => ({
+    messages: async () => (h.store.get('b1').suppressed_at ? [] : [fresh]),
+    markSeen: async (uid) => h.seen.push(uid),
+    close: async () => {},
+  })
+
+  await poll(h.deps) // one transient failure — must NOT dead-letter
+  assert.equal(h.store.get('b1').suppressed_at, null)
+  assert.equal(events.filter((e) => e.kind === 'dead_letter').length, 1, 'no second dead letter')
+  assert.deepEqual(h.seen, [7], 'still unseen, so the next tick re-fetches it')
+
+  await poll(h.deps) // retried, and the opt-out lands
+  assert.equal(h.store.get('b1').suppressed_at instanceof Date, true)
+  assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'reply opt-out' }])
+})
+
+// A transient fault is not a dead letter: two failures then success still
+// processes the message normally.
+test('qa: two transient failures then success processes the message normally', async () => {
+  const h = harness()
+  const updateBusiness = h.deps.db.updateBusiness
+  let fails = 2
+  h.deps.db.updateBusiness = (sql, id, patch) => {
+    if (fails-- > 0) throw new Error('transient blip')
+    return updateBusiness(sql, id, patch)
+  }
+  h.deps.imap = async () => ({
+    messages: async () => (h.store.get('b1').stage === 'replied' ? [] : [msg()]),
+    markSeen: async (uid) => h.seen.push(uid),
+    close: async () => {},
+  })
+
+  for (let tick = 0; tick < 3; tick++) await poll(h.deps)
+
+  assert.equal(h.store.get('b1').stage, 'replied')
+  assert.deepEqual(h.seen, [7])
+  assert.equal(h.events.filter((e) => e.kind === 'dead_letter').length, 0)
+})
+
+// IMPORTANT — the bare-"stop" pattern is anchored to a line that is ONLY
+// "stop", because the open slot after it is a verb and no preposition list
+// closes it. suppressed_at has no undo, so each of these was a killed lead.
+const BENIGN_STOP_SUBJECTS = [
+  'Stop light replacement quote',
+  'Stop press: we are hiring',
+  'Stop guessing, start measuring',
+  'Stop worrying about SEO',
+]
+
+for (const subject of BENIGN_STOP_SUBJECTS) {
+  test(`qa: ${JSON.stringify(subject)} reaches replied with no suppression`, async () => {
+    assert.equal(isOptOutMessage({ subject }), false)
+    const h = harness({ messages: [msg({ subject })] })
+    await poll(h.deps)
+    assert.equal(h.store.get('b1').suppressed_at, null)
+    assert.deepEqual(h.suppressions, [])
+    assert.equal(h.store.get('b1').stage, 'replied')
+  })
+}
+
+test('qa: a bare STOP still suppresses, in the subject and in the body', async () => {
+  assert.equal(OPT_OUT_PATTERNS.length, 21)
+  for (const subject of ['STOP', 'UNSUBSCRIBE', 'stop.', '  STOP!  ', 'Please stop']) {
+    const h = harness({ messages: [msg({ subject, text: '' })] })
+    await poll(h.deps)
+    assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'reply opt-out' }], subject)
+  }
+  const body = harness({ messages: [msg({ subject: 'Re: hello', text: 'STOP' })] })
+  await poll(body.deps)
+  assert.deepEqual(body.suppressions, [{ id: 'b1', reason: 'reply opt-out' }])
 })
