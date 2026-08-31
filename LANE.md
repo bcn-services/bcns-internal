@@ -4,11 +4,13 @@ Rebuilds this repo from a paused Next.js app into a headless jobs runner for the
 cold-outreach pipeline. This file is the contract; the "Pipeline Wiring"
 artifact (2026-08-30) is the explanation. Older artifacts are superseded.
 
-**Status 2026-08-30:** items 1–6 are on `main`; item 7 is on `outreach-pipeline`,
-one commit ahead, unmerged. Migrations 0017/0018 are applied to production. The
-clock fires and `authcheck` is green. Nothing else has run live: `run.mjs`
-injects only `sql, db, logEvent, loadCells, saveCell, dryRun`, so `source`
-no-ops on a missing budget reader and `qualify` is in no schedule at all.
+**Status 2026-08-31:** items 1–7 are on `main`; `outreach-pipeline` was
+fast-forwarded in and the branch is level with `main`. Migrations 0017/0018 are
+applied to production. The clock fires and `authcheck` is green. Nothing else
+has run live: `run.mjs` injects only `sql, db, logEvent, loadCells, saveCell,
+dryRun`, so `source` no-ops on a missing budget reader and `qualify` is in no
+schedule at all. Mail is fully set up — aliases, app password, the `pipeline`
+filter, and `NOTIFY_ALLOWED_RECIPIENTS` as a repo variable — and blocks nothing.
 
 **Scope of this round:** items above the stop marker were the autonomous run.
 Everything below it is the same pipeline, continued by hand or by a restarted
@@ -35,8 +37,15 @@ Repo context: `CLAUDE.md` at root.
 - `git commit` on the lane branch
 - Installing the dependencies named in item 1
 
+**Environment gotcha.** `gh` 404s on this repo: the `read:packages` PAT exported
+as `GITHUB_TOKEN` in `~/.zprofile` shadows the keyring account, and GitHub
+answers an unsatisfiable scope with 404, not 403. Prefix `GITHUB_TOKEN=` for
+anything repo-scoped. A 404 here means the token, not a missing repo.
+
 **Forbidden. Mark the item `blocked`, write why, move on — never work around.**
-- Sending any email to any address, real or test. This round has no send path.
+- Executing a send — opening SMTP to a real server, or issuing `DATA` outside a
+  fake. Building a send path is in scope: items 11 and 13 do exactly that. Every
+  test fakes the transport, and `DRY_RUN` stays on.
 - Applying any migration to the production Supabase project `knmgyxlrhjxaydliucbs`.
   Migrations are authored as files and applied by a human.
 - Calling the real Google Places API, the real Anthropic API, or fetching any real
@@ -326,8 +335,12 @@ Repo context: `CLAUDE.md` at root.
     - A mailbox at its `daily_cap` is never selected, and the cap is never exceeded
       by a concurrent run
     - The thread row and the counter update commit in the same transaction as the send
-    - Never send to a row with `suppressed_at`, a row that has replied, or an
-      address outside `NOTIFY_ALLOWED_RECIPIENTS` while `DRY_RUN` is on
+    - Never send to a row with `suppressed_at` or a row that has replied
+    - The allow-list is a hard gate, independent of `DRY_RUN`. With `DRY_RUN` on
+      nothing opens SMTP at all; with it off the only reachable recipients are
+      `NOTIFY_ALLOWED_RECIPIENTS`. An address outside it is refused before the
+      connection opens. Nate removes the gate by hand when he is ready to mail
+      a stranger — no job, env default, or later item may widen it
     - Exactly two bumps; a third touch is a `call_due` transition, never a send
   done when:
     - A unit test asserts a mailbox at capacity is skipped and the next is chosen
@@ -336,6 +349,11 @@ Repo context: `CLAUDE.md` at root.
     - A unit test asserts a row at `touches=3` with no reply lands at `call_due`
       and no SMTP command is issued for it
     - A unit test asserts a bump carries `In-Reply-To` of the first message
+    - A unit test with `DRY_RUN` off asserts an address outside
+      `NOTIFY_ALLOWED_RECIPIENTS` is refused before any SMTP connection opens,
+      and that an allow-listed address is not
+    - A unit test asserts the message is `multipart/alternative` carrying
+      `lib/signature.html` and `lib/signature.txt` verbatim as its two parts
   status: not started
 
 - task: Build the poller and the reply parser — `jobs/poll.mjs` on the 20-minute
@@ -381,6 +399,24 @@ Repo context: `CLAUDE.md` at root.
       is refused before SMTP is opened
     - A unit test asserts the four templates render with the row fields and none
       contains a prospect email address as a recipient
+  status: not started
+
+- task: Build the end-to-end test — `tests/pipeline.test.mjs`, one test that
+    drives `jobs/run.mjs`'s deps object through the whole path in order: `source`
+    finds a business, `qualify` gives it an email and facts, `personalize` drafts,
+    `touch` sends, `poll` reads the reply, `notify` reports it. Every boundary is
+    the same injected fake the unit tests already use — Places, Claude, fetch,
+    Postgres, SMTP, IMAP — so the test stays pure. This is the only item that
+    proves the jobs agree on the row shapes they hand each other.
+  guardrails:
+    - No new production code. A failure here is a bug in items 8–13, fixed there
+    - The fakes are the existing ones; never add a live service to make it pass
+  done when:
+    - A test walks one business from `sourced` to `replied` through every job in
+      schedule order and asserts the stage after each
+    - A test asserts an opt-out reply mid-path sets `suppressed_at` and that no
+      later job in the same run selects that row again
+    - `pnpm test` runs it and the whole suite exits zero
   status: not started
 
 > **⚠️ AUTONOMOUS RUN — STOP HERE**
