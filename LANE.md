@@ -308,7 +308,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       with `email` cleared and `phone` intact, and a `unknown` result leaves the row
       `qualified`
     - Existing passing tests remain passing
-  status: not started
+  status: done
 
 - task: Build personalization — `jobs/personalize.mjs`, one Claude call per
     business that fills the single generated sentence in the template held in
