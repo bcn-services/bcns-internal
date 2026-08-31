@@ -28,15 +28,30 @@ Rules:
 PAGE TEXT:
 `
 
+// Verification verdicts that mean the address cannot receive mail. `unknown`
+// is deliberately absent: greylisting and catch-all servers land there, and an
+// unknown is never enough to throw away a discovered address.
+const UNDELIVERABLE = new Set(['invalid', 'no-mx', 'rejected'])
+
 export async function run({
   sql,
   db,
   fetchPage,
   claude,
+  verify,
   limit = 25,
   contactPaths = CONTACT_PATHS,
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'qualify', kind, detail)
+
+  // A missing capability is a skipped event, never a throw: the clock runs this
+  // job every Monday whether or not the runner has a Claude CLI token.
+  const missing = [!fetchPage && 'fetchPage', !claude && 'claude'].filter(Boolean)
+  if (missing.length) {
+    await log('skipped', { reason: `missing deps: ${missing.join(', ')}` })
+    return { qualified: 0, callDue: 0, errors: 0, skipped: missing }
+  }
+
   const businesses = await db.sourcedBacklog(sql, { limit })
 
   if (!businesses.length) {
@@ -74,7 +89,29 @@ export async function run({
           ? claimed
           : null
 
-      if (email) {
+      // The address came off a web page; that it is well-formed says nothing
+      // about whether a server will accept it. A failed probe demotes the row
+      // to a calling lead rather than letting a bounce reach the sending domain.
+      let verdict = null
+      if (email && verify) {
+        try {
+          verdict = await verify(email)
+        } catch {
+          // A probe that could not run is an unknown, not a rejection.
+          verdict = null
+        }
+      }
+
+      if (verdict && UNDELIVERABLE.has(verdict.status)) {
+        // phone stays as sourced; the unusable address is cleared.
+        await db.updateBusiness(sql, b.id, {
+          email: null,
+          stage: 'call_due',
+          research: JSON.stringify({ facts, fit: parsed.fit ?? null, reason: parsed.reason ?? null }),
+        })
+        callDue++
+        await log('call_due', { business: b.id, reason: 'email failed verification', status: verdict.status })
+      } else if (email) {
         await db.updateBusiness(sql, b.id, {
           email,
           stage: 'qualified',

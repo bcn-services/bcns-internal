@@ -12,7 +12,7 @@ on:
   schedule:
     - cron: '*/20 8-20 * * 1-5'   # poll
     - cron: '0 14 * * 1-5'        # touch
-    - cron: '0 13 * * 1'          # source
+    - cron: '0 13 * * 1'          # source, then qualify
   workflow_dispatch:
     inputs:
       job:
@@ -78,6 +78,9 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Envelope sender for the RCPT TO probe qualify runs on a
+          # discovered address. No sender, no probe — never a guess.
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
           GCP_PROJECT: ${{ vars.GCP_PROJECT }}
           # The auth action returns the minted token as a step output, not an
           # env var; a token here is proof the OIDC exchange actually ran.

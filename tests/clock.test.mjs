@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 
-import { jobName, SCHEDULES } from '../jobs/run.mjs'
+import { jobName, jobNames, SCHEDULES, buildDeps, createFetchPage } from '../jobs/run.mjs'
 import { run as heartbeat } from '../jobs/heartbeat.mjs'
 
 const clock = parse(readFileSync(new URL('../.github/workflows/clock.yml', import.meta.url), 'utf8'))
@@ -140,4 +140,47 @@ test('an unrelated import error is never mistaken for an unbuilt job', async () 
     main({ JOB: 'source' }, async () => { throw new SyntaxError('bad module') }),
     /bad module/
   )
+})
+
+test('the Monday cron runs source then qualify, in that order', () => {
+  assert.deepEqual(jobNames({ schedule: '0 13 * * 1' }), ['source', 'qualify'])
+  assert.deepEqual(jobNames({ schedule: '0 14 * * 1-5' }), ['touch'])
+  assert.deepEqual(jobNames({ schedule: '0 13 * * 1', job: 'heartbeat' }), ['heartbeat'])
+  assert.throws(() => jobNames({ schedule: 'not-a-cron' }), /no job for schedule/)
+})
+
+test('main runs every job of a tick in order, on one deps object', async () => {
+  const { main } = await import('../jobs/run.mjs')
+  const ran = []
+  const out = await main({ SCHEDULE: '0 13 * * 1' }, async (name) => ({
+    run: async (deps) => { ran.push([name, deps]); return name },
+  }))
+  assert.deepEqual(ran.map((r) => r[0]), ['source', 'qualify'])
+  assert.equal(ran[0][1], ran[1][1], 'the two jobs got different deps objects')
+  assert.deepEqual(out, ['source', 'qualify'])
+})
+
+test('buildDeps hands qualify fetchPage always and claude only on the OAuth token', async () => {
+  const bare = await buildDeps({})
+  assert.equal(typeof bare.fetchPage, 'function')
+  assert.equal('claude' in bare, false)
+  assert.equal('verify' in bare, false)
+
+  const full = await buildDeps({ CLAUDE_CODE_OAUTH_TOKEN: 'oat_x', MAIL_FROM: 'a@b.test' })
+  assert.equal(typeof full.claude.ask, 'function')
+  assert.equal(typeof full.verify, 'function')
+})
+
+test('no API key ever reaches the Claude client', () => {
+  const src = readFileSync(new URL('../lib/claude.mjs', import.meta.url), 'utf8')
+  assert.ok(!/ANTHROPIC_API_KEY|api[_-]?key/i.test(src.replace(/^\s*\/\/.*$/gm, '')))
+})
+
+test('fetchPage caps the body it returns and fails loudly on a bad status', async () => {
+  const huge = 'x'.repeat(200)
+  const capped = createFetchPage({ maxBytes: 50, fetchImpl: async () => ({ ok: true, text: async () => huge }) })
+  assert.equal((await capped('https://x.test')).length, 50)
+
+  const bad = createFetchPage({ fetchImpl: async () => ({ ok: false, status: 404, text: async () => '' }) })
+  await assert.rejects(bad('https://x.test'), /returned 404/)
 })
