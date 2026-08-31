@@ -7,6 +7,16 @@
 
 import { pickNextCell, evaluateRun, cellQuery, isKnownCell } from '../lib/grid.mjs'
 
+// Places returns a full website URL; `businesses` stores a hostname, which is
+// what every later stage (email guessing, dedupe) actually matches on.
+function hostname(website) {
+  try {
+    return new URL(website).hostname.replace(/^www\./, '')
+  } catch {
+    return null
+  }
+}
+
 export const MIN_REMAINING = 20 // one page of results is one call per 20 rows
 
 export async function run({
@@ -54,9 +64,9 @@ export async function run({
   const seen = new Set()
   const marked = []
   for (const r of results) {
-    if (seen.has(r.placeId)) continue
-    seen.add(r.placeId)
-    const existing = await db.businessByPlaceId(sql, r.placeId)
+    if (seen.has(r.place_id)) continue
+    seen.add(r.place_id)
+    const existing = await db.businessByPlaceId(sql, r.place_id)
     marked.push({ ...r, known: existing.length > 0 })
   }
 
@@ -64,13 +74,13 @@ export async function run({
     .filter((r) => !r.known)
     .map((r) => ({
       name: r.name,
-      domain: r.domain ?? null,
+      domain: hostname(r.website),
       phone: r.phone ?? null,
       address: r.address ?? null,
       town: cell.town,
       state: cell.state,
       trade: cell.trade,
-      place_id: r.placeId,
+      place_id: r.place_id,
       source_query: query,
       stage: 'sourced',
     }))
