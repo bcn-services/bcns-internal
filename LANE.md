@@ -428,7 +428,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
     - A test asserts an opt-out reply mid-path sets `suppressed_at` and that no
       later job in the same run selects that row again
     - `pnpm test` runs it and the whole suite exits zero
-  status: not started
+  status: done
 
 > **⚠️ AUTONOMOUS RUN — STOP HERE**
 
@@ -463,6 +463,31 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
 ---
 
 ## Found during the 2026-08-31 autonomous run — needs an item
+- **`NOTIFY_ALLOWED_RECIPIENTS` does double duty, and going live weaponises it.**
+  It is both the allow-list of who `touch` may mail AND the list `notify`/`poll`
+  forward internal mail to. Today those are the same two people, so nothing is
+  wrong. The moment a prospect address is added to go live, every internal call
+  task, meeting alert and approval mail is delivered to that prospect — including
+  a prospect's own opt-out forwarded back to them — and `poll.isAllowedSender`
+  would then honour `won 2400` or `stop` as commands from that prospect. Split it
+  into a separate internal-recipient variable BEFORE any live pilot. This is the
+  highest-priority item on this list.
+- **`personalize` has no cron cell.** `jobs/run.mjs`'s schedule map is
+  `poll`+`notify`, `touch`, and `source`+`qualify`. Nothing runs `personalize`,
+  so a `qualified` row never becomes `drafted` and `touch` finds nothing to send.
+  The pipeline stalls one step before its first live send. Verified against
+  `.github/workflows/clock.yml` and the map in `jobs/run.mjs`.
+- **notify's mail has no thread, so `yes`/`no` replies do not land.** The batch
+  approval mail is one message covering N businesses, while
+  `email_threads.message_id` is a primary key carrying a single `business_id`, so
+  the batch cannot be recorded at all. A reply matches no thread and `poll`
+  forwards it as "command had no thread to apply to". Needs either per-business
+  approval mail or a mapping table — not a patch.
+- **The notify dedupe key never re-arms on stage re-entry.** `replied → approved
+  → replied` reuses key `id:replied` and is never announced a second time. One
+  line in `notifyKey`, but it changes item 13's tested contract and trades a
+  silent miss for duplicate internal mail — an owner's call.
+
 
 - **`mailboxes.sent_today` is never reset.** `lib/db.mjs`'s `claimMailboxSlot`
   increments it and gates on `sent_today < cap`, but nothing anywhere sets it

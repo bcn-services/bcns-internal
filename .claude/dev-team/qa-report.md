@@ -1,42 +1,39 @@
-## VERDICT: FAIL
+## VERDICT: PASS
 
-**Task:** item 12 — `jobs/poll.mjs` reply poller, delta re-verification 39529aa..2da8f3e
-**Branch:** item/0008-places | **HEAD:** 2da8f3e | **Date:** 2026-08-31 | **Gate mode:** tests
-**Suite (HEAD 2da8f3e as committed):** item-12 subset → `# tests 131 / # pass 115 / # fail 16` — RED.
-**Suite (working tree = HEAD + the one-line restore below):** `# tests 131 / # pass 131 / # fail 0`, twice.
+**Task:** item 12 — `jobs/poll.mjs` reply poller, gating re-verification of G1 + G2 at HEAD
+**Branch:** item/0008-places | **HEAD:** 3a9a13e | **Date:** 2026-08-31 | **Gate mode:** tests
+**Suite (committed content — worktree byte-identical to `3a9a13e` for all five item-12 files, verified by `diff` against `git show`):** item-12 subset `# tests 131 / # pass 131 / # fail 0`.
 
-## Failures (gating)
-- **G1 — HEAD 2da8f3e ships a disabled opt-out write.** `jobs/poll.mjs` line 398 in the commit reads `if (false) await db.suppress(sql, businessId, 'reply opt-out')`; the working tree has `if (!dryRun)` UNCOMMITTED. `done when:` #1 (an opt-out reply sets `suppressed_at`) fails at HEAD: 16 subset tests RED, incl. `an opt-out is suppressed even when the classifier throws`, `qa: suppression is committed before the classifier is even reached`, `review: a subject-only UNSUBSCRIBE suppresses`. Root Cause: a mutation-test edit was committed instead of reverted. **bug** — restore `!dryRun` and commit. Guardrail "opt-out runs and commits before classification" is violated at HEAD.
-- **G2 — the bare-stop anchor costs real recall.** `/^[ \t]*(?:please[ \t]+)?stop[ \t]*[.!]*[ \t]*$/im` now returns false for `stop stop stop`, `STOP PLEASE`, `stop now` — each true under the old form and matched by NO other pattern (`isOptOut` false). All three are bare-stop replies a prospect sends; a missed opt-out is the item's flagged failure mode. Root Cause: the anchor closes the trailing slot entirely rather than restricting it. **bug** — allow a trailing `please|now` / repeated `stop` tail, or bound the tail to words that cannot start a noun phrase.
+## G1 — disabled opt-out write: CLOSED
+- Committed blob `3a9a13e:jobs/poll.mjs` — all three `db.suppress` sites read `if (!dryRun)` at lines 401 / 440 / 504; `if (false)` occurs 0 times.
+- Leftover-mutation sweep over the committed blobs of all five files (`jobs/poll.mjs`, `jobs/run.mjs`, `lib/db.mjs`, `tests/poll.test.mjs`, `tests/run-imap.test.mjs`): no `if (false)`, no `if (true)`, no `test.skip`/`it.skip`/`.only(`, no commented-out `assert.`, no TODO/FIXME/XXX. Constants unmutated: `MAX_ATTEMPTS === 3`, `MAX_MESSAGES_PER_TICK === 100` (`jobs/run.mjs:230`, untouched by the delta), `OPT_OUT_PATTERNS.length === 21`.
+- The 16 previously-RED tests are green at the committed content, incl. `an opt-out is suppressed even when the classifier throws`, `qa: suppression is committed before the classifier is even reached`.
 
-## Fix 1 — dead letter (verified by execution through `run(deps)`, working-tree content)
-- uid reuse no longer reproduces: uid 7 dead-letters, a fresh Message-ID on uid 7 survives one transient failure, is re-fetched, and its `unsubscribe` sets `suppressed_at` — PASS.
-- forward BEFORE markSeen, order asserted: `['forward:nseluga@…','forward:bchung@…','dead_letter','markSeen']` — PASS. Throwing forward → `forwarded:false` + `forward_error`, still marked seen — PASS.
-- transient 2-fails-then-success → stage `replied`, `seen=[7]`, 0 dead letters — PASS.
-- **`uid:<n>` fallback probe — the miniature bug DOES reproduce.** Two different Message-ID-less messages on uid 7: after the first dead-letters, the second is dead-lettered on its FIRST transient failure, `suppressed_at` stays null, opt-out never runs. It is NOT a silent loss — both allow-listed humans are forwarded the full message before markSeen (`order tail` = forward, forward, dead_letter, markSeen). Acceptable as shipped; the guardrail holds. Follow-up, not gating: key on mailbox+uidvalidity+uid when Message-ID is absent.
-- **No time bound confirmed:** `select count(*) … kind in ('error','dead_letter') and detail->>'message_key' = $1` over an append-only `events` — a message legitimately retried months later inherits every historical failure for the same Message-ID and can dead-letter on its first fault. Real, bounded by the forward. **design-level** follow-up: add `and at > now() - interval '1 day'`.
+## G2 — bare-stop pattern: CLOSED, both directions, driven through `run(deps)`
+- Regressed phrasings now suppress end-to-end: `stop stop stop`, `STOP PLEASE`, `stop now` → `suppressions === [{id:'b1',reason:'reply opt-out'}]`, `suppressed_at` set — PASS.
+- All four benign subjects (`Stop light replacement quote`, `Stop press: we are hiring`, `Stop guessing, start measuring`, `Stop worrying about SEO`) reach `stage='replied'` with `suppressed_at === null` and zero suppress calls — PASS.
+- Full 28-phrasing recall corpus (15 `OPT_OUTS` + 13 `QA_OPT_OUTS`) plus the 4 `NOT_OPT_OUTS` — 0 regressions.
+- **New-false-positive hunt (the widened alternation):** `please`/`Please`/`PLEASE`/`Please!`/`please.`/`please please`, `now`/`Now`/`NOW`/`now now`/`Now!`/`now.`, `please now`, `now please`, `Now, please!` — all `isOptOut === false` (the `(?=[^\n]*\bstop\b)` lookahead gates every match on a real `stop`). `Please`, `Now`, `please please`, `now now` as full subjects, and a bare `now` line inside a friendly body, all reach `run(deps)` with zero suppressions.
+- **Separator run-together check:** `stopnow`, `stopplease`, `nonstop`, `stopwatch` — `false` (the `\bstop\b` lookahead blocks them). `stop,now` / `stop.now` / `stop!now` — `true`, and those ARE opt-outs, not false positives.
+- No benign one-word or benign multi-word subject is admitted by the widened alternation. No new permanent-suppression risk found.
 
-## Fix 2 — bare-stop (both directions)
-- All four benign subjects reach `replied`, `suppressed_at === null`, no suppression call — PASS.
-- Full recall corpus (15 `OPT_OUTS` + 13 `QA_OPT_OUTS`, 28 phrasings) — 0 regressions.
-- Edge probe: `STOP.`, `Stop!`, `Stop.  `, `stop. `(trailing space), `stop\r\n`, `stop!!!`, `please stop`, `Please STOP.`, `STOP` + signature, `stop` on its own line in a friendly reply, `STOP` + `>` quoted text — all still true. `stop stop stop`, `STOP PLEASE`, `stop now` — false → G2.
-
-## Mutation test (one at a time, restored byte-identical, hash-verified `a389a32…` / db-OK)
-- `message_key` → `uid` in `lib/db.mjs` → RED 130/1 · markSeen moved before the forward → RED 130/1 (`qa: a dead letter reaches the allow-listed humans before markSeen`) · anchored stop pattern → old prefix form → RED 127/4. No changed safety path stayed green.
-
-## Byte-identity of already-passed work (confirmed from the diff, not re-tested)
-- The delta touches only: the stop pattern, `messageKey()`, the error/dead-letter block in `jobs/poll.mjs`, `messageId` in `toMessage`, and the count key in `lib/db.mjs`. Entity range guard, unbalanced-tag strip, `htmlToText`, `MAX_MESSAGES_PER_TICK`, markSeen ordering on the success path, the other 20 patterns — untouched.
-
-## Constants (pinned to literals throughout)
-- `MAX_ATTEMPTS === 3`, `OPT_OUT_PATTERNS.length === 21`, `MAX_MESSAGES_PER_TICK === 100` — all asserted separately; every opt-out / allow-list / dead-letter probe assertion uses literals.
+## `done when:` criteria (re-run through `run(deps)` at committed content)
+- opt-out sets `suppressed_at` even when classification throws — `an opt-out is suppressed even when the classifier throws` (#23) + `qa: suppression is committed before the classifier is even reached` (#67) — PASS
+- out-of-office reply changes no stage — `an out-of-office reply changes no stage` (#27) — PASS
+- `Reply "stop"` in a quoted region does not suppress — `an opt-out only inside a quoted region is not the sender speaking` (#3), `qa: an opt-out above a quoted region survives stripQuoted` (#64) — PASS
+- `won 2400` allow-listed sets `stage=won`, same line from unknown sender changes nothing — #35 + #36 — PASS
 
 ## Guardrails
-- opt-out before classification — **FAIL at HEAD** (G1); PASS on the working-tree content.
-- command only from an allow-listed sender, else forwarded — PASS.
-- unmatched prospect message forwarded, never guessed — **PASS**, the old dead-letter violation is closed.
+- Opt-out runs and commits before classification — PASS (#23, #67; `if (!dryRun)` restored in the commit).
+- Command only from an allow-listed sender, else forwarded — PASS (#36, #37, #38, #42, #70).
+- Unmatched prospect message forwarded, never guessed — PASS (#33, #47, #73, #75, #78).
 
-## Regression audit (`git diff 39529aa..2da8f3e -- tests/`)
-- `tests/poll.test.mjs` +166/−6; no test deleted or weakened (the 6 removals are the uid→message_key rekey and a STRENGTHENED dead-letter assertion, 6→8 forwards with `message_key`/`forwarded` pinned). Subset 123 → 131, no decrease.
+## Delta audit (`git diff 2da8f3e..3a9a13e`)
+- `jobs/poll.mjs`: exactly two hunks — the stop pattern + comment, and `if (false)` → `if (!dryRun)`. `tests/poll.test.mjs`: +12/−1, the bare-STOP subject array gains the three literals. Nothing else in `jobs/`, `lib/`, or `tests/` changed. Everything previously verified at `39529aa`/`2da8f3e` is byte-identical and was not re-derived.
+- **Regression audit (`git diff 2da8f3e..3a9a13e -- tests/`):** no test deleted or weakened; the single removed line is the array literal that the 8-element version replaces. Subset count 131 → 131, no decrease.
+
+## Mutation test
+- **None performed this round.** The two fixes were mutation-tested by the operator; I verified instead that the committed blobs are free of leftover mutation edits and that the worktree is byte-identical to `3a9a13e` for all five item-12 files. No file was modified — `git status` over `jobs/`, `lib/`, `tests/poll.test.mjs`, `tests/run-imap.test.mjs` is empty; all probes ran from `/tmp` and were deleted. Nothing committed.
 
 ## Not Verifiable
-- none. All probes out-of-band in /tmp; nothing committed; tree left exactly as found.
+- none.
