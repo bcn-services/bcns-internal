@@ -297,11 +297,6 @@ export async function run({
         const [thread] = ids.length ? ((await db.threadByMessageIds(sql, ids)) ?? []) : []
         const businessId = thread?.business_id ?? null
 
-        // Seen BEFORE handling: a second poller overlapping this tick must not
-        // re-forward and re-append the same message. The cost is that a crash
-        // mid-handle drops the message, which the `error` event still records.
-        if (!dryRun) await client.markSeen?.(message.uid)
-
         // Full addresses only. A bare local-part match let
         // `bot@anything.example` take the teammate path; anything unrecognised
         // now falls through to a human.
@@ -312,6 +307,13 @@ export async function run({
         } else {
           await forward(message, 'unrecognised Delivered-To', { delivered_to: to })
         }
+
+        // Seen only AFTER the handler returns. A crash mid-handle leaves the
+        // message unseen so the next tick retries it: a duplicated forward is
+        // visible and cheap, a silently dropped opt-out is neither. Re-applying
+        // a retried message is safe — stage moves and `suppress` are
+        // idempotent, and the `notes` append dedupes on the note itself.
+        if (!dryRun) await client.markSeen?.(message.uid)
       } catch (err) {
         result.errors++
         await log('error', { uid: message?.uid, error: String(err?.message ?? err) })

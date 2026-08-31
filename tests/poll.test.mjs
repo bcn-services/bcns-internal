@@ -802,16 +802,29 @@ test('review: an empty allow-list logs an error, not a forward nobody receives',
   assert.equal(h.events.some((e) => e.kind === 'forwarded'), false)
 })
 
-test('review: a message is marked seen before it is handled, so a crash cannot loop it', async () => {
-  const h = harness({ messages: [msg()] })
-  h.deps.db.businessById = async () => {
-    throw new Error('db is down mid-handle')
+test('review: a handler that throws leaves the message unseen, and the retry does not double-apply', async () => {
+  const h = harness({ messages: [teammate({ text: 'notes: called, left a voicemail' })] })
+  const logEvent = h.deps.db.logEvent
+  let boom = true
+  h.deps.db.logEvent = (sql, job, kind, detail) => {
+    if (boom && kind === 'command') {
+      boom = false
+      throw new Error('the event write failed after the patch landed')
+    }
+    return logEvent(sql, job, kind, detail)
   }
 
-  const result = await poll(h.deps)
+  const first = await poll(h.deps)
+
+  assert.equal(first.errors, 1)
+  assert.deepEqual(h.seen, [], 'an unhandled message must stay unread for the next tick')
+  assert.deepEqual(JSON.parse(h.store.get('b1').research).notes, ['called, left a voicemail'])
+
+  // The next tick sees the same message again.
+  await poll(h.deps)
 
   assert.deepEqual(h.seen, [7])
-  assert.equal(result.errors, 1)
+  assert.deepEqual(JSON.parse(h.store.get('b1').research).notes, ['called, left a voicemail'])
 })
 
 test('review: a bare local-part Delivered-To takes no privileged path', async () => {
