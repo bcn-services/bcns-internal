@@ -14,7 +14,8 @@ LANE.md wins for scope.
 - Team sizing revised 2026-08-31: `caution: true` now sits on items 3 and 12 only. Items 1, 2 and 6 lost it retrospectively (already done, no effect on any future run); the stop marker moved to after item 13, so an auto pass covers items 8-13 (the full loop) and leaves 14/15 for later; item 11 lost caution deliberately — the first sends go only to Nate via `NOTIFY_ALLOWED_RECIPIENTS`, and he reviews before any real client is mailed.
 - Live-system note: the crons are firing but nothing does work yet. `poll` and `touch` do not exist and are skipped cleanly; `source` no-ops because `run.mjs` does not inject `places`/`readBudget`; `qualify` is in no schedule. Nothing sends.
 - Decision closed 2026-08-31: `~/os` reaches the runner as a clone of `bcn-services/bcns-os`, wired into `clock.yml` behind the `OS_REPO` variable and the `OS_TOKEN` fine-grained PAT (the org disables deploy keys). Both are set on the repo. The clone is optional by design, so items 8-14 build the same way whether or not it lands; `authcheck` reports its state on dispatch.
-- Last updated: 2026-08-31 (`~/os` clone wired into `clock.yml` on `OS_TOKEN`; `authcheck` now reports clone state; 76/76 green)
+- Items 11 and 13 — the only two that open SMTP — were carrying no `caution:` flag, so the auto loop would have given each the engineer alone while the read-only poller (12) got the full engineer+QA+review pass. Both are now `caution: true`. Caught 2026-08-31 during the pre-run check.
+- Last updated: 2026-08-31 (`~/os` clone wired into `clock.yml` on `OS_TOKEN` and proven by an `authcheck` dispatch; `caution` added to items 11 and 13; 76/76 green)
 
 ## Round 2 — outreach pipeline (in progress)
 

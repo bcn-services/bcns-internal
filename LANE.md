@@ -365,6 +365,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       and that an allow-listed address is not
     - A unit test asserts the message is `multipart/alternative` carrying
       `lib/signature.html` and `lib/signature.txt` verbatim as its two parts
+  caution: true
   status: not started
 
 - task: Build the poller and the reply parser — `jobs/poll.mjs` on the 20-minute
@@ -410,6 +411,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       is refused before SMTP is opened
     - A unit test asserts the four templates render with the row fields and none
       contains a prospect email address as a recipient
+  caution: true
   status: not started
 
 - task: Build the end-to-end test — `tests/pipeline.test.mjs`, one test that
