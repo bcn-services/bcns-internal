@@ -41,7 +41,7 @@ test('every job runs under a ten-minute timeout', () => {
 test('clock.yml references no secret that does not yet exist', () => {
   const src = readFileSync(new URL('../.github/workflows/clock.yml', import.meta.url), 'utf8')
   const named = [...src.matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1])
-  const existing = ['DATABASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'GH_PACKAGES_TOKEN', 'IMAP_PASS', 'MAIL_FROM', 'SMTP_HOST', 'SMTP_PASS', 'SMTP_PORT', 'SMTP_USER']
+  const existing = ['DATABASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'GH_PACKAGES_TOKEN', 'IMAP_PASS', 'MAIL_FROM', 'OS_TOKEN', 'SMTP_HOST', 'SMTP_PASS', 'SMTP_PORT', 'SMTP_USER']
   for (const s of named) assert.ok(existing.includes(s), `secret ${s} is not set on the repo`)
 })
 
@@ -103,6 +103,20 @@ test('authcheck fails loudly when the identity exchange did not run', async () =
   const { run } = await import('../jobs/authcheck.mjs')
   await assert.rejects(run({ env: {} }), /workload identity/)
   assert.equal((await run({ env: { CLOUDSDK_AUTH_ACCESS_TOKEN: 'ya29.x' } })).ok, true)
+})
+
+test('authcheck reports the os clone without depending on it', async () => {
+  const { run } = await import('../jobs/authcheck.mjs')
+  const env = { CLOUDSDK_AUTH_ACCESS_TOKEN: 'ya29.x', OS_DIR: '/w/os' }
+  const seen = []
+  const present = await run({ env, exists: (p) => (seen.push(p), true) })
+  assert.deepEqual(present.os, { dir: '/w/os', cloned: true, voiceRules: true })
+  assert.ok(seen.some((p) => p.endsWith('knowledge/library/bcns-voice/voice-rules.md')))
+
+  // A run with no clone still succeeds — the clone is optional by design.
+  const absent = await run({ env, exists: () => false })
+  assert.deepEqual(absent.os, { dir: '/w/os', cloned: false, voiceRules: false })
+  assert.equal(absent.ok, true)
 })
 
 test('a job that is not built yet is skipped, not a failure', async () => {

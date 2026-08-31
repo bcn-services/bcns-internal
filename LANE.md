@@ -75,12 +75,12 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
   A job that did nothing writes a `skipped` event saying why.
 - `DRY_RUN` defaults to on everywhere. A job must opt into side effects.
 - `~/os` reaches the runner as a git clone, not a vendored copy — decided
-  2026-08-31. `clock.yml` will check out `bcn-services/bcns-os` to `$OS_DIR`,
-  gated on the `OS_REPO` variable. **Not wired yet:** the repo is private and
-  the `bcn-services` org has deploy keys disabled, so it needs a fine-grained
-  PAT as `OS_TOKEN` that only a human can mint. Until then `$OS_DIR` is absent.
-  Every job that wants it tests for the directory and degrades — a missing
-  `~/os` is a `skipped` event, never a throw.
+  2026-08-31. `clock.yml` checks out `bcn-services/bcns-os` to `$OS_DIR`, gated
+  on the `OS_REPO` variable and authenticated by the `OS_TOKEN` secret — a
+  fine-grained PAT, because the `bcn-services` org disables deploy keys. Both
+  are set. The clone stays optional: every job that wants `~/os` tests for the
+  directory and degrades — a missing `~/os` is a `skipped` event, never a
+  throw.
 - The Claude Code CLI is installed by `clock.yml`. `lib/claude.mjs` shells out
   to a `claude` binary that `ubuntu-latest` does not ship, so items 9, 10 and 12
   all fail on a runner without that step.

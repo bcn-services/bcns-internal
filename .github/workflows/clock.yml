@@ -47,12 +47,19 @@ jobs:
         run: npm i -g @anthropic-ai/claude-code
 
       # ~/os, for the skills the jobs shell out to (/pitch, /quote) and the
-      # voice rules personalize reads. NOT WIRED YET: bcns-os is private and
-      # the bcn-services org has deploy keys disabled, so this needs a
-      # fine-grained PAT as `OS_TOKEN` before the step can be added. Gate it on
-      # `vars.OS_REPO`, not the secret — the `secrets` context is not available
-      # in a step-level `if`. Until then `OS_DIR` does not exist on the runner
-      # and every job falls back to what it carries itself.
+      # voice rules personalize reads. bcns-os is private and the bcn-services
+      # org disables deploy keys, so this clones over a fine-grained PAT.
+      # Gated on `vars.OS_REPO`, not the secret — the `secrets` context is not
+      # available in a step-level `if`. Unset the variable and OS_DIR simply
+      # never appears, and every job falls back to what it carries itself.
+      - name: Check out ~/os
+        if: vars.OS_REPO != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.OS_REPO }}
+          token: ${{ secrets.OS_TOKEN }}
+          path: os
+          persist-credentials: false
 
       # Keyless: no service account key exists, and none can be created —
       # the org enforces iam.managed.disableServiceAccountKeyCreation.

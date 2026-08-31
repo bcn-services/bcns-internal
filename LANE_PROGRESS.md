@@ -13,8 +13,8 @@ LANE.md wins for scope.
 - Gap closed 2026-08-31: an end-to-end item now sits directly above the stop marker as item 14, so the auto pass builds it. It drives `run.mjs`'s deps through source -> qualify -> personalize -> touch -> poll -> notify on the existing fakes, and stays pure. Items 8-13 land unit tests only; nothing else ever proves the jobs agree on the row shapes they hand each other.
 - Team sizing revised 2026-08-31: `caution: true` now sits on items 3 and 12 only. Items 1, 2 and 6 lost it retrospectively (already done, no effect on any future run); the stop marker moved to after item 13, so an auto pass covers items 8-13 (the full loop) and leaves 14/15 for later; item 11 lost caution deliberately — the first sends go only to Nate via `NOTIFY_ALLOWED_RECIPIENTS`, and he reviews before any real client is mailed.
 - Live-system note: the crons are firing but nothing does work yet. `poll` and `touch` do not exist and are skipped cleanly; `source` no-ops because `run.mjs` does not inject `places`/`readBudget`; `qualify` is in no schedule. Nothing sends.
-- Decision still open before item 13: how `~/os` reaches the runner for the `/pitch` call (deploy-key clone in `clock.yml`, or vendor the two skills into this repo). LANE.md defers it to the notification item, which is inside the auto range — pick before starting, or 13 gets built against an unchosen path.
-- Last updated: 2026-08-31 (pre-run LANE.md edits: send-path wording, allow-list gate, signature test, gh note, end-to-end item added)
+- Decision closed 2026-08-31: `~/os` reaches the runner as a clone of `bcn-services/bcns-os`, wired into `clock.yml` behind the `OS_REPO` variable and the `OS_TOKEN` fine-grained PAT (the org disables deploy keys). Both are set on the repo. The clone is optional by design, so items 8-14 build the same way whether or not it lands; `authcheck` reports its state on dispatch.
+- Last updated: 2026-08-31 (`~/os` clone wired into `clock.yml` on `OS_TOKEN`; `authcheck` now reports clone state; 76/76 green)
 
 ## Round 2 — outreach pipeline (in progress)
 
