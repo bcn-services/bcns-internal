@@ -4,7 +4,9 @@
 // a broken pipeline looks green forever.
 
 export const SCHEDULES = {
-  '*/20 8-20 * * 1-5': 'poll',
+  // Read the inbox, then tell the humans what it left behind. Notify runs at
+  // the end of the tick because it reports on what poll just wrote.
+  '*/20 8-20 * * 1-5': ['poll', 'notify'],
   '0 14 * * 1-5': 'touch',
   // The Monday tick is a chain: source finds businesses, qualify reads the
   // ones it just wrote. Order is the contract, so it lives in this list.
@@ -160,33 +162,41 @@ const ENTITIES = {
   quot: '"',
   apos: "'",
   nbsp: ' ',
+  // rsquo only: it is the apostrophe in `don&rsquo;t`, which patterns match on.
+  // No pattern reads a double or opening quote, so the other three earn nothing.
   rsquo: '\u2019',
-  lsquo: '\u2018',
-  rdquo: '\u201d',
-  ldquo: '\u201c',
 }
 
 export function htmlToText(html) {
   return String(html ?? '')
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
+    // The inner run may not cross a second opener: an unbalanced `<style>` (or
+    // `<!--`) otherwise lets the strip run on to the NEXT one and delete the
+    // real body in between — a silently missed opt-out, the exact failure this
+    // file exists to avoid.
+    .replace(/<(script|style)\b[^>]*>(?:(?!<\1\b)[\s\S])*?<\/\1>/gi, ' ')
+    .replace(/<!--(?:(?!<!--)[\s\S])*?-->/g, ' ')
     .replace(BLOCK, '\n')
     // Inline tags close up rather than separate: `<b>un</b>subscribe` must read
     // as one word, or the opt-out pattern misses it. Block tags above already
     // supplied the break.
-    // ponytail: regex tag strip — an unclosed <style> leaks its CSS and an
-    // attribute containing a literal `>` leaks attribute text. Both are noise
-    // in a body we only pattern-match; reach for a real parser if either ever
+    // ponytail: regex tag strip — an unbalanced <style> or <!-- now leaks its
+    // own text rather than eating the body after it, and an attribute
+    // containing a literal `>` leaks attribute text. Both are additive noise in
+    // a body we only pattern-match; reach for a real parser if either ever
     // produces a false opt-out.
     .replace(/<[^>]*>/g, '')
     // Numeric entities decode by code point, so hex (`&#x27;`) works alongside
     // decimal (`&#39;`); a curly apostrophe that survives is folded to ASCII by
     // the opt-out matcher.
-    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) =>
-      e[0] === '#'
-        ? String.fromCodePoint(Number(e[1].toLowerCase() === 'x' ? `0x${e.slice(2)}` : e.slice(1)))
-        : (ENTITIES[e.toLowerCase()] ?? m)
-    )
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+      if (e[0] !== '#') return ENTITIES[e.toLowerCase()] ?? m
+      // Out-of-range code points throw a RangeError out of String.fromCodePoint,
+      // and this runs inside the poller's message drain: one `&#x110000;` from a
+      // stranger would stall every tick forever. Anything outside Unicode (and
+      // the lone surrogates, which are unusable output) stays literal text.
+      const n = Number(e[1].toLowerCase() === 'x' ? `0x${e.slice(2)}` : e.slice(1))
+      return n >= 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : m
+    })
     .replace(/[ \t\u00a0]+/g, ' ')
     .replace(/ ?\n ?/g, '\n')
     .replace(/\n{3,}/g, '\n\n')

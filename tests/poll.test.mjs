@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { toMessage } from '../jobs/run.mjs'
+import { toMessage, htmlToText } from '../jobs/run.mjs'
 import {
   run as poll,
   isOptOutMessage,
@@ -15,6 +15,7 @@ import {
   isAllowedSender,
   ADVANCED_STAGES,
   NO_ANSWER_DAYS,
+  MAX_ATTEMPTS,
 } from '../jobs/poll.mjs'
 import { threadByMessageIds, businessById, assertSelectable } from '../lib/db.mjs'
 
@@ -77,6 +78,19 @@ function harness({
         events.push({ job, kind, detail })
         return Promise.resolve([])
       },
+      // Counts the same rows lib/db.mjs's query counts: poll error/dead_letter
+      // events carrying this uid.
+      messageFailureCount: (_s, uid) =>
+        Promise.resolve([
+          {
+            count: events.filter(
+              (e) =>
+                e.job === 'poll' &&
+                (e.kind === 'error' || e.kind === 'dead_letter') &&
+                String(e.detail?.uid) === String(uid)
+            ).length,
+          },
+        ]),
       threadByMessageIds: (_s, ids) => {
         const hit = ids.map((id) => threads.find((t) => t.message_id === id)).find(Boolean)
         return Promise.resolve(hit ? [hit] : [])
@@ -899,4 +913,118 @@ test('review: a curly or entity-encoded apostrophe is still an opt-out, on both 
   // Normalising did not widen the list, and a benign reply is still not an opt-out.
   assert.equal(OPT_OUT_PATTERNS.length, 21)
   assert.equal(isOptOut("we don’t have time this week, try me in the spring"), false)
+})
+
+// --- third review pass -----------------------------------------------------
+
+const parsedReply = (html) => ({
+  from: { value: [{ address: 'dana@acmeroofing.example' }] },
+  subject: 'Re: a question about Acme Roofing',
+  html,
+  inReplyTo: FIRST_ID,
+  references: [],
+  headers: new Map([['delivered-to', OUTREACH]]),
+})
+
+// CRITICAL — String.fromCodePoint throws a RangeError above U+10FFFF. The throw
+// escaped the drain (a try/finally with no catch), so ONE entity from a stranger
+// stalled every tick forever and nothing was ever marked seen.
+test('review: an out-of-range numeric entity cannot stall the tick', async () => {
+  assert.equal(htmlToText('<p>hi &#x110000; there</p>'), 'hi &#x110000; there')
+  assert.equal(htmlToText('<p>a &#99999999999; b</p>'), 'a &#99999999999; b')
+  assert.equal(htmlToText('<p>&#xD800;</p>'), '&#xD800;') // a lone surrogate is not output either
+  assert.equal(htmlToText('<p>don&#x27;t</p>'), "don't") // in-range still decodes
+
+  const h = harness({ messages: [] })
+  h.deps.imap = async () => ({
+    // The drain parses inside the mailbox client: this is where the throw was.
+    messages: async () => [
+      toMessage(parsedReply('<div>Thanks &#x110000; I will consider it</div>'), 11),
+      toMessage(parsedReply('<div>please remove me from your list</div>'), 12),
+    ],
+    markSeen: async (uid) => h.seen.push(uid),
+    close: async () => {},
+  })
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.read, 2, 'the bad entity must not stall the tick')
+  assert.deepEqual(h.seen, [11, 12], 'every message in the tick is still marked seen')
+  assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'reply opt-out' }])
+})
+
+// IMPORTANT — the pair strip tolerated an unbalanced opener and ran on to the
+// NEXT one, DELETING the body in between. A silently missed opt-out.
+test('review: an unbalanced <style> or comment cannot delete the opt-out', async () => {
+  const stylish = '<style>a{}<div>please remove me from your list</div><style>b{}</style><p>ok</p>'
+  const commented = '<!--x<div>please remove me from your list</div><!-- y --><p>ok</p>'
+  for (const html of [stylish, commented]) {
+    assert.equal(htmlToText(html).includes('remove me from your list'), true, html)
+
+    const h = harness({ messages: [], classify: async () => 'interested' })
+    h.deps.imap = async () => ({
+      messages: async () => [toMessage(parsedReply(html), 13)],
+      markSeen: async (uid) => h.seen.push(uid),
+      close: async () => {},
+    })
+
+    await poll(h.deps)
+
+    assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'reply opt-out' }], html)
+    assert.deepEqual(h.updates, [], html)
+  }
+  // Balanced pairs are still stripped whole.
+  assert.equal(htmlToText('<style>a{color:red}</style><p>hello</p>'), 'hello')
+  assert.equal(htmlToText('<!-- hidden --><p>hello</p>'), 'hello')
+})
+
+// IMPORTANT — folding the subject into the match made the bare-"stop" line
+// reachable from ordinary subjects. Suppression is permanent and has no undo.
+test('review: an ordinary "Stop by..." subject does not suppress, a bare STOP still does', async () => {
+  assert.equal(OPT_OUT_PATTERNS.length, 21)
+  assert.equal(isOptOutMessage({ subject: 'Stop by the office Thursday!' }), false)
+  assert.equal(isOptOutMessage({ subject: 'Can you stop in on Friday?' }), false)
+  assert.equal(isOptOutMessage({ subject: 'stop over any time' }), false)
+  assert.equal(isOptOutMessage({ subject: 'STOP' }), true)
+  assert.equal(isOptOutMessage({ subject: 'UNSUBSCRIBE' }), true)
+  assert.equal(isOptOutMessage({ subject: 'please stop' }), true)
+  assert.equal(isOptOut('stop\n'), true)
+
+  const benign = harness({ messages: [msg({ subject: 'Stop by the office Thursday!' })] })
+  await poll(benign.deps)
+  assert.deepEqual(benign.suppressions, [])
+  assert.equal(benign.store.get('b1').stage, 'replied')
+
+  for (const subject of ['STOP', 'UNSUBSCRIBE']) {
+    const h = harness({ messages: [msg({ subject, text: '' })] })
+    await poll(h.deps)
+    assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'reply opt-out' }], subject)
+  }
+})
+
+// IMPORTANT — with markSeen last, a deterministically failing message was
+// retried every tick forever, re-forwarding to every human each time.
+test('review: a message that always throws is dead-lettered instead of retried forever', async () => {
+  assert.equal(MAX_ATTEMPTS, 3)
+
+  const h = harness({ classify: null })
+  const logEvent = h.deps.db.logEvent
+  h.deps.db.logEvent = (sql, job, kind, detail) => {
+    if (kind === 'replied') throw new Error('deterministic failure on every tick')
+    return logEvent(sql, job, kind, detail)
+  }
+  h.deps.imap = async () => ({
+    messages: async () => (h.seen.includes(7) ? [] : [msg()]),
+    markSeen: async (uid) => h.seen.push(uid),
+    close: async () => {},
+  })
+
+  for (let tick = 0; tick < 5; tick++) await poll(h.deps)
+
+  assert.deepEqual(h.seen, [7], 'dead-lettered once, then never fetched again')
+  assert.equal(h.forwards.length, 6, '2 humans x 3 attempts, then it stops')
+  const dead = h.events.filter((e) => e.kind === 'dead_letter')
+  assert.equal(dead.length, 1)
+  assert.deepEqual(dead[0].detail, { uid: 7, attempts: 3 })
+  assert.equal(h.events.filter((e) => e.kind === 'error' && e.detail.uid === 7).length, 3)
 })

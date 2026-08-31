@@ -1,44 +1,45 @@
-# Review Report
+# Review Report — DELTA
 **Branch:** item/0008-places
-**Commit:** cd3d6bb
-**Date:** 2026-08-31
-**Files Reviewed:** 5 (jobs/poll.mjs, jobs/run.mjs, lib/db.mjs, tests/poll.test.mjs, package.json)
-**Dimensions Swept:** Efficiency (1) · Reliability (2) · Scalability (1) · Safety & Security (1) · Fault Tolerance (3) · Data Integrity (4) · Over-Engineering (2, informational)
+**HEAD:** cf32895 (tree at 8e84198; LANE.md/LANE_PROGRESS.md only, no code delta)
+**Scope:** delta cd3d6bb..cf32895
+**Files Reviewed:** 2 code (`jobs/run.mjs`, `jobs/poll.mjs`) + 2 test files by report
+**Dimensions Swept:** Correctness/false-negative clean-except-below · Fault tolerance 2 findings · Concurrency/idempotence clean · Security (secrets, spoofing) clean · Dependencies clean (`imapflow`,`mailparser`,`nodemailer`,`postgres` only; package.json diff is the test list) · Efficiency clean · Over-Engineering 1 informational
 
-## Findings
+## Prior findings
+CONFIRMED FIXED — CRITICAL html-only body — `jobs/run.mjs:183` + `jobs/poll.mjs:351`; verified `htmlToText` by execution, not by report.
+CONFIRMED FIXED — IMPORTANT subject in opt-out match — `jobs/poll.mjs:332` (`isOptOutMessage`); see new finding N3 for its cost.
+CONFIRMED FIXED — IMPORTANT missing classifier — `jobs/poll.mjs:367` `degraded` event + unconditional forward.
+CONFIRMED FIXED — IMPORTANT 4 new patterns — `jobs/poll.mjs:78-85`, list is 21, verified live.
+CONFIRMED FIXED — IMPORTANT empty allow-list — `jobs/poll.mjs:251-266` `error`/`errors++`, no `forwarded` event, no send.
+CONFIRMED FIXED — IMPORTANT unbounded fetch — `jobs/run.mjs:194` `MAX_MESSAGES_PER_TICK = 100`, `drainMessages` caps.
+CONFIRMED FIXED — 4 Minor: notes `new Set` (`poll.mjs:432`), full-address routing (`poll.mjs:308`), `logout()` on failed lock (`run.mjs:222`), `forwarded++` after delivery (`poll.mjs:280`).
+
+## markSeen reversal — assessment
+The reversal is right; I withdraw the ordering half of my original finding. Against an invisible false negative, an at-least-once queue is the correct shape and a duplicate forward is a visible, self-correcting cost.
+No re-apply or double-send path beyond the accepted duplicate forward: `db.suppress` is guarded, stage patches are absolute SETs, and the `Set` closes the only append. The gap QA's sequential replay cannot see is not idempotence, it is *termination* — see N2.
+
+## Findings (new)
 
 ### Critical
-CRITICAL — jobs/run.mjs:180 — Data Integrity — `text: parsed.text ?? ''`: mailparser only html→text converts when the html node is root or a text/plain part exists (`node_modules/mailparser/lib/mail-parser.js:806`), so a `multipart/related` html-only reply (Outlook/Gmail reply carrying an inline image) yields `parsed.text === undefined` → empty body → `isOptOut` false, `isAutoReply` false, classifier sees an empty reply → `stage=replied`, no suppression, no forward. Exactly this item's invisible false negative. — Fix: `text: parsed.text || htmlToText(parsed.html ?? '')` (`html-to-text` is already a mailparser dependency), and in `handleProspect` forward any message whose stripped body is empty instead of classifying it.
+CRITICAL — jobs/run.mjs:185 — `String.fromCodePoint(Number(...))` throws `RangeError` on an out-of-range numeric entity (`&#x110000;`, `&#99999999999;`), verified by execution. The throw is raised inside `drainMessages`, i.e. `client.messages()` at `jobs/poll.mjs:288`, which sits in a `try`/**`finally`** with no `catch` — it escapes `run()`, so no message in the mailbox is processed, nothing is marked seen, and every subsequent tick re-fetches the same message and dies again. Any sender can permanently stall the entire opt-out pipeline with one entity. — Fix: guard the decode, `const n = Number(...); return n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m` (this also drops the lone-surrogate output `&#xD800;` currently produces).
 
 ### Important
-IMPORTANT — jobs/poll.mjs:297 — Data Integrity — `isOptOut(message.text)` never inspects the subject, though `isAutoReply` does (line 101); a subject-only "UNSUBSCRIBE" / "Re: … STOP" with an empty or unrelated body is missed. — Fix: `isOptOut(`${message.subject ?? ''}\n${message.text ?? ''}`)`.
-IMPORTANT — jobs/poll.mjs:313 — Reliability — with no `ANTHROPIC_API_KEY`, `claude` is null and the job proceeds silently with the regex as its sole opt-out defence; the five phrasings below become true false negatives with no signal anywhere. — Fix: log a `skipped`/`degraded` event when `claude` is null and forward every unclassified prospect reply for a human.
-IMPORTANT — jobs/poll.mjs:59-77 — Data Integrity — measured `OPT_OUT_PATTERNS` recall gaps: "we don't want any more emails", "Please remove this email address from your distribution", "Please remove from your list", "Please cease all communication", "Please do not send us anything further". — Fix: add `/\bremove\b[^\n]{0,40}\b(list|distribution|database|mailing)/i`, `/\bcease\b[^\n]{0,20}\b(communication|contact)/i`, `/\bdo ?n[o']?t (?:want|need)\b[^\n]{0,25}\b(?:e-?mails?|contact)/i`, `/\b(?:do ?n[o']?t) send\b[^\n]{0,25}\b(?:anything|any)\b[^\n]{0,15}\b(?:further|more|else)/i`.
-IMPORTANT — jobs/poll.mjs:239 — Reliability — `forward` loops over `allowedRecipients`; an empty or misparsed `NOTIFY_ALLOWED_RECIPIENTS` sends nothing, yet `result.forwarded` still increments and the event says `forwarded`. Every "needs a human" message — including unmatched opt-outs — reaches no human. — Fix: when the list is empty, log `error` with `reason: 'no allow-listed recipient'` and count it as an error, not a forward.
-IMPORTANT — jobs/run.mjs:169 — Scalability / Fault Tolerance — `client.fetch({ seen: false })` is unbounded and the job takes no lock; a backlog can run past the 20-minute cron, so two pollers process the same unseen messages → duplicate forwards and duplicate `notes` appends. — Fix: cap the fetch (`limit`, e.g. 100) so a tick is bounded, and mark seen before handling rather than after.
+IMPORTANT — jobs/run.mjs:158,170 — the `ponytail:` claim at `jobs/run.mjs:177` that an unclosed `<style>` is additive noise that "cannot cause a MISS" is FALSE, and it fails in the deleting direction. The pair strip `/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi` is non-greedy and unbalanced-open-tolerant: `<style>a{}<div>please remove me from your list</div><style>b{}</style><p>ok</p>` → `"ok"` — the body is DELETED, the opt-out is silently missed. The comment strip has the identical bug: `<!--x<div>remove me from your list</div><!-- y --><p>ok</p>` → `"ok"`. Both verified by execution. — Fix: forbid crossing a second opener — inner `(?:(?!<\1\b)[\s\S])*?` for the tag pair and `(?:(?!<!--)[\s\S])*?` for comments — then correct the comment at `jobs/run.mjs:177` (the attribute-`>` half of it I confirmed genuinely additive).
+IMPORTANT — jobs/poll.mjs:316 — with markSeen last there is no attempt counter and no dead letter: a message whose handling throws deterministically (the N1 crash, an oversized body, a DB constraint) is retried every tick forever, re-sending its forward to every allow-listed human on each one. "The next tick retries it" is unbounded, and the failure is loudest exactly when a human can least act on it. — Fix: after N failed attempts on a uid, mark seen and log a distinct `dead_letter` event instead of retrying (a uid→count map on the tick result, or a `poll_failures` column; the lazy version is to markSeen on the second consecutive failure for the same uid).
+IMPORTANT — jobs/poll.mjs:332 — folding the subject into the match makes the bare-`stop`-line pattern (`poll.mjs:76`) reachable from ordinary subject lines: `isOptOutMessage({subject:'Stop by the office Thursday!'})` → `true`, verified. That silently and permanently suppresses a live prospect, and unlike the pattern-list precision losses QA logged, this one is created by this delta rather than merely exposed by it. — Fix: `stop\b(?![ \t]+(?:by|in|over|round))` on that one pattern.
 
 ### Minor
-MINOR — jobs/poll.mjs:378-384 — Fault Tolerance — `notes` appends unconditionally; a message re-processed because the handler threw before `markSeen` (line 279) duplicates the note. — Fix: dedupe the appended note against the existing array.
-MINOR — jobs/poll.mjs:271-273 — Safety & Security — routing falls back to a bare local-part comparison, so `Delivered-To: bot@anything.example` takes the teammate path and `outreach@anything.example` the prospect path. — Fix: compare full addresses only; anything else already falls through to `forward`.
-MINOR — jobs/run.mjs:165 — Fault Tolerance — `getMailboxLock` is acquired inside `imap()`; if anything between it and the caller's `finally` throws, the lock and the IMAP connection leak until the process exits. — Fix: wrap the post-connect setup in try/catch and `client.logout()` on failure.
-MINOR — jobs/poll.mjs:238 — Efficiency — `result.forwarded++` fires before any send is attempted, so the returned counter reports delivery the job did not achieve. — Fix: increment on a successful `send`.
+MINOR — jobs/run.mjs:178 — closing inline tags up trades one miss for another: `<b>un</b>subscribe` now matches, but `<b>Remove</b><i>me</i> from your list` → `"Removeme from your list"`, which `\bremove\b` misses. Close-up is the browser-correct semantic (the sender sees "Removeme" too), so this is the right side of the trade — recording it so the classifier backstop is understood to be carrying it. — Fix: none required.
+MINOR — jobs/run.mjs:150 — the unbalanced-tag scan is O(n²) on a large html body with no closing tag; irrelevant at reply sizes, noted only so the N2 fix is not sized for it. — Fix: none.
 
 ### Over-Engineering (informational, non-gating)
-OVER-ENG — jobs/poll.mjs:195-205 — `parseResearch` is duplicated verbatim from `jobs/touch.mjs:98`. — Fix: export it from touch.mjs and import.
-OVER-ENG — jobs/poll.mjs:145 — `createNotifier` is generalised for item 13's reuse and is speculative until 13 lands; ceiling is a second deliver path if 13 diverges.
+INFO — jobs/run.mjs:156 — `lsquo`/`ldquo`/`rdquo` earn nothing: no pattern matches on a double quote or an opening single quote, and `rsquo` alone closes the measured gap. Three dead map entries. — Fix: keep `rsquo`, drop the other three, or leave them; either is fine.
 
-## QA Findings Adjudicated
-- QA #1 (regex recall gaps) — **Important**, see poll.mjs:59-77 above. Not Critical: a matched-thread reply still sets `stage=replied`, which removes the row from `dueTouches` (lib/db.mjs:174) and from `personalize`'s `stage='qualified'` selection, so the sequence stops anyway. The residual harm is that `suppressed_at` is never written — the row stays in `selectable_businesses` and the opt-out record required to defend a future re-source or re-import does not exist.
-- QA #2 (no classifier ⇒ regex is sole defence) — **Important**, see poll.mjs:313 above. Same bounded harm, but silent: nothing in the events stream says the second line of defence was absent for that tick.
-
-## Known Failure Families — Checked
-- Producer/consumer field mismatch: **clean**. mailparser's `ensureMessageIDFormat` (mail-parser.js:373-391) restores `<>` on both `inReplyTo` and every `references` entry, matching the `<uuid@bcn-services.com>` form `db.recordThread` stores and the `/<[^>]+>/g` `threadIds` extracts.
-- Assertion pinned to an exported constant: **clean**. QA pins `NO_ANSWER_DAYS`/`ADVANCED_STAGES` to literals in a dedicated test.
-- Negative side effect re-derived from adapter calls: **clean**. Every "changes nothing" assertion drives `run(deps)`.
-- Secrets in logs/events/errors: **clean**. `IMAP_PASS`/`SMTP_PASS` reach only the client constructors; `logger: false`; no error path interpolates them.
-- `NOTIFY_ALLOWED_RECIPIENTS` parsing: **clean**. run.mjs:105 trims and `filter(Boolean)`; `assertAllowed` lowercases both sides; empty string ⇒ nobody allowed; QA covered display-name and `.com.evil.example` lookalikes.
+## Secrets
+Clean. `IMAP_PASS`/`SMTP_PASS` stay inside `createImap`/`createTransport` config at `jobs/run.mjs:113-140` and reach no event, log or error string. The new `degraded` and `error` paths log only `stage`, `reason`, `from`, `subject`, recipient and `err.message`.
 
 ## STANDARDS.md Updates
-Created `STANDARDS.md` at the project root — Jobs (skipped-event on missing dependency, `would_<verb>` dry-run event naming, record-before-send), Safety gates (one allow-list implementation, suppression precedes judgement, reads through the view), Tests (drive `run()` for negatives, literal assertions with constants pinned separately, register new test files in `package.json`).
+none — no file created at the repo root, by instruction.
 
-Critical: 1 | Important: 5 | Minor: 4
+Critical: 1 | Important: 3 | Minor: 2
+Prior findings not fixed: 0

@@ -26,6 +26,13 @@ export const ADVANCED_STAGES = ['meeting', 'quoted', 'won', 'lost']
 // How long a "no answer" pushes the next call attempt out.
 export const NO_ANSWER_DAYS = 2
 
+// Marking seen last means a message whose handling throws is retried next tick.
+// That is right for a transient fault and wrong for a deterministic one: an
+// oversized body or a constraint violation would re-forward to every human on
+// every tick, forever. After this many failed attempts the message is marked
+// seen and dead-lettered for a human to find in `events`.
+export const MAX_ATTEMPTS = 3
+
 // --- quoted regions --------------------------------------------------------
 // Truncate at the first quote marker, then drop any surviving `>` lines. Kept
 // deliberately narrow: over-eager stripping deletes the sentence that would
@@ -72,7 +79,11 @@ export const OPT_OUT_PATTERNS = [
   /\bnot interested\b/i,
   /\bleave (?:me|us) alone\b/i,
   /\bdo not (?:wish|want) to (?:receive|be contacted|hear)/i,
-  /^[ \t]*(?:please[ \t]+)?stop\b[^\n]{0,30}$/im, // a line that is just "STOP"
+  // A line that is just "STOP". The lookahead exists because the subject is now
+  // matched too, and `Stop by the office Thursday!` is an ordinary subject line
+  // — suppression is permanent and has no undo, so this one benign continuation
+  // is excluded. Recall still wins everywhere else.
+  /^[ \t]*(?:please[ \t]+)?stop\b(?![ \t]+(?:by|in|over|round))[^\n]{0,30}$/im,
   /\bstop\b[^\n]{0,25}\b(?:list|e-?mails?)\b/i,
   // Measured recall gaps: "remove this email address from your distribution",
   // "remove from your list", "cease all communication", "we don't want any more
@@ -320,7 +331,21 @@ export async function run({
         if (!dryRun) await client.markSeen?.(message.uid)
       } catch (err) {
         result.errors++
-        await log('error', { uid: message?.uid, error: String(err?.message ?? err) })
+        // Bookkeeping for one bad message must never take the rest of the
+        // tick's messages down with it, so this is its own try.
+        try {
+          await log('error', { uid: message?.uid, error: String(err?.message ?? err) })
+          // `events` is already the poller's only marker store: prior failures
+          // for this uid are counted there rather than in new state.
+          const [row] = (await db.messageFailureCount?.(sql, message?.uid)) ?? []
+          const attempts = Number(row?.count ?? 0)
+          if (attempts >= MAX_ATTEMPTS) {
+            await log('dead_letter', { uid: message?.uid, attempts })
+            if (!dryRun) await client.markSeen?.(message?.uid)
+          }
+        } catch {
+          // nothing left to do but keep going
+        }
       }
     }
   } finally {
