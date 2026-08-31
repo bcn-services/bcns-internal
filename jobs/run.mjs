@@ -152,16 +152,41 @@ export async function buildDeps(env = process.env) {
 // invisible false negative this pipeline cannot afford, so the text is derived
 // from the html here instead. No new dependency: html-to-text is only a
 // mailparser transitive and importing it directly would make it undeclared.
-const BLOCK = /<\/?(?:br|p|div|tr|li|h[1-6]|table|blockquote)\b[^>]*>/gi
-const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#160': ' ' }
+const BLOCK = /<\/?(?:br|p|div|tr|td|th|li|h[1-6]|table|blockquote)\b[^>]*>/gi
+const ENTITIES = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  rsquo: '\u2019',
+  lsquo: '\u2018',
+  rdquo: '\u201d',
+  ldquo: '\u201c',
+}
 
 export function htmlToText(html) {
   return String(html ?? '')
     .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(BLOCK, '\n')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (m, e) => ENTITIES[e.toLowerCase()] ?? m)
+    // Inline tags close up rather than separate: `<b>un</b>subscribe` must read
+    // as one word, or the opt-out pattern misses it. Block tags above already
+    // supplied the break.
+    // ponytail: regex tag strip — an unclosed <style> leaks its CSS and an
+    // attribute containing a literal `>` leaks attribute text. Both are noise
+    // in a body we only pattern-match; reach for a real parser if either ever
+    // produces a false opt-out.
+    .replace(/<[^>]*>/g, '')
+    // Numeric entities decode by code point, so hex (`&#x27;`) works alongside
+    // decimal (`&#39;`); a curly apostrophe that survives is folded to ASCII by
+    // the opt-out matcher.
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) =>
+      e[0] === '#'
+        ? String.fromCodePoint(Number(e[1].toLowerCase() === 'x' ? `0x${e.slice(2)}` : e.slice(1)))
+        : (ENTITIES[e.toLowerCase()] ?? m)
+    )
     .replace(/[ \t\u00a0]+/g, ' ')
     .replace(/ ?\n ?/g, '\n')
     .replace(/\n{3,}/g, '\n\n')

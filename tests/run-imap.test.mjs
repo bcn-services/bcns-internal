@@ -59,3 +59,11 @@ test('one tick drains at most MAX_MESSAGES_PER_TICK messages', async () => {
   assert.equal(out.length, 100)
   assert.equal(out.at(-1).uid, 100)
 })
+
+test('htmlToText decodes hex and named quote entities, and closes inline tags up', () => {
+  assert.equal(htmlToText('<p>we don&#x27;t want any more emails</p>'), "we don't want any more emails")
+  assert.equal(htmlToText('<p>we don&rsquo;t want any more emails</p>'), 'we don’t want any more emails')
+  assert.equal(htmlToText('<p>we don&#8217;t want any more emails</p>'), 'we don’t want any more emails')
+  assert.equal(htmlToText('<div>Please <b>un</b>subscribe me</div>'), 'Please unsubscribe me')
+  assert.equal(htmlToText('<table><tr><td>stop</td><td>emailing me</td></tr></table>'), 'stop\n\nemailing me')
+})

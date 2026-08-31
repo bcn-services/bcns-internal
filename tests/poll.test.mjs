@@ -861,3 +861,42 @@ test('review: the same note re-processed twice is stored once', async () => {
 
   assert.deepEqual(JSON.parse(h.store.get('b1').research).notes, ['called, left a voicemail'])
 })
+
+// --- entity + apostrophe normalisation -------------------------------------
+// "we don't want any more emails" with anything but a plain ASCII apostrophe
+// was a measured false negative: a missed opt-out is this item's whole risk.
+
+const APOSTROPHE_VARIANTS = [
+  ['hex entity', 'we don&#x27;t want any more emails'],
+  ['named rsquo entity', 'we don&rsquo;t want any more emails'],
+  ['raw curly U+2019', 'we don’t want any more emails'],
+]
+
+test('review: a curly or entity-encoded apostrophe is still an opt-out, on both paths', async () => {
+  for (const [label, html] of APOSTROPHE_VARIANTS) {
+    // the html-only path
+    const h = harness({ messages: [htmlOnly(`<div>${html}</div>`)], classify: async () => 'interested' })
+
+    await poll(h.deps)
+
+    assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'reply opt-out' }], `html: ${label}`)
+    assert.deepEqual(h.updates, [], `html: ${label}`)
+
+    // the plain-text path, with the entity already decoded by the sender
+    const text = html.replace('&#x27;', "’").replace('&rsquo;', '’')
+    assert.equal(isOptOut(text), true, `text: ${label}`)
+
+    const p = harness({ messages: [msg({ text })], classify: async () => 'interested' })
+
+    await poll(p.deps)
+
+    assert.deepEqual(p.suppressions, [{ id: 'b1', reason: 'reply opt-out' }], `text: ${label}`)
+    assert.deepEqual(p.updates, [], `text: ${label}`)
+  }
+
+  // U+02BC, the other apostrophe mail clients emit.
+  assert.equal(isOptOut('we donʼt want any more emails'), true)
+  // Normalising did not widen the list, and a benign reply is still not an opt-out.
+  assert.equal(OPT_OUT_PATTERNS.length, 21)
+  assert.equal(isOptOut("we don’t have time this week, try me in the spring"), false)
+})

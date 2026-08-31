@@ -84,7 +84,11 @@ export const OPT_OUT_PATTERNS = [
 ]
 
 export function isOptOut(text) {
-  const clean = stripQuoted(text)
+  // One normalisation choke point instead of a curly-quote alternative in every
+  // pattern: `don\u2019t` and `don\u02bct` are the same word as `don't`, and a
+  // future pattern gets that for free. The forwarded copy keeps the original
+  // characters — only the match is normalised.
+  const clean = stripQuoted(text).replace(/[\u2019\u02bc]/g, "'")
   return OPT_OUT_PATTERNS.some((re) => re.test(clean))
 }
 
