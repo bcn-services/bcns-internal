@@ -332,7 +332,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
     - A unit test asserts a draft containing `http`, `$`, or `demo is ready` is
       rejected and an `error` event written
     - A unit test asserts the buffer stops at 25 undelivered drafts
-  status: not started
+  status: done
 
 - task: Build the sender — `jobs/touch.mjs` on the 14:00 weekday cron. Each run
     picks rows due today: first sends from the `drafted` buffer, and bumps where
