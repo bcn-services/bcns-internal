@@ -245,7 +245,7 @@ stale client-app template and describes nothing in this repo).
     - A unit test with a fake resolver asserts a domain with no MX record is
       rejected without opening a socket
     - A unit test asserts the probe issues `RCPT TO` and then `QUIT`, never `DATA`
-  status: not started
+  status: done
 
 - task: Build personalization — the single Claude call that produces the cold
     email copy and the demo slot values together, using hand-written example emails
