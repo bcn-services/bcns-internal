@@ -291,7 +291,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       billing response and throws (never returns a number) on a malformed one
     - `run.mjs`'s deps object carries `places` and `readBudget` when the token is
       present, asserted by a test that builds deps with a fake env
-  status: not started
+  status: done
 
 - task: Wire qualification into the clock. Add `qualify` to `SCHEDULES` under the
     Monday cron, run after `source` in the same tick, and inject `fetchPage`
