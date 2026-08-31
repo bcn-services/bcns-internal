@@ -410,7 +410,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       is refused before SMTP is opened
     - A unit test asserts the four templates render with the row fields and none
       contains a prospect email address as a recipient
-  status: not started
+  status: done
 
 - task: Build the end-to-end test — `tests/pipeline.test.mjs`, one test that
     drives `jobs/run.mjs`'s deps object through the whole path in order: `source`
