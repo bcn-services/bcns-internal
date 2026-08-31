@@ -1179,7 +1179,18 @@ for (const subject of BENIGN_STOP_SUBJECTS) {
 
 test('qa: a bare STOP still suppresses, in the subject and in the body', async () => {
   assert.equal(OPT_OUT_PATTERNS.length, 21)
-  for (const subject of ['STOP', 'UNSUBSCRIBE', 'stop.', '  STOP!  ', 'Please stop']) {
+  // The last three regressed to false under a bare `^stop$` anchor and were
+  // caught by no other pattern — QA measured it. They are real replies.
+  for (const subject of [
+    'STOP',
+    'UNSUBSCRIBE',
+    'stop.',
+    '  STOP!  ',
+    'Please stop',
+    'stop stop stop',
+    'STOP PLEASE',
+    'stop now',
+  ]) {
     const h = harness({ messages: [msg({ subject, text: '' })] })
     await poll(h.deps)
     assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'reply opt-out' }], subject)

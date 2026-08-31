@@ -79,12 +79,15 @@ export const OPT_OUT_PATTERNS = [
   /\bnot interested\b/i,
   /\bleave (?:me|us) alone\b/i,
   /\bdo not (?:wish|want) to (?:receive|be contacted|hear)/i,
-  // A line (or subject) whose ENTIRE content is "stop". Anchored at both ends
-  // because the open slot after `stop` is a verb, not a preposition, and no
-  // enumeration closes it: `Stop press: we are hiring` is an ordinary subject
-  // and suppression has no undo. Every longer opt-out phrasing is carried by
-  // the other patterns, so the anchor costs no recall.
-  /^[ \t]*(?:please[ \t]+)?stop[ \t]*[.!]*[ \t]*$/im,
+  // A line (or subject) built ONLY from "stop"/"please"/"now" plus punctuation,
+  // and containing at least one "stop". Anchored at both ends because the open
+  // slot after `stop` is a verb, not a preposition, and no enumeration closes
+  // it: `Stop press: we are hiring` is an ordinary subject and suppression has
+  // no undo. The stop/please/now alternation keeps the real bare-stop replies
+  // a prospect actually sends — `STOP PLEASE`, `stop now`, `stop stop stop` —
+  // which a bare `^stop$` anchor silently dropped. Longer opt-out phrasings are
+  // carried by the other patterns.
+  /^(?=[^\n]*\bstop\b)[ \t]*(?:(?:stop|please|now)[ \t.,!]*)+$/im,
   /\bstop\b[^\n]{0,25}\b(?:list|e-?mails?)\b/i,
   // Measured recall gaps: "remove this email address from your distribution",
   // "remove from your list", "cease all communication", "we don't want any more
@@ -395,7 +398,7 @@ export async function run({
     // constructed, called or trusted until this has already run.
     if (isOptOutMessage(message)) {
       result.suppressed++
-      if (false) await db.suppress(sql, businessId, 'reply opt-out')
+      if (!dryRun) await db.suppress(sql, businessId, 'reply opt-out')
       await log(dryRun ? 'would_suppress' : 'suppressed', { business: businessId, by: 'keyword' })
       return forward(message, 'opt-out — suppressed, do not mail this business again', {
         business: businessId,
