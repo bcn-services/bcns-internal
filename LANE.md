@@ -365,7 +365,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       and that an allow-listed address is not
     - A unit test asserts the message is `multipart/alternative` carrying
       `lib/signature.html` and `lib/signature.txt` verbatim as its two parts
-  status: not started
+  status: done
 
 - task: Build the poller and the reply parser — `jobs/poll.mjs` on the 20-minute
     cron, IMAP over the `pipeline` label via `IMAP_PASS`, thread mapping by
@@ -461,6 +461,24 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
   status: not started
 
 ---
+
+## Found during the 2026-08-31 autonomous run — needs an item
+
+- **`mailboxes.sent_today` is never reset.** `lib/db.mjs`'s `claimMailboxSlot`
+  increments it and gates on `sent_today < cap`, but nothing anywhere sets it
+  back to zero and no job does a daily rollover. Today's cap is therefore a
+  LIFETIME cap: once a mailbox has claimed `daily_cap` slots in total it is
+  never selected again and the pipeline silently stops sending. Item 11's
+  guardrail ("the cap is never exceeded") is satisfied, which is why the item
+  passed — the missing half is the reset. Decide between a rollover in `touch`
+  (`sent_today = 0 where warmed_at::date < current_date`-style, needs a
+  `counted_on` date column) and dropping the counter for a computed
+  `count(*) from email_threads where direction='out' and sent_at::date = current_date`,
+  which cannot drift because there is nothing to reset.
+- **A claimed slot is not released when the send throws.** `claimMailboxSlot`
+  increments before the transport runs; a throw leaves the increment. Fails
+  safe — it under-sends, never over-sends — so it is a lower priority than the
+  reset above.
 
 ## Not yet specified
 
