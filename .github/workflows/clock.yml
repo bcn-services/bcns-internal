@@ -88,6 +88,15 @@ jobs:
           # Always set. The clone is optional, so a job tests for the
           # directory rather than trusting the variable.
           OS_DIR: ${{ github.workspace }}/os
+          # Sending. No SMTP_PASS means the touch job simply has no transport.
+          # DRY_RUN is unset here on purpose: it defaults to on, and Nate flips
+          # the repo variable himself when he is ready for a real send.
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          NOTIFY_ALLOWED_RECIPIENTS: ${{ vars.NOTIFY_ALLOWED_RECIPIENTS }}
+          DRY_RUN: ${{ vars.DRY_RUN }}
           SCHEDULE: ${{ github.event.schedule }}
           JOB: ${{ inputs.job }}
         run: pnpm job

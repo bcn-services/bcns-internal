@@ -99,6 +99,34 @@ export async function buildDeps(env = process.env) {
       })
   }
 
+  // The allow-list is a hard gate the touch job applies to every recipient,
+  // dry run or not. Unset means nobody is reachable — never everybody. Widening
+  // it is a manual edit of the repo variable, never a default here.
+  deps.allowedRecipients = String(env.NOTIFY_ALLOWED_RECIPIENTS || '')
+    .split(',')
+    .map((a) => a.trim())
+    .filter(Boolean)
+
+  // SMTP is a capability like any other: no app password, no transport, and
+  // touch writes a skipped event instead of half-sending. The transport is a
+  // factory and nothing connects until a send has already cleared the gate.
+  if (env.SMTP_PASS) {
+    let mailer = null
+    const port = Number(env.SMTP_PORT) || 465
+    deps.transport = async () => {
+      const { default: nodemailer } = await import('nodemailer')
+      return (mailer ??= nodemailer.createTransport({
+        host: env.SMTP_HOST || 'smtp.gmail.com',
+        port,
+        secure: port === 465,
+        auth: {
+          user: env.SMTP_USER || 'outreach@send.bcn-services.com',
+          pass: env.SMTP_PASS,
+        },
+      }))
+    }
+  }
+
   deps.dryRun = env.DRY_RUN !== 'false'
   return deps
 }
