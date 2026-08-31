@@ -389,7 +389,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
     - A unit test asserts `won 2400` from an allow-listed sender sets `stage=won`
       and the same line from an unknown sender changes nothing
   caution: true
-  status: not started
+  status: done
 
 - task: Build the notification emails — `jobs/notify.mjs`, run at the end of each
     `poll` tick, sending as `bot@bcn-services.com` to Nate and Brandon only: batch
