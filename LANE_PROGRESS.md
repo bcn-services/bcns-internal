@@ -28,14 +28,15 @@ LANE.md wins for scope.
 | 5. Weekly sourcing over a search grid | done — every Monday the pipeline searches one trade-and-town pair from a fixed list of 64 (eight trades across seven Connecticut towns and Providence) and adds the businesses it has not seen before. It checks the Google budget before spending anything and stops rather than guessing if it cannot read it. When a search comes back more than ninety percent already-known businesses the pair is marked used up and never searched again. It cannot search a town or trade that is not on the list. |
 | 6. Qualification — fetch + one Claude call | done — each newly found business gets its website read and summarised into three to five real facts about it, with an email address picked up only if the site actually publishes one. An address the model made up is thrown away: if it does not appear on the page it does not get written, so nobody is mailed at a guessed address. A business with no published address becomes a calling lead with its phone number intact, not a discard. A site that will not load leaves the record exactly as it was and logs the failure. Claude runs through the Claude Code CLI on the existing subscription, so none of this bills the API. |
 | 7. Email verification before any send | done (merged to `main` 2026-08-31) — before any address is ever mailed, the pipeline checks it is real. First it asks whether the domain can receive mail at all; if it cannot, nothing is contacted and no connection is opened. Only a domain that passes gets a short conversation with its mail server, which asks "would you accept mail for this person?" and then hangs up. It can never send a message: the command that begins a message body is blocked in code, and the tests fail if that block is removed. A "maybe" answer — a server that is rate-limiting, or one that accepts everything — is recorded as unknown and never counted as a yes. |
-| 8. Wire sourcing to the real world — Places client + budget reader | not started |
+| 8. Wire sourcing to the real world — Places client + budget reader | done — Monday's sourcing run can now actually reach Google. The pipeline asks Google Places for businesses in the chosen trade-and-town pair using the keyless sign-in already proven working, with no API key anywhere, and it reads how much of the month's Google budget is left before it spends a penny — refusing to guess if that figure will not read. It also found and fixed a naming mismatch left over from an earlier item that would have made the first real run quietly find businesses and save none of them. |
 | 9. Wire qualification into the clock | not started |
 | 10. Personalization — the cold email itself | not started |
 | 11. The sender — `touch` job, round-robin, 2 bumps | not started |
 | 12. Poller and reply parser, incl. Brandon's commands | not started |
 | 13. The notification emails | not started |
-| 14. Quote handoff — notes → /quote → Brandon | not started |
-| 15. Alert triage into draft pull requests | not started |
+| 14. End-to-end test — one business through every job in order | not started |
+| 15. Quote handoff — notes → /quote → Brandon | not started (below the stop marker) |
+| 16. Alert triage into draft pull requests | not started (below the stop marker) |
 
 ## Round 1 — command center (shipped 2026-08-25)
 
