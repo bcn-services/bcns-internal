@@ -332,7 +332,6 @@ test('a prospect reply matching no thread is forwarded, never guessed at', async
 // --- teammate commands -----------------------------------------------------
 
 test('parseCommand reads only the first line', () => {
-  assert.deepEqual(parseCommand('yes\nlooks good'), { command: 'yes' })
   assert.deepEqual(parseCommand('no'), { command: 'no' })
   assert.deepEqual(parseCommand('no answer, tried twice'), { command: 'no answer' })
   assert.deepEqual(parseCommand('stop'), { command: 'stop' })
@@ -340,6 +339,10 @@ test('parseCommand reads only the first line', () => {
   assert.deepEqual(parseCommand('won $2,400.50'), { command: 'won', amount: 2400.5 })
   assert.equal(parseCommand('sounds good to me'), null)
   assert.equal(parseCommand('> won 2400'), null)
+  // There is no approval step, so `yes` is not a command — it is an
+  // unrecognised first line like any other.
+  assert.equal(parseCommand('yes'), null)
+  assert.equal(parseCommand('yes\nlooks good'), null)
 })
 
 const teammate = (over = {}) =>
@@ -425,8 +428,32 @@ test('isAllowedSender is case and whitespace insensitive but never open', () => 
   assert.equal(isAllowedSender('', ALLOWED), false)
 })
 
-test('yes approves, no loses, no answer reschedules the call', async () => {
-  for (const [text, stage] of [['yes', 'approved'], ['no', 'lost'], ['no answer', 'call_due']]) {
+// There is no approval step, so `yes` approves nothing. From the one sender
+// whose commands ARE honoured, on a thread that DOES resolve to a business, it
+// is still only an unrecognised first line: forwarded to a human, stage untouched.
+test('yes from an allow-listed sender is forwarded as an unknown command and moves nothing', async () => {
+  for (const text of ['yes', 'yes\nlooks good', 'Yes.']) {
+    const h = harness({ messages: [teammate({ text })], rows: [biz({ stage: 'drafted' })] })
+
+    const result = await poll(h.deps)
+
+    assert.equal(result.forwarded, 1, text)
+    assert.equal(result.commands, 0, text)
+    assert.equal(h.store.get('b1').stage, 'drafted', text)
+    assert.deepEqual(h.updates, [], text)
+    assert.deepEqual(h.suppressions, [], text)
+    assert.deepEqual(h.forwards.map((f) => f.to).sort(), [...ALLOWED].sort(), text)
+    // The forward says why, and the reason is the unknown-command one — not the
+    // "no thread" one: the reply threaded onto a real business.
+    assert.ok(
+      h.forwards.every((f) => /no command in the first line/.test(f.text ?? f.raw ?? '')),
+      text
+    )
+  }
+})
+
+test('no loses, no answer reschedules the call', async () => {
+  for (const [text, stage] of [['no', 'lost'], ['no answer', 'call_due']]) {
     const h = harness({ messages: [teammate({ text })], rows: [biz({ stage: 'drafted' })] })
     await poll(h.deps)
     assert.equal(h.store.get('b1').stage, stage, text)

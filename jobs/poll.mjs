@@ -144,7 +144,8 @@ export function parseCommand(body) {
   const first = stripQuoted(body).split('\n')[0]?.trim() ?? ''
   const line = first.replace(/[.!]+$/, '')
   const lower = line.toLowerCase()
-  if (/^yes\b/.test(lower)) return { command: 'yes' }
+  // No `yes`: there is no approval step, so nothing is waiting to be approved.
+  // A `yes` reply is an unrecognised first line and is forwarded to a human.
   if (/^no answer\b/.test(lower)) return { command: 'no answer' }
   if (/^no\b/.test(lower)) return { command: 'no' }
   if (/^stop\b/.test(lower)) return { command: 'stop' }
@@ -488,8 +489,7 @@ export async function run({
     }
 
     const patch = {}
-    if (cmd.command === 'yes') patch.stage = 'approved'
-    else if (cmd.command === 'no') patch.stage = 'lost'
+    if (cmd.command === 'no') patch.stage = 'lost'
     else if (cmd.command === 'no answer') {
       patch.stage = 'call_due'
       patch.next_touch_at = new Date(now.getTime() + NO_ANSWER_DAYS * 86_400_000)

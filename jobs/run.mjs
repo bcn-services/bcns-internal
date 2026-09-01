@@ -109,9 +109,9 @@ export async function buildDeps(env = process.env) {
   // Two lists, deliberately not one. `allowedRecipients` is the hard gate the
   // touch job applies to every PROSPECT recipient, dry run or not.
   // `internalRecipients` is the set of internal humans poll/notify forward to,
-  // and the only senders whose one-word commands (`yes`, `won 2400`, `stop`)
+  // and the only senders whose one-word commands (`no`, `won 2400`, `stop`)
   // are obeyed. Merging them means going live delivers every internal call task
-  // and approval mail to a prospect, forwards a prospect's own opt-out back to
+  // and meeting alert to a prospect, forwards a prospect's own opt-out back to
   // them, and lets that prospect drive the pipeline.
   //
   // Both are unset means nobody is reachable — never everybody. Widening either

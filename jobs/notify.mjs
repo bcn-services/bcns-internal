@@ -22,10 +22,10 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createNotifier } from './poll.mjs'
 
-// Read in this order every tick. `quoting` is deliberately in the list before
-// the stage exists in the CHECK constraint: the query simply returns no rows
-// until the migration that adds it lands.
-export const NOTIFY_STAGES = ['drafted', 'call_due', 'replied', 'quoting']
+// Read in this order every tick. `drafted` is deliberately absent: there is no
+// approval step, so a draft is not a task for a human — `touch` sends it at
+// 14:00 without anyone being asked.
+export const NOTIFY_STAGES = ['call_due', 'replied', 'quoting']
 
 // The `/pitch` script lives in ~/os, which is Nate's machine and not the CI
 // runner. Present means the call email can name the command; absent means it
@@ -61,32 +61,10 @@ const line = (label, value) => (value ? `${label}: ${value}` : null)
 const where = (row) => [row.town, row.state].filter(Boolean).join(', ')
 const facts = (research) => (research.facts ?? []).map((f) => `  - ${f}`)
 
-// --- the four templates ----------------------------------------------------
+// --- the three templates ---------------------------------------------------
 // Each returns `{ subject, text }`. None of them chooses a recipient: the
 // caller pairs the body with an allow-listed address, so no prospect address
 // can become a `to` no matter what a row contains.
-
-export function approvalEmail(rows, { now = new Date() } = {}) {
-  const day = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10)
-  const text = [
-    `${rows.length} draft${rows.length === 1 ? '' : 's'} go out at 14:00 on ${day}.`,
-    'Reply "yes" to approve or "no" to drop it, one reply per business thread.',
-    '',
-    ...rows.flatMap((row) => {
-      const research = parseResearch(row.research)
-      return [
-        `- ${row.name}${where(row) ? ` (${where(row)})` : ''}`,
-        ...[
-          line('    trade', row.trade),
-          line('    to', row.email),
-          line('    owner', research.owner_name),
-          line('    fit', research.fit ?? research.reason),
-        ].filter(Boolean),
-      ]
-    }),
-  ].join('\n')
-  return { subject: `[pipeline] approve ${rows.length} draft${rows.length === 1 ? '' : 's'} for ${day}`, text }
-}
 
 export function callTaskEmail(row, { hasPitch = false } = {}) {
   const research = parseResearch(row.research)
@@ -170,7 +148,7 @@ export async function run({
   hasPitch = pitchAvailable(),
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'notify', kind, detail)
-  const result = { drafted: 0, call_due: 0, replied: 0, quoting: 0, emails: 0, errors: 0 }
+  const result = { call_due: 0, replied: 0, quoting: 0, emails: 0, errors: 0 }
 
   // Nobody on the list is not "mail everybody" — it is a job with nothing to do.
   if (!internalRecipients.length) {
@@ -190,22 +168,18 @@ export async function run({
     const fresh = rows.filter((row) => !done.has(notifyKey(row)))
     if (!fresh.length) continue
 
-    // Approvals are one batch email for the whole day; the other three are one
-    // email per row, because each is a task somebody picks up individually.
-    const batches =
-      stage === 'drafted'
-        ? [{ rows: fresh, mail: approvalEmail(fresh, { now }) }]
-        : await Promise.all(
-            fresh.map(async (row) => ({
-              rows: [row],
-              mail:
-                stage === 'call_due'
-                  ? callTaskEmail(row, { hasPitch })
-                  : stage === 'replied'
-                    ? meetingEmail(row, (await db.firstOutbound(sql, row.id))?.[0] ?? null)
-                    : quoteEmail(row),
-            }))
-          )
+    // One email per row: each is a task somebody picks up individually.
+    const batches = await Promise.all(
+      fresh.map(async (row) => ({
+        rows: [row],
+        mail:
+          stage === 'call_due'
+            ? callTaskEmail(row, { hasPitch })
+            : stage === 'replied'
+              ? meetingEmail(row, (await db.firstOutbound(sql, row.id))?.[0] ?? null)
+              : quoteEmail(row),
+      }))
+    )
 
     for (const batch of batches) {
       let delivered = false

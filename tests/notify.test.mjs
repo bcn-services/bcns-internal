@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 
 import {
   run as notify,
-  approvalEmail,
   callTaskEmail,
   meetingEmail,
   quoteEmail,
@@ -91,8 +90,10 @@ const kinds = (events) => events.map((e) => e.kind)
 // --- the literals this suite pins ------------------------------------------
 
 test('the constants this suite asserts against are what they claim to be', () => {
-  assert.deepEqual(NOTIFY_STAGES, ['drafted', 'call_due', 'replied', 'quoting'])
-  assert.equal(NOTIFY_STAGES.length, 4)
+  assert.deepEqual(NOTIFY_STAGES, ['call_due', 'replied', 'quoting'])
+  assert.equal(NOTIFY_STAGES.length, 3)
+  // There is no approval step: a drafted row is not a task for a human.
+  assert.ok(!NOTIFY_STAGES.includes('drafted'))
 })
 
 // --- notified once per stage ------------------------------------------------
@@ -214,12 +215,11 @@ test('an empty allow-list is nobody, not everybody', async () => {
   assert.deepEqual(kinds(h.events), ['skipped'])
 })
 
-// --- the four templates -----------------------------------------------------
+// --- the three templates ----------------------------------------------------
 
-test('the four templates render row fields and no prospect address is ever a recipient', async () => {
+test('the three templates render row fields and no prospect address is ever a recipient', async () => {
   const h = harness({
     rows: [
-      biz({ id: 'd1', stage: 'drafted', next_touch_at: null }),
       biz({ id: 'c1', stage: 'call_due' }),
       biz({ id: 'r1', stage: 'replied' }),
       biz({ id: 'q1', stage: 'quoting' }),
@@ -229,11 +229,12 @@ test('the four templates render row fields and no prospect address is ever a rec
   const result = await notify(h.deps)
 
   assert.deepEqual(
-    { drafted: result.drafted, call_due: result.call_due, replied: result.replied, quoting: result.quoting },
-    { drafted: 1, call_due: 1, replied: 1, quoting: 1 }
+    { call_due: result.call_due, replied: result.replied, quoting: result.quoting },
+    { call_due: 1, replied: 1, quoting: 1 }
   )
-  // Four bodies, each to both humans.
-  assert.equal(h.sent.length, 8)
+  assert.equal(result.drafted, undefined, 'the result still carries a drafted tally')
+  // Three bodies, each to both humans.
+  assert.equal(h.sent.length, 6)
   for (const m of h.sent) {
     assert.ok(ALLOWED.includes(m.to), `${m.to} is not an allow-listed recipient`)
     assert.notEqual(m.to, PROSPECT)
@@ -242,11 +243,7 @@ test('the four templates render row fields and no prospect address is ever a rec
   }
 
   const body = (re) => h.sent.find((m) => re.test(m.subject)).text
-  const approval = body(/approve 1 draft for 2026-09-03/)
-  assert.match(approval, /Acme Roofing/)
-  assert.match(approval, /Danbury, CT/)
-  assert.match(approval, new RegExp(PROSPECT))
-  assert.match(approval, /Reply "yes"/)
+  assert.ok(!h.sent.some((m) => /approve/i.test(m.subject)), 'an approval mail still goes out')
 
   const call = body(/call Acme Roofing — 203-555-0142/)
   assert.match(call, /Phone: 203-555-0142/)
@@ -265,12 +262,11 @@ test('the four templates render row fields and no prospect address is ever a rec
 test('the templates hold up on a row with nothing in research', () => {
   const bare = { id: 'x', name: 'Bare Co', stage: 'call_due', research: null }
   for (const mail of [
-    approvalEmail([bare], { now: NOW }),
     callTaskEmail(bare, { hasPitch: false }),
     meetingEmail(bare, null),
     quoteEmail(bare),
   ]) {
-    assert.match(mail.subject, /Bare Co|approve 1 draft/)
+    assert.match(mail.subject, /Bare Co/)
     assert.ok(mail.text.length > 0)
     assert.ok(!/undefined|null|\[object/.test(mail.text), mail.text)
   }
@@ -279,6 +275,39 @@ test('the templates hold up on a row with nothing in research', () => {
 })
 
 // --- what notify is not allowed to do ---------------------------------------
+
+test('a drafted row is not notified about at all: no mail, no event, no read', async () => {
+  // The real entry point, with a drafted row as the only thing in the store.
+  const h = harness({ rows: [biz({ id: 'd1', stage: 'drafted', next_touch_at: null })] })
+  const stagesRead = []
+  const byStage = h.deps.db.businessesByStage
+  h.deps.db.businessesByStage = (s, stage, opts) => {
+    stagesRead.push(stage)
+    return byStage(s, stage, opts)
+  }
+
+  const result = await notify(h.deps)
+
+  assert.deepEqual(h.sent, [], 'a drafted row still produces mail')
+  assert.equal(result.emails, 0)
+  assert.equal(result.errors, 0)
+  assert.deepEqual(
+    kinds(h.events).filter((k) => ['notified', 'would_notify', 'error'].includes(k)),
+    [],
+    'a drafted row still wrote a notification event'
+  )
+  assert.ok(!stagesRead.includes('drafted'), 'notify still queries the drafted stage')
+})
+
+test('a dry run over a drafted row is silent too', async () => {
+  const h = harness({ rows: [biz({ stage: 'drafted', next_touch_at: null })], dryRun: true })
+
+  const result = await notify(h.deps)
+
+  assert.deepEqual(h.sent, [])
+  assert.equal(result.emails, 0)
+  assert.deepEqual(kinds(h.events).filter((k) => k === 'would_notify'), [])
+})
 
 test('notify moves no stage — the fake explodes if it tries', async () => {
   const h = harness({ rows: [biz({ stage: 'replied' }), biz({ id: 'b2', stage: 'quoting' })] })
