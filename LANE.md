@@ -570,7 +570,7 @@ against a fake `runSkill` only — that is by design, not a gap.
       runs on the same row
     - A unit test asserts the `quoted` mail names the quote path and contains
       the word `signed`
-  status: not started
+  status: done
 
 - task: Handle the signed contract in `poll`. A message from an allow-listed
     sender whose body's first word is `signed`, on a thread whose business is at
