@@ -24,6 +24,16 @@ runs `/quote`; his `signed` reply with the PDF runs `/new-client-repo` +
 **Scope of this round:** items 15–20, above the stop marker, are the autonomous
 run. Item 21 below it waits.
 
+**Verification split (decided 2026-09-01):** items 17–20 carried `caution: true`
+and it was dropped. Nate verifies these four by hand — the pitch, quote, signed
+and onboard paths all produce a visible artifact he checks himself. Each runs
+`dt-engineer` alone, self-verified against its `done when:` criteria, gate mode
+`tests`. This is a decision about who verifies, not a lower bar: every `done
+when:` criterion still gets proven by execution, and every guardrail still binds.
+Known trade accepted: item 19's refusal criteria (non-PDF, second attachment,
+over 10 MB) are false-negative shaped — a refusal that never fires looks like a
+clean run. Mutation-check those three assertions rather than trusting a green.
+
 **Mail architecture (decided 2026-08-30, supersedes "two mailboxes"):** one
 Google Workspace seat — Nate's — with two aliases. `outreach@send.bcn-services.com`
 is the send-as address for cold mail (DKIM signs as `send.`, DNS live).
@@ -539,7 +549,6 @@ against a fake `runSkill` only — that is by design, not a gap.
       no change to the row
     - A unit test asserts the `call_due` mail body contains `clients/<slug>/pitch/`
     - `tests/clock.test.mjs` asserts the poll cron maps to the five-job list
-  caution: true
   status: not started
 
 - task: Build the quote job — `jobs/quote.mjs`, run on the poll tick. For each
@@ -561,7 +570,6 @@ against a fake `runSkill` only — that is by design, not a gap.
       runs on the same row
     - A unit test asserts the `quoted` mail names the quote path and contains
       the word `signed`
-  caution: true
   status: not started
 
 - task: Handle the signed contract in `poll`. A message from an allow-listed
@@ -584,7 +592,6 @@ against a fake `runSkill` only — that is by design, not a gap.
     - A unit test asserts `signed` with no attachment applies nothing and forwards
     - A unit test asserts a `text/html` attachment or an 11 MB PDF is refused with
       an `error` event and nothing written
-  caution: true
   status: not started
 
 - task: Build the onboard job — `jobs/onboard.mjs`, run on the poll tick. For
@@ -612,7 +619,6 @@ against a fake `runSkill` only — that is by design, not a gap.
     - A unit test asserts the `onboarded` mail has exactly one recipient equal to
       `ONBOARD_NOTIFY_TO`, and that an unset variable yields an `error` event
       and no mail
-  caution: true
   status: not started
 
 > **⚠️ AUTONOMOUS RUN — STOP HERE**
