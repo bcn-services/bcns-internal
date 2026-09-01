@@ -57,8 +57,11 @@ function harness({ rows = [], runSkill, commitAndPush, updateThrows = null } = {
     },
     osDir: '/w/os',
     runSkill: runSkill ?? (async () => ({ wrote: ['/w/os/clients/x/pitch/call-script.md'], dryrun: [] })),
+    // A live push by default: under `dryRun: true` nothing is pushed and the
+    // job deliberately marks nothing (see lib/osrepo.mjs pushOrSkip), which
+    // tests/quote.test.mjs covers for both jobs.
     commitAndPush:
-      commitAndPush ?? (async (opts) => (pushes.push(opts), { dryRun: true, commands: [] })),
+      commitAndPush ?? (async (opts) => (pushes.push(opts), { dryRun: false, commands: [] })),
     mkTempDir: async () => (dir = await mkdtemp(join(tmpdir(), 'pitch-test-'))),
   }
   return { deps, events, updates, pushes, store, tmp: () => dir }

@@ -22,7 +22,7 @@ import { createNotifier } from './poll.mjs'
 // Read in this order every tick. `drafted` is deliberately absent: there is no
 // approval step, so a draft is not a task for a human — `touch` sends it at
 // 14:00 without anyone being asked.
-export const NOTIFY_STAGES = ['call_due', 'replied', 'quoting']
+export const NOTIFY_STAGES = ['call_due', 'replied', 'quoting', 'quoted']
 
 function parseResearch(research) {
   if (!research) return {}
@@ -51,7 +51,7 @@ const line = (label, value) => (value ? `${label}: ${value}` : null)
 const where = (row) => [row.town, row.state].filter(Boolean).join(', ')
 const facts = (research) => (research.facts ?? []).map((f) => `  - ${f}`)
 
-// --- the three templates ---------------------------------------------------
+// --- the four templates ---------------------------------------------------
 // Each returns `{ subject, text }`. None of them chooses a recipient: the
 // caller pairs the body with an allow-listed address, so no prospect address
 // can become a `to` no matter what a row contains.
@@ -124,6 +124,34 @@ export function quoteEmail(row) {
   return { subject: `[pipeline] quote ${row.name}`, text }
 }
 
+// The quote exists in ~/os and nothing has been sent. This is the one mail
+// that asks a human to deliver a document to a client, so it says so plainly
+// and names the reply that closes the loop.
+//
+// ponytail: a row re-entering `quoted` is never re-notified — notifyKey has no
+// timestamp for it and the `notified` marker is never cleared. Only `call_due`
+// re-notifies today. Give this stage a key component that moves (the quote
+// path, say) if re-quoting ever becomes a real flow.
+export function quoteReadyEmail(row) {
+  const research = parseResearch(row.research)
+  const text = [
+    `Quote ready for ${row.name}.`,
+    '',
+    ...[
+      line('Contact', research.owner_name),
+      line('Email', row.email),
+      line('Phone', row.phone),
+      line('Where', where(row)),
+      line('Quote', research.quote_path),
+    ].filter(Boolean),
+    '',
+    'Send it to the client yourself — nothing here mails them.',
+    'When they sign, reply to this mail with the word `signed` and the signed',
+    'PDF attached.',
+  ].join('\n')
+  return { subject: `[pipeline] quote ready for ${row.name}`, text }
+}
+
 // --- the job ---------------------------------------------------------------
 
 export async function run({
@@ -139,7 +167,7 @@ export async function run({
   limit = 50,
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'notify', kind, detail)
-  const result = { call_due: 0, replied: 0, quoting: 0, emails: 0, errors: 0 }
+  const result = { call_due: 0, replied: 0, quoting: 0, quoted: 0, emails: 0, errors: 0 }
 
   // Nobody on the list is not "mail everybody" — it is a job with nothing to do.
   if (!internalRecipients.length) {
@@ -168,7 +196,9 @@ export async function run({
             ? callTaskEmail(row)
             : stage === 'replied'
               ? meetingEmail(row, (await db.firstOutbound(sql, row.id))?.[0] ?? null)
-              : quoteEmail(row),
+              : stage === 'quoting'
+                ? quoteEmail(row)
+                : quoteReadyEmail(row),
       }))
     )
 

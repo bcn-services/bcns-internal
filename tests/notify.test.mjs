@@ -90,8 +90,8 @@ const kinds = (events) => events.map((e) => e.kind)
 // --- the literals this suite pins ------------------------------------------
 
 test('the constants this suite asserts against are what they claim to be', () => {
-  assert.deepEqual(NOTIFY_STAGES, ['call_due', 'replied', 'quoting'])
-  assert.equal(NOTIFY_STAGES.length, 3)
+  assert.deepEqual(NOTIFY_STAGES, ['call_due', 'replied', 'quoting', 'quoted'])
+  assert.equal(NOTIFY_STAGES.length, 4)
   // There is no approval step: a drafted row is not a task for a human.
   assert.ok(!NOTIFY_STAGES.includes('drafted'))
 })

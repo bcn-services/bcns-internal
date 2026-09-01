@@ -13,6 +13,8 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { pushOrSkip } from '../lib/osrepo.mjs'
+
 // Postgres unique_violation. The only failure of the slug write we handle:
 // anything else is a real database problem and belongs in the error event.
 const UNIQUE_VIOLATION = '23505'
@@ -108,7 +110,15 @@ export async function run({
       command = `/pitch ${slug} --facts ${factsPath} --page-text ${pageTextPath} --no-browse`
       const { wrote } = await runSkill({ command, cwd: osDir })
 
-      const push = await commitAndPush({ paths: wrote, message: `pitch: ${slug}` })
+      const push = await pushOrSkip({
+        commitAndPush,
+        paths: wrote,
+        message: `pitch: ${slug}`,
+        log,
+        detail: { business: row.id, slug },
+      })
+      // Nothing was pushed: leave the row unmarked so a live tick redoes it.
+      if (!push) continue
 
       const pitchPath = `clients/${slug}/pitch/`
       await db.updateBusiness(sql, row.id, {
@@ -120,7 +130,6 @@ export async function run({
         slug,
         pitch_path: pitchPath,
         wrote,
-        dryRun: push?.dryRun ?? null,
       })
     } catch (err) {
       result.errors++
