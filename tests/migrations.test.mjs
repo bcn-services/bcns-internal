@@ -96,3 +96,43 @@ test('0019 adds quoting to the stage vocabulary without touching 0018', () => {
   assert.equal((quoting.match(/\bbegin\b/gi) || []).length, 1)
   assert.equal((quoting.match(/\bcommit\b/gi) || []).length, 1)
 })
+
+// --- 0020 ------------------------------------------------------------------
+
+const clients = readFileSync(new URL('0020_clients.sql', dir), 'utf8')
+
+test('0020 puts no status column on clients — the README owns lifecycle', () => {
+  // The whole point of the split. A status column here is the same fact stored
+  // twice, and the two copies drift.
+  assert.ok(!/^\s*status\s+text/im.test(clients), 'clients grew a status column')
+  assert.match(clients, /churn_date\s+date/i)
+})
+
+test('0020 keeps money in integer cents, never dollars', () => {
+  const money = [...clients.matchAll(/^\s*(\w*(?:fee|rate|amount)\w*)\s+(\w+)/gim)]
+  assert.ok(money.length >= 2, 'no money columns found')
+  for (const [, name, type] of money) {
+    assert.match(name, /_cents$/, `${name} is money but not named _cents`)
+    assert.equal(type.toLowerCase(), 'bigint', `${name} is ${type}, not bigint`)
+  }
+})
+
+test('0020 does not touch the funnel', () => {
+  assert.ok(!/alter table businesses/i.test(clients), '0020 alters businesses')
+  assert.ok(!/businesses_stage_check/i.test(clients), '0020 rewrites the stage check')
+})
+
+test('0020 seeds no lost deal as a paying client', () => {
+  const insert = clients.match(/insert into clients[\s\S]*?on conflict/i)
+  assert.ok(insert, 'no seed insert')
+  assert.ok(!/'coventry'/i.test(insert[0]), 'Coventry never signed; it has no clients row')
+  const slugs = [...insert[0].matchAll(/^\s*\('([a-z0-9-]+)',/gm)].map((m) => m[1])
+  assert.deepEqual(slugs.sort(), ['delucas', 'l2detailz', 'sb', 'technology-associates', 'wwc'])
+})
+
+test('0020 enables RLS with no policies, matching 0018', () => {
+  assert.match(clients, /alter table clients\s+enable row level security/i)
+  assert.ok(!/create policy/i.test(clients), '0020 adds a policy; deny-all is the absence of one')
+  assert.equal((clients.match(/\bbegin\b/gi) || []).length, 1)
+  assert.equal((clients.match(/\bcommit\b/gi) || []).length, 1)
+})
