@@ -549,7 +549,7 @@ against a fake `runSkill` only — that is by design, not a gap.
       no change to the row
     - A unit test asserts the `call_due` mail body contains `clients/<slug>/pitch/`
     - `tests/clock.test.mjs` asserts the poll cron maps to the five-job list
-  status: not started
+  status: done
 
 - task: Build the quote job — `jobs/quote.mjs`, run on the poll tick. For each
     row at `quoting` with `research.notes` and no `research.quote_path`: write
