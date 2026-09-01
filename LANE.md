@@ -520,7 +520,7 @@ against a fake `runSkill` only — that is by design, not a gap.
       enumerate files, and the schema test that replays migrations on a temp DB
       (if present) still passes
     - Existing passing tests remain passing
-  status: not started
+  status: done
 
 - task: Build the pitch job — `jobs/pitch.mjs`, run on the poll tick. For each
     row from `selectable_businesses` at `call_due` with no `research.pitch_path`:
