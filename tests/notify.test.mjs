@@ -42,12 +42,13 @@ function biz(over = {}) {
       owner_name: 'Dana',
       notes: ['wants a portal for his crews'],
       draft: 'Subject: a question about Acme Roofing\n\nHi Dana,\n',
+      pitch_path: 'clients/acme-roofing-danbury/pitch/',
     }),
     ...over,
   }
 }
 
-function harness({ rows = [], allowed = ALLOWED, dryRun = false, send = null, hasPitch = true } = {}) {
+function harness({ rows = [], allowed = ALLOWED, dryRun = false, send = null } = {}) {
   const events = []
   const sent = []
   const store = rows.map((r) => ({ ...r }))
@@ -80,7 +81,6 @@ function harness({ rows = [], allowed = ALLOWED, dryRun = false, send = null, ha
     internalRecipients: allowed,
     dryRun,
     now: NOW,
-    hasPitch,
   }
   return { deps, events, sent, store }
 }
@@ -249,7 +249,8 @@ test('the three templates render row fields and no prospect address is ever a re
   assert.match(call, /Phone: 203-555-0142/)
   assert.match(call, /Owner: Dana/)
   assert.match(call, /no online booking/)
-  assert.match(call, /\/pitch Acme Roofing/)
+  // The call task names the folder the pitch job already built in ~/os.
+  assert.match(call, /Pitch folder: clients\/acme-roofing-danbury\/pitch\//)
 
   const meeting = body(/replied — book the meeting/)
   assert.match(meeting, /Thread: a question about Acme Roofing/)
@@ -262,7 +263,7 @@ test('the three templates render row fields and no prospect address is ever a re
 test('the templates hold up on a row with nothing in research', () => {
   const bare = { id: 'x', name: 'Bare Co', stage: 'call_due', research: null }
   for (const mail of [
-    callTaskEmail(bare, { hasPitch: false }),
+    callTaskEmail(bare),
     meetingEmail(bare, null),
     quoteEmail(bare),
   ]) {
@@ -270,7 +271,7 @@ test('the templates hold up on a row with nothing in research', () => {
     assert.ok(mail.text.length > 0)
     assert.ok(!/undefined|null|\[object/.test(mail.text), mail.text)
   }
-  assert.match(callTaskEmail(bare, { hasPitch: false }).text, /~\/os is not on this machine/)
+  assert.match(callTaskEmail(bare).text, /Pitch folder: none yet/)
   assert.match(quoteEmail(bare).text, /left no notes/)
 })
 

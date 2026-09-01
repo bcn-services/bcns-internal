@@ -33,6 +33,12 @@ PAGE TEXT:
 // unknown is never enough to throw away a discovered address.
 const UNDELIVERABLE = new Set(['invalid', 'no-mx', 'rejected'])
 
+// The page text is stored on the row so `pitch` can build a pitch from what
+// qualify already read, months later, without fetching the site again. Capped
+// because a research blob is read back into prompts and an uncapped page is an
+// uncapped bill; 20k is well above what `trim` returns for a real site.
+export const PAGE_TEXT_MAX = 20_000
+
 // The prompt asks for minified JSON and usually gets it, but a model handed
 // something it cannot work with answers in prose about that instead, and a
 // helpful one wraps the object in a ```json fence. Neither is a reason to lose
@@ -119,6 +125,13 @@ export async function run({
           ? claimed
           : null
 
+      const research = JSON.stringify({
+        facts,
+        fit: parsed.fit ?? null,
+        reason: parsed.reason ?? null,
+        page_text: text.slice(0, PAGE_TEXT_MAX),
+      })
+
       // The address came off a web page; that it is well-formed says nothing
       // about whether a server will accept it. A failed probe demotes the row
       // to a calling lead rather than letting a bounce reach the sending domain.
@@ -137,7 +150,7 @@ export async function run({
         await db.updateBusiness(sql, b.id, {
           email: null,
           stage: 'call_due',
-          research: JSON.stringify({ facts, fit: parsed.fit ?? null, reason: parsed.reason ?? null }),
+          research,
         })
         callDue++
         await log('call_due', { business: b.id, reason: 'email failed verification', status: verdict.status })
@@ -145,7 +158,7 @@ export async function run({
         await db.updateBusiness(sql, b.id, {
           email,
           stage: 'qualified',
-          research: JSON.stringify({ facts, fit: parsed.fit ?? null, reason: parsed.reason ?? null }),
+          research,
         })
         qualified++
         await log('qualified', { business: b.id, facts: facts.length })
@@ -153,7 +166,7 @@ export async function run({
         // phone is deliberately not written — it stays exactly as sourced.
         await db.updateBusiness(sql, b.id, {
           stage: 'call_due',
-          research: JSON.stringify({ facts, fit: parsed.fit ?? null, reason: parsed.reason ?? null }),
+          research,
         })
         callDue++
         await log('call_due', { business: b.id, reason: 'no discoverable email' })

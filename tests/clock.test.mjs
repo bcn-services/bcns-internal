@@ -62,9 +62,16 @@ test('the dispatcher maps each cron to its job', () => {
   assert.equal(jobName({ schedule: '0 13 * * 1' }), 'source')
   assert.equal(jobName({ schedule: '30 13 * * 1-5' }), 'personalize')
   assert.equal(Object.keys(SCHEDULES).length, 4)
-  // The 20-minute tick is a chain: poll reads the inbox, notify reports on what
-  // poll left behind, in that order.
-  assert.deepEqual(jobNames({ schedule: '*/20 8-20 * * 1-5' }), ['poll', 'notify'])
+  // The 20-minute tick is a chain: poll reads the inbox, pitch/quote/onboard
+  // work what it wrote, and notify reports on what they left behind — in that
+  // order. quote and onboard need not exist yet; main() skips a missing module.
+  assert.deepEqual(jobNames({ schedule: '*/20 8-20 * * 1-5' }), [
+    'poll',
+    'pitch',
+    'quote',
+    'onboard',
+    'notify',
+  ])
 })
 
 test('a dispatch input overrides the schedule, and an unknown name throws', () => {

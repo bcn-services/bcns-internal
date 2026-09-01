@@ -17,22 +17,12 @@
 //     store there is. See `notifyKey` for what makes a second notification.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { createNotifier } from './poll.mjs'
 
 // Read in this order every tick. `drafted` is deliberately absent: there is no
 // approval step, so a draft is not a task for a human — `touch` sends it at
 // 14:00 without anyone being asked.
 export const NOTIFY_STAGES = ['call_due', 'replied', 'quoting']
-
-// The `/pitch` script lives in ~/os, which is Nate's machine and not the CI
-// runner. Present means the call email can name the command; absent means it
-// says so rather than sending a teammate after a script that is not there.
-export function pitchAvailable(home = homedir()) {
-  return existsSync(join(home, 'os', 'skills', 'pitch', 'SKILL.md'))
-}
 
 function parseResearch(research) {
   if (!research) return {}
@@ -66,7 +56,7 @@ const facts = (research) => (research.facts ?? []).map((f) => `  - ${f}`)
 // caller pairs the body with an allow-listed address, so no prospect address
 // can become a `to` no matter what a row contains.
 
-export function callTaskEmail(row, { hasPitch = false } = {}) {
+export function callTaskEmail(row) {
   const research = parseResearch(row.research)
   const text = [
     `${row.name} has stopped replying to email. Call them.`,
@@ -81,9 +71,11 @@ export function callTaskEmail(row, { hasPitch = false } = {}) {
     ].filter(Boolean),
     ...(research.facts?.length ? ['', 'What we know:', ...facts(research)] : []),
     '',
-    hasPitch
-      ? `Call script: run /pitch ${row.name} in ~/os before you dial.`
-      : 'Call script: ~/os is not on this machine, so no /pitch script is attached.',
+    // The pitch job builds this folder on the poll tick before notify runs, so
+    // a call task normally names a folder that already exists in ~/os.
+    research.pitch_path
+      ? `Pitch folder: ${research.pitch_path}`
+      : 'Pitch folder: none yet — the pitch job has not reached this row.',
     '',
     'Reply "no answer" to push the call two days, or "stop" to drop them.',
   ].join('\n')
@@ -145,7 +137,6 @@ export async function run({
   now = new Date(),
   uuid = randomUUID,
   limit = 50,
-  hasPitch = pitchAvailable(),
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'notify', kind, detail)
   const result = { call_due: 0, replied: 0, quoting: 0, emails: 0, errors: 0 }
@@ -174,7 +165,7 @@ export async function run({
         rows: [row],
         mail:
           stage === 'call_due'
-            ? callTaskEmail(row, { hasPitch })
+            ? callTaskEmail(row)
             : stage === 'replied'
               ? meetingEmail(row, (await db.firstOutbound(sql, row.id))?.[0] ?? null)
               : quoteEmail(row),
