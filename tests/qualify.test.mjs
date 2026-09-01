@@ -159,3 +159,51 @@ test('the page text sent to Claude is capped', async () => {
   await qualify(h.deps)
   assert.ok(sent.length <= PROMPT.length + 2 * MAX_CHARS + 4, `prompt was ${sent.length}`)
 })
+
+test('qualify with no claude client writes a skipped event and never throws', async () => {
+  const h = harness({ rows: [acme] })
+  delete h.deps.claude
+  const out = await qualify(h.deps)
+  assert.equal(out.qualified, 0)
+  assert.deepEqual(h.events.map((e) => e.kind), ['skipped'])
+  assert.match(h.events[0].detail.reason, /claude/)
+  assert.equal(h.updates.length, 0)
+
+  const h2 = harness({ rows: [acme] })
+  delete h2.deps.fetchPage
+  await qualify(h2.deps)
+  assert.match(h2.events[0].detail.reason, /fetchPage/)
+})
+
+const verifiable = {
+  rows: [acme],
+  pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+  answer: JSON.stringify({ email: 'hello@acme.example', facts: ['a', 'b', 'c'], fit: 'good' }),
+}
+
+test('an address the probe calls invalid lands at call_due with email cleared and phone intact', async () => {
+  const h = harness(verifiable)
+  h.deps.verify = async (address) => ({ ok: false, status: 'invalid', address })
+  const out = await qualify(h.deps)
+  assert.equal(out.qualified, 0)
+  assert.equal(out.callDue, 1)
+  const { patch } = h.updates[0]
+  assert.equal(patch.stage, 'call_due')
+  assert.equal(patch.email, null)
+  assert.ok(!('phone' in patch), 'verification failure touched the phone number')
+})
+
+test('an unknown verdict leaves the row qualified with its address', async () => {
+  const h = harness(verifiable)
+  h.deps.verify = async (address) => ({ ok: false, status: 'unknown', code: 450, address })
+  const out = await qualify(h.deps)
+  assert.equal(out.qualified, 1)
+  assert.equal(h.updates[0].patch.stage, 'qualified')
+  assert.equal(h.updates[0].patch.email, 'hello@acme.example')
+})
+
+test('a probe that throws is an unknown, not a rejection', async () => {
+  const h = harness(verifiable)
+  h.deps.verify = async () => { throw new Error('ETIMEDOUT') }
+  assert.equal((await qualify(h.deps)).qualified, 1)
+})

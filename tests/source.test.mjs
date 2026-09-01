@@ -40,7 +40,7 @@ test('pickNextCell returns null when every cell is exhausted', () => {
 
 test('a run of entirely known place ids exhausts the cell, and it is never picked again', () => {
   const cell = cells([{ trade: 'roofers', town: 'Milford', state: 'CT' }])[0]
-  const results = Array.from({ length: 20 }, (_, i) => ({ placeId: `p${i}`, known: true }))
+  const results = Array.from({ length: 20 }, (_, i) => ({ place_id: `p${i}`, known: true }))
   const after = evaluateRun(cell, results, new Date('2026-08-30'))
   assert.ok(after.exhausted_at, 'cell not marked exhausted')
   assert.equal(after.new_rows_last_run, 0)
@@ -49,15 +49,15 @@ test('a run of entirely known place ids exhausts the cell, and it is never picke
 
 test('exactly ninety percent known is not yet exhausted', () => {
   const cell = cells([{ trade: 'roofers', town: 'Milford', state: 'CT' }])[0]
-  const results = Array.from({ length: 10 }, (_, i) => ({ placeId: `p${i}`, known: i < 9 }))
+  const results = Array.from({ length: 10 }, (_, i) => ({ place_id: `p${i}`, known: i < 9 }))
   assert.equal(evaluateRun(cell, results).exhausted_at, null)
-  const harder = Array.from({ length: 20 }, (_, i) => ({ placeId: `p${i}`, known: i < 19 }))
+  const harder = Array.from({ length: 20 }, (_, i) => ({ place_id: `p${i}`, known: i < 19 }))
   assert.ok(evaluateRun(cell, harder).exhausted_at)
 })
 
 test('an already-exhausted cell keeps its original exhaustion timestamp', () => {
   const cell = { trade: 'roofers', town: 'Milford', state: 'CT', exhausted_at: '2026-01-01' }
-  assert.equal(evaluateRun(cell, [{ placeId: 'p', known: true }]).exhausted_at, '2026-01-01')
+  assert.equal(evaluateRun(cell, [{ place_id: 'p', known: true }]).exhausted_at, '2026-01-01')
 })
 
 // --- jobs/source.mjs -------------------------------------------------------
@@ -105,7 +105,7 @@ test('a budget that cannot be read never spends', async () => {
 })
 
 test('inserted rows carry place_id, source_query and stage sourced', async () => {
-  const h = harness({ results: [{ placeId: 'p1', name: 'Acme Roofing', phone: '555-0100' }] })
+  const h = harness({ results: [{ place_id: 'p1', name: 'Acme Roofing', phone: '555-0100' }] })
   await source(h.deps)
   assert.equal(h.inserted.length, 1)
   assert.equal(h.inserted[0].place_id, 'p1')
@@ -114,9 +114,20 @@ test('inserted rows carry place_id, source_query and stage sourced', async () =>
   assert.equal(h.inserted[0].town, 'Milford')
 })
 
+test('a website URL is stored as a bare hostname, and no website as null', async () => {
+  const h = harness({
+    results: [
+      { place_id: 'p1', name: 'Acme', website: 'https://www.acme.com/roofing?x=1' },
+      { place_id: 'p2', name: 'No Site' },
+    ],
+  })
+  await source(h.deps)
+  assert.deepEqual(h.inserted.map((r) => r.domain), ['acme.com', null])
+})
+
 test('a place_id already in the database is not inserted again', async () => {
   const h = harness({
-    results: [{ placeId: 'p1', name: 'Known' }, { placeId: 'p2', name: 'New' }],
+    results: [{ place_id: 'p1', name: 'Known' }, { place_id: 'p2', name: 'New' }],
     known: ['p1'],
   })
   await source(h.deps)
@@ -124,14 +135,14 @@ test('a place_id already in the database is not inserted again', async () => {
 })
 
 test('a place_id repeated within one page is inserted once', async () => {
-  const h = harness({ results: [{ placeId: 'p1', name: 'A' }, { placeId: 'p1', name: 'A' }] })
+  const h = harness({ results: [{ place_id: 'p1', name: 'A' }, { place_id: 'p1', name: 'A' }] })
   await source(h.deps)
   assert.equal(h.inserted.length, 1)
 })
 
 test('an all-known run marks the cell exhausted on the saved row', async () => {
-  const results = Array.from({ length: 20 }, (_, i) => ({ placeId: `p${i}`, name: `b${i}` }))
-  const h = harness({ results, known: results.map((r) => r.placeId) })
+  const results = Array.from({ length: 20 }, (_, i) => ({ place_id: `p${i}`, name: `b${i}` }))
+  const h = harness({ results, known: results.map((r) => r.place_id) })
   await source(h.deps)
   assert.equal(h.inserted.length, 0)
   assert.ok(h.saved[0].exhausted_at)
@@ -152,7 +163,7 @@ test('a cell outside the grid is refused, never searched', async () => {
 })
 
 test('every run writes an events row', async () => {
-  const h = harness({ results: [{ placeId: 'p1', name: 'Acme' }] })
+  const h = harness({ results: [{ place_id: 'p1', name: 'Acme' }] })
   await source(h.deps)
   assert.ok(h.events.length >= 1)
   assert.equal(h.events.at(-1).job, 'source')

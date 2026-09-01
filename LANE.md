@@ -10,7 +10,8 @@ applied to production. The clock fires and `authcheck` is green. Nothing else
 has run live: `run.mjs` injects only `sql, db, logEvent, loadCells, saveCell,
 dryRun`, so `source` no-ops on a missing budget reader and `qualify` is in no
 schedule at all. Mail is fully set up — aliases, app password, the `pipeline`
-filter, and `NOTIFY_ALLOWED_RECIPIENTS` as a repo variable — and blocks nothing.
+filter, and `SEND_ALLOWED_RECIPIENTS`/`NOTIFY_ALLOWED_RECIPIENTS` as repo
+variables — and blocks nothing.
 
 **Scope of this round:** items above the stop marker were the autonomous run.
 Everything below it is the same pipeline, continued by hand or by a restarted
@@ -22,7 +23,7 @@ is the send-as address for cold mail (DKIM signs as `send.`, DNS live).
 `bot@bcn-services.com` receives Brandon's replies and sends internal notices. A
 Gmail filter labels every reply `pipeline`. One app password on Nate's account
 is both `SMTP_PASS` and `IMAP_PASS`. Trade-off accepted: a reputation strike
-lands on Nate's account; mitigated by `NOTIFY_ALLOWED_RECIPIENTS`, the warming
+lands on Nate's account; mitigated by `SEND_ALLOWED_RECIPIENTS`, the warming
 ramp, and a per-mailbox cap. The `mailboxes` table already abstracts the sender,
 so moving `outreach@send` to a non-Google host (Zoho, ~$1/mo) later is a row
 change, not a rewrite. No second Google seat.
@@ -291,7 +292,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       billing response and throws (never returns a number) on a malformed one
     - `run.mjs`'s deps object carries `places` and `readBudget` when the token is
       present, asserted by a test that builds deps with a fake env
-  status: not started
+  status: done
 
 - task: Wire qualification into the clock. Add `qualify` to `SCHEDULES` under the
     Monday cron, run after `source` in the same tick, and inject `fetchPage`
@@ -308,7 +309,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       with `email` cleared and `phone` intact, and a `unknown` result leaves the row
       `qualified`
     - Existing passing tests remain passing
-  status: not started
+  status: done
 
 - task: Build personalization — `jobs/personalize.mjs`, one Claude call per
     business that fills the single generated sentence in the template held in
@@ -332,7 +333,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
     - A unit test asserts a draft containing `http`, `$`, or `demo is ready` is
       rejected and an `error` event written
     - A unit test asserts the buffer stops at 25 undelivered drafts
-  status: not started
+  status: done
 
 - task: Build the sender — `jobs/touch.mjs` on the 14:00 weekday cron. Each run
     picks rows due today: first sends from the `drafted` buffer, and bumps where
@@ -349,6 +350,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
     - Never send to a row with `suppressed_at` or a row that has replied
     - The allow-list is a hard gate, independent of `DRY_RUN`. With `DRY_RUN` on
       nothing opens SMTP at all; with it off the only reachable recipients are
+      `SEND_ALLOWED_RECIPIENTS` — never the internal
       `NOTIFY_ALLOWED_RECIPIENTS`. An address outside it is refused before the
       connection opens. Nate removes the gate by hand when he is ready to mail
       a stranger — no job, env default, or later item may widen it
@@ -361,12 +363,11 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       and no SMTP command is issued for it
     - A unit test asserts a bump carries `In-Reply-To` of the first message
     - A unit test with `DRY_RUN` off asserts an address outside
-      `NOTIFY_ALLOWED_RECIPIENTS` is refused before any SMTP connection opens,
+      `SEND_ALLOWED_RECIPIENTS` is refused before any SMTP connection opens,
       and that an allow-listed address is not
     - A unit test asserts the message is `multipart/alternative` carrying
       `lib/signature.html` and `lib/signature.txt` verbatim as its two parts
-  caution: true
-  status: not started
+  status: done
 
 - task: Build the poller and the reply parser — `jobs/poll.mjs` on the 20-minute
     cron, IMAP over the `pipeline` label via `IMAP_PASS`, thread mapping by
@@ -390,7 +391,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
     - A unit test asserts `won 2400` from an allow-listed sender sets `stage=won`
       and the same line from an unknown sender changes nothing
   caution: true
-  status: not started
+  status: done
 
 - task: Build the notification emails — `jobs/notify.mjs`, run at the end of each
     `poll` tick, sending as `bot@bcn-services.com` to Nate and Brandon only: batch
@@ -411,8 +412,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       is refused before SMTP is opened
     - A unit test asserts the four templates render with the row fields and none
       contains a prospect email address as a recipient
-  caution: true
-  status: not started
+  status: done
 
 - task: Build the end-to-end test — `tests/pipeline.test.mjs`, one test that
     drives `jobs/run.mjs`'s deps object through the whole path in order: `source`
@@ -430,7 +430,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
     - A test asserts an opt-out reply mid-path sets `suppressed_at` and that no
       later job in the same run selects that row again
     - `pnpm test` runs it and the whole suite exits zero
-  status: not started
+  status: done
 
 > **⚠️ AUTONOMOUS RUN — STOP HERE**
 
@@ -463,6 +463,56 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
   status: not started
 
 ---
+
+## Found during the 2026-08-31 autonomous run — needs an item
+- ~~**`NOTIFY_ALLOWED_RECIPIENTS` does double duty, and going live weaponises it.**~~
+  **FIXED 2026-08-31.** `SEND_ALLOWED_RECIPIENTS` now gates `touch`'s prospect
+  sends; `NOTIFY_ALLOWED_RECIPIENTS` gates `poll`/`notify` forwarding and
+  `isAllowedSender` alone. Both fail closed when unset, and `assertAllowed`
+  names whichever list actually refused. Original finding:
+  It is both the allow-list of who `touch` may mail AND the list `notify`/`poll`
+  forward internal mail to. Today those are the same two people, so nothing is
+  wrong. The moment a prospect address is added to go live, every internal call
+  task, meeting alert and approval mail is delivered to that prospect — including
+  a prospect's own opt-out forwarded back to them — and `poll.isAllowedSender`
+  would then honour `won 2400` or `stop` as commands from that prospect. Split it
+  into a separate internal-recipient variable BEFORE any live pilot. This is the
+  highest-priority item on this list.
+- ~~**`personalize` has no cron cell.**~~ **FIXED 2026-08-31.** `SCHEDULES` and
+  `clock.yml` both carry `'30 13 * * 1-5'  # personalize`, and a table-driven
+  test in `tests/clock.test.mjs` fails if the two ever drift again. Original
+  finding: `jobs/run.mjs`'s schedule map is
+  `poll`+`notify`, `touch`, and `source`+`qualify`. Nothing runs `personalize`,
+  so a `qualified` row never becomes `drafted` and `touch` finds nothing to send.
+  The pipeline stalls one step before its first live send. Verified against
+  `.github/workflows/clock.yml` and the map in `jobs/run.mjs`.
+- **notify's mail has no thread, so `yes`/`no` replies do not land.** The batch
+  approval mail is one message covering N businesses, while
+  `email_threads.message_id` is a primary key carrying a single `business_id`, so
+  the batch cannot be recorded at all. A reply matches no thread and `poll`
+  forwards it as "command had no thread to apply to". Needs either per-business
+  approval mail or a mapping table — not a patch.
+- **The notify dedupe key never re-arms on stage re-entry.** `replied → approved
+  → replied` reuses key `id:replied` and is never announced a second time. One
+  line in `notifyKey`, but it changes item 13's tested contract and trades a
+  silent miss for duplicate internal mail — an owner's call.
+
+
+- **`mailboxes.sent_today` is never reset.** `lib/db.mjs`'s `claimMailboxSlot`
+  increments it and gates on `sent_today < cap`, but nothing anywhere sets it
+  back to zero and no job does a daily rollover. Today's cap is therefore a
+  LIFETIME cap: once a mailbox has claimed `daily_cap` slots in total it is
+  never selected again and the pipeline silently stops sending. Item 11's
+  guardrail ("the cap is never exceeded") is satisfied, which is why the item
+  passed — the missing half is the reset. Decide between a rollover in `touch`
+  (`sent_today = 0 where warmed_at::date < current_date`-style, needs a
+  `counted_on` date column) and dropping the counter for a computed
+  `count(*) from email_threads where direction='out' and sent_at::date = current_date`,
+  which cannot drift because there is nothing to reset.
+- **A claimed slot is not released when the send throws.** `claimMailboxSlot`
+  increments before the transport runs; a throw leaves the increment. Fails
+  safe — it under-sends, never over-sends — so it is a lower priority than the
+  reset above.
 
 ## Not yet specified
 

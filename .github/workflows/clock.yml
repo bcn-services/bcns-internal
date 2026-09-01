@@ -1,6 +1,6 @@
 name: clock
 
-# The only thing that runs this repo. Three schedules and a manual dispatch,
+# The only thing that runs this repo. Four schedules and a manual dispatch,
 # all funnelled through jobs/run.mjs, which maps the incoming cron string (or
 # the dispatch input) to a job module.
 #
@@ -12,7 +12,8 @@ on:
   schedule:
     - cron: '*/20 8-20 * * 1-5'   # poll
     - cron: '0 14 * * 1-5'        # touch
-    - cron: '0 13 * * 1'          # source
+    - cron: '0 13 * * 1'          # source, then qualify
+    - cron: '30 13 * * 1-5'       # personalize
   workflow_dispatch:
     inputs:
       job:
@@ -78,6 +79,9 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Envelope sender for the RCPT TO probe qualify runs on a
+          # discovered address. No sender, no probe — never a guess.
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
           GCP_PROJECT: ${{ vars.GCP_PROJECT }}
           # The auth action returns the minted token as a step output, not an
           # env var; a token here is proof the OIDC exchange actually ran.
@@ -85,6 +89,20 @@ jobs:
           # Always set. The clone is optional, so a job tests for the
           # directory rather than trusting the variable.
           OS_DIR: ${{ github.workspace }}/os
+          # Sending. No SMTP_PASS means the touch job simply has no transport.
+          # DRY_RUN is unset here on purpose: it defaults to on, and Nate flips
+          # the repo variable himself when he is ready for a real send.
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          # Two lists, never one. SEND_ gates which PROSPECTS touch may mail;
+          # NOTIFY_ gates which internal humans get forwards and whose replies
+          # are obeyed as commands. Unset is nobody, so both stay empty until a
+          # human sets the repo variable.
+          SEND_ALLOWED_RECIPIENTS: ${{ vars.SEND_ALLOWED_RECIPIENTS }}
+          NOTIFY_ALLOWED_RECIPIENTS: ${{ vars.NOTIFY_ALLOWED_RECIPIENTS }}
+          DRY_RUN: ${{ vars.DRY_RUN }}
           SCHEDULE: ${{ github.event.schedule }}
           JOB: ${{ inputs.job }}
         run: pnpm job
