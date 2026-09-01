@@ -522,7 +522,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
 
   p.sql.phase('qualify')
   const qualified = await qualify(p.deps)
-  assert.deepEqual(qualified, { qualified: 1, callDue: 0, errors: 0 })
+  assert.deepEqual(qualified, { qualified: 1, callDue: 0, skipped: 0, errors: 0 })
 
   row = p.row('Acme Roofing')
   assert.equal(row.stage, 'qualified')

@@ -33,6 +33,24 @@ PAGE TEXT:
 // unknown is never enough to throw away a discovered address.
 const UNDELIVERABLE = new Set(['invalid', 'no-mx', 'rejected'])
 
+// The prompt asks for minified JSON and usually gets it, but a model handed
+// something it cannot work with answers in prose about that instead, and a
+// helpful one wraps the object in a ```json fence. Neither is a reason to lose
+// the row, so the first balanced object in the answer is what counts.
+export function parseAnswer(answer) {
+  if (typeof answer !== 'string') return answer
+  try {
+    return JSON.parse(answer)
+  } catch {
+    const start = answer.indexOf('{')
+    const end = answer.lastIndexOf('}')
+    if (start === -1 || end <= start) {
+      throw new Error(`no JSON in the model's answer: ${answer.slice(0, 200)}`)
+    }
+    return JSON.parse(answer.slice(start, end + 1))
+  }
+}
+
 export async function run({
   sql,
   db,
@@ -61,6 +79,7 @@ export async function run({
 
   let qualified = 0
   let callDue = 0
+  let skipped = 0
   let errors = 0
 
   for (const b of businesses) {
@@ -77,8 +96,19 @@ export async function run({
       }
 
       const text = `${trim(home)}\n\n${trim(contact)}`.trim()
+
+      // No page text is not a business to judge, it is a fetch that failed —
+      // a dead site, a bot wall, a redirect loop. Asking the model to read
+      // nothing spends a call to be told so in prose. The row stays at
+      // `sourced` and the next tick tries the site again.
+      if (!text) {
+        skipped++
+        await log('skipped', { business: b.id, name: b.name, reason: 'page fetch returned no text' })
+        continue
+      }
+
       const answer = await claude.ask(PROMPT + text)
-      const parsed = typeof answer === 'string' ? JSON.parse(answer) : answer
+      const parsed = parseAnswer(answer)
 
       const facts = Array.isArray(parsed.facts) ? parsed.facts : []
       // Trust nothing: the address must be well-formed AND actually present in
@@ -135,7 +165,7 @@ export async function run({
     }
   }
 
-  return { qualified, callDue, errors }
+  return { qualified, callDue, skipped, errors }
 }
 
 function homepage(b) {
