@@ -4,9 +4,11 @@
 //
 // Three things are load-bearing:
 //
-//  1. The allow-list. Every send goes through `createNotifier` from poll.mjs,
-//     whose first statement is `assertAllowed`. There is no second sender in
-//     this file and no transport is constructed before that check has run.
+//  1. The allow-list — NOTIFY_ALLOWED_RECIPIENTS, the internal humans, never
+//     SEND_ALLOWED_RECIPIENTS, the prospects `touch` may mail. Every send goes
+//     through `createNotifier` from poll.mjs, whose first statement is
+//     `assertAllowed`. There is no second sender in this file and no transport
+//     is constructed before that check has run.
 //  2. Notify writes no business row. It has no `updateBusiness` call at all:
 //     the stages it reads are whatever `poll` and `touch` already wrote, and a
 //     notification that moved a stage would be a pipeline that mails itself.
@@ -159,7 +161,7 @@ export async function run({
   db,
   notify = null,
   transport = null,
-  allowedRecipients = [],
+  internalRecipients = [],
   notifyFrom = 'bot@bcn-services.com',
   dryRun = true,
   now = new Date(),
@@ -171,13 +173,13 @@ export async function run({
   const result = { drafted: 0, call_due: 0, replied: 0, quoting: 0, emails: 0, errors: 0 }
 
   // Nobody on the list is not "mail everybody" — it is a job with nothing to do.
-  if (!allowedRecipients.length) {
+  if (!internalRecipients.length) {
     await log('skipped', { reason: 'no allow-listed recipient' })
     return result
   }
 
   const send =
-    notify ?? createNotifier({ transport, allowedRecipients, from: notifyFrom, dryRun, uuid, now })
+    notify ?? createNotifier({ transport, internalRecipients, from: notifyFrom, dryRun, uuid, now })
 
   for (const stage of NOTIFY_STAGES) {
     const rows = (await db.businessesByStage(sql, stage, { limit })) ?? []
@@ -207,7 +209,7 @@ export async function run({
 
     for (const batch of batches) {
       let delivered = false
-      for (const to of allowedRecipients) {
+      for (const to of internalRecipients) {
         try {
           await send({ to, ...batch.mail })
           delivered = true

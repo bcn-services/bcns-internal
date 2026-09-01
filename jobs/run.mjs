@@ -11,6 +11,11 @@ export const SCHEDULES = {
   // The Monday tick is a chain: source finds businesses, qualify reads the
   // ones it just wrote. Order is the contract, so it lives in this list.
   '0 13 * * 1': ['source', 'qualify'],
+  // Half an hour after Monday's source+qualify and thirty minutes before the
+  // 14:00 touch, so a row qualified this morning is drafted before touch looks
+  // for something to send. Weekdays, not Mondays only: a retry of a draft that
+  // failed validation needs a tick of its own.
+  '30 13 * * 1-5': 'personalize',
 }
 
 export function jobNames({ schedule = '', job = '' } = {}) {
@@ -101,13 +106,23 @@ export async function buildDeps(env = process.env) {
       })
   }
 
-  // The allow-list is a hard gate the touch job applies to every recipient,
-  // dry run or not. Unset means nobody is reachable — never everybody. Widening
-  // it is a manual edit of the repo variable, never a default here.
-  deps.allowedRecipients = String(env.NOTIFY_ALLOWED_RECIPIENTS || '')
-    .split(',')
-    .map((a) => a.trim())
-    .filter(Boolean)
+  // Two lists, deliberately not one. `allowedRecipients` is the hard gate the
+  // touch job applies to every PROSPECT recipient, dry run or not.
+  // `internalRecipients` is the set of internal humans poll/notify forward to,
+  // and the only senders whose one-word commands (`yes`, `won 2400`, `stop`)
+  // are obeyed. Merging them means going live delivers every internal call task
+  // and approval mail to a prospect, forwards a prospect's own opt-out back to
+  // them, and lets that prospect drive the pipeline.
+  //
+  // Both are unset means nobody is reachable — never everybody. Widening either
+  // is a manual edit of the repo variable, never a default here.
+  const list = (v) =>
+    String(v || '')
+      .split(',')
+      .map((a) => a.trim())
+      .filter(Boolean)
+  deps.allowedRecipients = list(env.SEND_ALLOWED_RECIPIENTS)
+  deps.internalRecipients = list(env.NOTIFY_ALLOWED_RECIPIENTS)
 
   // SMTP is a capability like any other: no app password, no transport, and
   // touch writes a skipped event instead of half-sending. The transport is a

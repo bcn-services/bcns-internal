@@ -10,7 +10,8 @@ applied to production. The clock fires and `authcheck` is green. Nothing else
 has run live: `run.mjs` injects only `sql, db, logEvent, loadCells, saveCell,
 dryRun`, so `source` no-ops on a missing budget reader and `qualify` is in no
 schedule at all. Mail is fully set up — aliases, app password, the `pipeline`
-filter, and `NOTIFY_ALLOWED_RECIPIENTS` as a repo variable — and blocks nothing.
+filter, and `SEND_ALLOWED_RECIPIENTS`/`NOTIFY_ALLOWED_RECIPIENTS` as repo
+variables — and blocks nothing.
 
 **Scope of this round:** items above the stop marker were the autonomous run.
 Everything below it is the same pipeline, continued by hand or by a restarted
@@ -22,7 +23,7 @@ is the send-as address for cold mail (DKIM signs as `send.`, DNS live).
 `bot@bcn-services.com` receives Brandon's replies and sends internal notices. A
 Gmail filter labels every reply `pipeline`. One app password on Nate's account
 is both `SMTP_PASS` and `IMAP_PASS`. Trade-off accepted: a reputation strike
-lands on Nate's account; mitigated by `NOTIFY_ALLOWED_RECIPIENTS`, the warming
+lands on Nate's account; mitigated by `SEND_ALLOWED_RECIPIENTS`, the warming
 ramp, and a per-mailbox cap. The `mailboxes` table already abstracts the sender,
 so moving `outreach@send` to a non-Google host (Zoho, ~$1/mo) later is a row
 change, not a rewrite. No second Google seat.
@@ -349,6 +350,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
     - Never send to a row with `suppressed_at` or a row that has replied
     - The allow-list is a hard gate, independent of `DRY_RUN`. With `DRY_RUN` on
       nothing opens SMTP at all; with it off the only reachable recipients are
+      `SEND_ALLOWED_RECIPIENTS` — never the internal
       `NOTIFY_ALLOWED_RECIPIENTS`. An address outside it is refused before the
       connection opens. Nate removes the gate by hand when he is ready to mail
       a stranger — no job, env default, or later item may widen it
@@ -361,7 +363,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
       and no SMTP command is issued for it
     - A unit test asserts a bump carries `In-Reply-To` of the first message
     - A unit test with `DRY_RUN` off asserts an address outside
-      `NOTIFY_ALLOWED_RECIPIENTS` is refused before any SMTP connection opens,
+      `SEND_ALLOWED_RECIPIENTS` is refused before any SMTP connection opens,
       and that an allow-listed address is not
     - A unit test asserts the message is `multipart/alternative` carrying
       `lib/signature.html` and `lib/signature.txt` verbatim as its two parts
@@ -463,7 +465,11 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
 ---
 
 ## Found during the 2026-08-31 autonomous run — needs an item
-- **`NOTIFY_ALLOWED_RECIPIENTS` does double duty, and going live weaponises it.**
+- ~~**`NOTIFY_ALLOWED_RECIPIENTS` does double duty, and going live weaponises it.**~~
+  **FIXED 2026-08-31.** `SEND_ALLOWED_RECIPIENTS` now gates `touch`'s prospect
+  sends; `NOTIFY_ALLOWED_RECIPIENTS` gates `poll`/`notify` forwarding and
+  `isAllowedSender` alone. Both fail closed when unset, and `assertAllowed`
+  names whichever list actually refused. Original finding:
   It is both the allow-list of who `touch` may mail AND the list `notify`/`poll`
   forward internal mail to. Today those are the same two people, so nothing is
   wrong. The moment a prospect address is added to go live, every internal call
@@ -472,7 +478,10 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
   would then honour `won 2400` or `stop` as commands from that prospect. Split it
   into a separate internal-recipient variable BEFORE any live pilot. This is the
   highest-priority item on this list.
-- **`personalize` has no cron cell.** `jobs/run.mjs`'s schedule map is
+- ~~**`personalize` has no cron cell.**~~ **FIXED 2026-08-31.** `SCHEDULES` and
+  `clock.yml` both carry `'30 13 * * 1-5'  # personalize`, and a table-driven
+  test in `tests/clock.test.mjs` fails if the two ever drift again. Original
+  finding: `jobs/run.mjs`'s schedule map is
   `poll`+`notify`, `touch`, and `source`+`qualify`. Nothing runs `personalize`,
   so a `qualified` row never becomes `drafted` and `touch` finds nothing to send.
   The pipeline stalls one step before its first live send. Verified against

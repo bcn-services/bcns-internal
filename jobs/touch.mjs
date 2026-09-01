@@ -47,11 +47,15 @@ export class RecipientRefused extends Error {}
 
 // The one gate. Not a helper the callers may forget: `deliver` is the only
 // path to a transport, and this is its first statement.
-export function assertAllowed(to, allowed) {
+// `listName` names the variable an operator must actually edit to widen the
+// list. There are two of them — SEND_ALLOWED_RECIPIENTS gates who we may mail
+// as a prospect, NOTIFY_ALLOWED_RECIPIENTS gates who we forward internal mail
+// to — and a refusal naming the wrong one sends the fix to the wrong file.
+export function assertAllowed(to, allowed, listName = 'SEND_ALLOWED_RECIPIENTS') {
   const list = (allowed ?? []).map((a) => String(a).trim().toLowerCase()).filter(Boolean)
   if (!list.includes(String(to ?? '').trim().toLowerCase())) {
     throw new RecipientRefused(
-      `recipient ${to} is not in NOTIFY_ALLOWED_RECIPIENTS — refused before any connection`
+      `recipient ${to} is not in ${listName} — refused before any connection`
     )
   }
 }

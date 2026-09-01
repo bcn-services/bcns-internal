@@ -171,9 +171,17 @@ test('the bump copy is under forty words and makes no new argument', () => {
 
 test('the allow-list refuses an unlisted address and an empty list allows nobody', () => {
   assert.doesNotThrow(() => assertAllowed('NSeluga@BCN-Services.com', ALLOWED))
-  assert.throws(() => assertAllowed('owner@stranger.test', ALLOWED), /NOTIFY_ALLOWED_RECIPIENTS/)
-  assert.throws(() => assertAllowed('nseluga@bcn-services.com', []), /NOTIFY_ALLOWED_RECIPIENTS/)
-  assert.throws(() => assertAllowed('nseluga@bcn-services.com', undefined), /NOTIFY_ALLOWED_RECIPIENTS/)
+  // The default names the SEND list, because `touch` is the caller that does
+  // not pass a name. A refusal that named the wrong variable would send the
+  // operator to widen the list that is not blocking them.
+  assert.throws(() => assertAllowed('owner@stranger.test', ALLOWED), /SEND_ALLOWED_RECIPIENTS/)
+  assert.throws(() => assertAllowed('nseluga@bcn-services.com', []), /SEND_ALLOWED_RECIPIENTS/)
+  assert.throws(() => assertAllowed('nseluga@bcn-services.com', undefined), /SEND_ALLOWED_RECIPIENTS/)
+  // The internal caller names its own list.
+  assert.throws(
+    () => assertAllowed('owner@stranger.test', ALLOWED, 'NOTIFY_ALLOWED_RECIPIENTS'),
+    /is not in NOTIFY_ALLOWED_RECIPIENTS — refused before any connection/
+  )
 })
 
 test('dueTouches reads through selectable_businesses and excludes replied rows', () => {
@@ -299,6 +307,40 @@ test('with DRY_RUN off an unlisted address is refused before any connection open
 test('an empty allow-list allows nobody, even with DRY_RUN off', async () => {
   const h = harness({ dryRun: false, allowed: [] })
   const res = await touch(h.deps)
+  assert.equal(res.refused, 1)
+  assert.equal(res.sent, 0)
+  assert.deepEqual(h.trace.filter((t) => t.startsWith('transport')), [])
+})
+
+// SEND_ALLOWED_RECIPIENTS and NOTIFY_ALLOWED_RECIPIENTS are two lists. Every
+// address below is a literal: importing one from the module under test would
+// let the constant move with the bug.
+test('an internal recipient that is not on the send list cannot be mailed by touch', async () => {
+  const h = harness({
+    rows: [biz({ id: 'internal', email: 'nseluga@bcn-services.com' })],
+    dryRun: false,
+    allowed: ['dana@acmeroofing.example'],
+  })
+  // The internal list is populated, and it must buy this address nothing.
+  h.deps.internalRecipients = ['nseluga@bcn-services.com', 'bchung@bcn-services.com']
+
+  const res = await touch(h.deps)
+
+  assert.equal(res.refused, 1)
+  assert.equal(res.sent, 0)
+  assert.deepEqual(h.sent, [])
+  assert.deepEqual(h.trace.filter((t) => t.startsWith('transport')), [], 'a connection opened')
+  const refusal = h.events.find((e) => e.kind === 'refused')
+  assert.ok(refusal, 'no refusal was recorded')
+  assert.match(String(refusal.detail.error ?? refusal.detail.reason ?? ''), /SEND_ALLOWED_RECIPIENTS/)
+})
+
+test('an empty send list allows nobody however full the internal list is', async () => {
+  const h = harness({ dryRun: false, allowed: [] })
+  h.deps.internalRecipients = ['nseluga@bcn-services.com']
+
+  const res = await touch(h.deps)
+
   assert.equal(res.refused, 1)
   assert.equal(res.sent, 0)
   assert.deepEqual(h.trace.filter((t) => t.startsWith('transport')), [])

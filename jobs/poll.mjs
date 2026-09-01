@@ -12,9 +12,12 @@
 //     lies cannot cost us a suppression. A false positive here is visible (the
 //     humans get the forwarded copy and can mail by hand); a false negative is
 //     invisible forever. That asymmetry is the whole design.
-//  3. A command on bot@ is honoured only from NOTIFY_ALLOWED_RECIPIENTS. `won
-//     2400` from anyone else changes nothing at all — it is forwarded, and a
-//     human decides. Nothing on this path is guessed at.
+//  3. A command on bot@ is honoured only from NOTIFY_ALLOWED_RECIPIENTS — the
+//     INTERNAL humans, and deliberately NOT SEND_ALLOWED_RECIPIENTS, which is
+//     the list of prospects `touch` may mail. `won 2400` from anyone else
+//     changes nothing at all — it is forwarded, and a human decides. The same
+//     internal list is the only set of addresses this file forwards to.
+//     Nothing on this path is guessed at.
 
 import { assertAllowed, buildMime, RecipientRefused } from './touch.mjs'
 import { SIGNATURE, toHtml } from '../lib/template.mjs'
@@ -174,10 +177,11 @@ export function readCategory(answer) {
 
 // --- forwarding ------------------------------------------------------------
 // The same gate the sender uses: `assertAllowed` first, transport second, so a
-// forward can never leak a prospect's message to a prospect.
-export function createNotifier({ transport, allowedRecipients = [], from, dryRun = true, uuid = randomUUID, now = new Date() }) {
+// forward can never leak a prospect's message to a prospect. The list here is
+// the INTERNAL one, so the refusal names NOTIFY_ALLOWED_RECIPIENTS.
+export function createNotifier({ transport, internalRecipients = [], from, dryRun = true, uuid = randomUUID, now = new Date() }) {
   return async function notify({ to, subject, text }) {
-    assertAllowed(to, allowedRecipients)
+    assertAllowed(to, internalRecipients, 'NOTIFY_ALLOWED_RECIPIENTS')
     if (dryRun || !transport) return { dryRun: true }
     const messageId = `<${uuid()}@bcn-services.com>`
     const body = `${text}\n\n${SIGNATURE}\n`
@@ -203,9 +207,11 @@ export function createNotifier({ transport, allowedRecipients = [], from, dryRun
 
 const addr = (v) => String(v ?? '').trim().toLowerCase()
 
+// `allowed` is always the INTERNAL list: a prospect on the send list must never
+// be able to issue a command.
 export function isAllowedSender(from, allowed) {
   try {
-    assertAllowed(from, allowed)
+    assertAllowed(from, allowed, 'NOTIFY_ALLOWED_RECIPIENTS')
     return true
   } catch (err) {
     if (err instanceof RecipientRefused) return false
@@ -255,7 +261,7 @@ export async function run({
   claude = null,
   notify = null,
   transport = null,
-  allowedRecipients = [],
+  internalRecipients = [],
   notifyFrom = 'bot@bcn-services.com',
   outreachAddress = 'outreach@send.bcn-services.com',
   botAddress = 'bot@bcn-services.com',
@@ -273,12 +279,12 @@ export async function run({
 
   const send =
     notify ??
-    createNotifier({ transport, allowedRecipients, from: notifyFrom, dryRun, uuid, now })
+    createNotifier({ transport, internalRecipients, from: notifyFrom, dryRun, uuid, now })
 
   // A forward is a record first and an email second: if SMTP is down the human
   // still has the event, and nothing is silently dropped.
   const forward = async (message, reason, extra = {}) => {
-    if (!allowedRecipients.length) {
+    if (!internalRecipients.length) {
       // Nobody to forward to is a failure, not a forward: an unmatched opt-out
       // would otherwise be counted as delivered and reach no human at all.
       result.errors++
@@ -294,7 +300,7 @@ export async function run({
     }
     await log('forwarded', { reason, from: message.from, subject: message.subject, ...extra })
     let delivered = false
-    for (const to of allowedRecipients) {
+    for (const to of internalRecipients) {
       try {
         await send({
           to,
@@ -466,7 +472,7 @@ export async function run({
 
   // --- teammate -----------------------------------------------------------
   async function handleTeammate({ message, businessId }) {
-    if (!isAllowedSender(message.from, allowedRecipients)) {
+    if (!isAllowedSender(message.from, internalRecipients)) {
       return forward(message, 'sender is not in NOTIFY_ALLOWED_RECIPIENTS — no command honoured', {
         from: message.from,
       })

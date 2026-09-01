@@ -1,6 +1,6 @@
 name: clock
 
-# The only thing that runs this repo. Three schedules and a manual dispatch,
+# The only thing that runs this repo. Four schedules and a manual dispatch,
 # all funnelled through jobs/run.mjs, which maps the incoming cron string (or
 # the dispatch input) to a job module.
 #
@@ -13,6 +13,7 @@ on:
     - cron: '*/20 8-20 * * 1-5'   # poll
     - cron: '0 14 * * 1-5'        # touch
     - cron: '0 13 * * 1'          # source, then qualify
+    - cron: '30 13 * * 1-5'       # personalize
   workflow_dispatch:
     inputs:
       job:
@@ -95,6 +96,11 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          # Two lists, never one. SEND_ gates which PROSPECTS touch may mail;
+          # NOTIFY_ gates which internal humans get forwards and whose replies
+          # are obeyed as commands. Unset is nobody, so both stay empty until a
+          # human sets the repo variable.
+          SEND_ALLOWED_RECIPIENTS: ${{ vars.SEND_ALLOWED_RECIPIENTS }}
           NOTIFY_ALLOWED_RECIPIENTS: ${{ vars.NOTIFY_ALLOWED_RECIPIENTS }}
           DRY_RUN: ${{ vars.DRY_RUN }}
           SCHEDULE: ${{ github.event.schedule }}

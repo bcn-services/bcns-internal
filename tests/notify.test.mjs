@@ -78,7 +78,7 @@ function harness({ rows = [], allowed = ALLOWED, dryRun = false, send = null, ha
       },
     },
     notify: send ?? (async (m) => sent.push(m)),
-    allowedRecipients: allowed,
+    internalRecipients: allowed,
     dryRun,
     now: NOW,
     hasPitch,
@@ -144,7 +144,7 @@ test('an address outside the allow-list is refused before SMTP is opened', async
       transports++
       return { sendMail: async () => {} }
     },
-    allowedRecipients: ALLOWED,
+    internalRecipients: ALLOWED,
     from: 'bot@bcn-services.com',
     dryRun: false,
     now: NOW,
@@ -165,7 +165,7 @@ test('a widened recipient list still cannot reach a prospect', async () => {
       transports++
       return { sendMail: async () => {} }
     },
-    allowedRecipients: ALLOWED,
+    internalRecipients: ALLOWED,
     from: 'bot@bcn-services.com',
     dryRun: false,
     now: NOW,
@@ -179,6 +179,29 @@ test('a widened recipient list still cannot reach a prospect', async () => {
   assert.equal(result.errors, 1)
   assert.equal(kinds(h.events).filter((k) => k === 'notified').length, 0)
   assert.match(h.events.find((e) => e.kind === 'error').detail.error, /not in NOTIFY_ALLOWED_RECIPIENTS/)
+})
+
+// Two lists. A prospect on the send list is not an internal recipient, and an
+// empty internal list is nobody whatever the send list holds. Literals only.
+test('internal mail goes to the internal list, never to a prospect on the send list', async () => {
+  const h = harness({ rows: [biz()], allowed: ['nseluga@bcn-services.com'] })
+  h.deps.allowedRecipients = ['dana@acmeroofing.example']
+
+  const result = await notify(h.deps)
+
+  assert.deepEqual(h.sent.map((m) => m.to), ['nseluga@bcn-services.com'])
+  assert.equal(result.errors, 0)
+})
+
+test('an empty internal list mails nobody however full the send list is', async () => {
+  const h = harness({ rows: [biz()], allowed: [] })
+  h.deps.allowedRecipients = ['dana@acmeroofing.example', 'nseluga@bcn-services.com']
+
+  const result = await notify(h.deps)
+
+  assert.deepEqual(h.sent, [])
+  assert.equal(result.emails, 0)
+  assert.deepEqual(kinds(h.events), ['skipped'])
 })
 
 test('an empty allow-list is nobody, not everybody', async () => {

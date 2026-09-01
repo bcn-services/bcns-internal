@@ -395,7 +395,7 @@ const TEAMMATE = 'nseluga@bcn-services.com'
 const OUTREACH = 'outreach@send.bcn-services.com'
 const BOT = 'bot@bcn-services.com'
 
-function pipeline({ places = [PLACE], allowedRecipients = [TEAMMATE] } = {}) {
+function pipeline({ places = [PLACE], allowedRecipients = [], internalRecipients = [TEAMMATE] } = {}) {
   const now = new Date('2026-09-07T13:00:00Z')
   const sql = makeSql({ now })
   const state = { classification: 'interested' }
@@ -414,7 +414,11 @@ function pipeline({ places = [PLACE], allowedRecipients = [TEAMMATE] } = {}) {
     uuid: () => `uuid-${++uuids}`,
     random: () => 0,
     sleep: async () => {},
+    // Two lists, never one: `allowedRecipients` is which PROSPECTS touch may
+    // mail, `internalRecipients` is which humans poll/notify forward to and
+    // whose commands are obeyed. The pipeline run below keeps them disjoint.
     allowedRecipients,
+    internalRecipients,
     notifyFrom: BOT,
     outreachAddress: OUTREACH,
     botAddress: BOT,
@@ -528,9 +532,10 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
   assert.equal(row.research.fit, 'good')
 
   // --- weekday 14:00 — touch (SCHEDULES['0 14 * * 1-5']) ---
-  // The recipient has to be on the allow-list for a real send, so the list here
-  // is what a live pilot's NOTIFY_ALLOWED_RECIPIENTS would hold.
-  p.deps.allowedRecipients = [TEAMMATE, 'hello@acmeroofing.example']
+  // The recipient has to be on the send allow-list for a real send, so the list
+  // here is what a live pilot's SEND_ALLOWED_RECIPIENTS would hold — the
+  // prospect and nobody internal.
+  p.deps.allowedRecipients = ['hello@acmeroofing.example']
   p.sql.phase('touch')
   const touched = await touch(p.deps)
   assert.equal(touched.sent, 1)
@@ -597,7 +602,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
 
 test('an opt-out reply sets suppressed_at, and no later job in the same run selects that row', async () => {
   const p = pipeline({ places: [PLACE, SECOND_PLACE] })
-  p.deps.allowedRecipients = [TEAMMATE, 'hello@acmeroofing.example', 'office@boltroofing.example']
+  p.deps.allowedRecipients = ['hello@acmeroofing.example', 'office@boltroofing.example']
 
   p.sql.phase('source')
   await source(p.deps)

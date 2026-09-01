@@ -125,7 +125,7 @@ function harness({
     }),
     claude: classify === null ? null : { ask: classify },
     notify: async (m) => forwards.push(m),
-    allowedRecipients: allowed,
+    internalRecipients: allowed,
     dryRun,
     now: NOW,
   }
@@ -354,6 +354,44 @@ test('won 2400 from an allow-listed sender sets stage=won', async () => {
   assert.equal(JSON.parse(h.store.get('b1').research).won_amount, 2400)
   assert.equal(result.commands, 1)
   assert.equal(result.forwarded, 0)
+})
+
+// SEND_ALLOWED_RECIPIENTS and NOTIFY_ALLOWED_RECIPIENTS are two lists, and the
+// prospect list buys a sender nothing. Literal addresses on purpose.
+test('a prospect on the send list issues no commands and receives no forward', async () => {
+  const h = harness({
+    messages: [teammate({ from: 'dana@acmeroofing.example' })],
+    rows: [biz({ stage: 'call_due' })],
+    allowed: ['nseluga@bcn-services.com'],
+  })
+  // Exactly what going live looks like: the prospect IS on the send list.
+  h.deps.allowedRecipients = ['dana@acmeroofing.example']
+
+  const result = await poll(h.deps)
+
+  // `won 2400` is not honoured …
+  assert.equal(h.store.get('b1').stage, 'call_due')
+  assert.deepEqual(h.updates, [])
+  assert.equal(result.commands, 0)
+  // … it is forwarded instead, and only to the internal human.
+  assert.equal(result.forwarded, 1)
+  assert.deepEqual(h.forwards.map((m) => m.to), ['nseluga@bcn-services.com'])
+})
+
+test('an empty internal list forwards to nobody however full the send list is', async () => {
+  const h = harness({
+    messages: [teammate({ from: 'dana@acmeroofing.example' })],
+    rows: [biz({ stage: 'call_due' })],
+    allowed: [],
+  })
+  h.deps.allowedRecipients = ['dana@acmeroofing.example', 'nseluga@bcn-services.com']
+
+  const result = await poll(h.deps)
+
+  assert.equal(h.store.get('b1').stage, 'call_due')
+  assert.deepEqual(h.forwards, [])
+  assert.equal(result.forwarded, 0)
+  assert.equal(result.errors, 1, 'an unforwardable message must be an error, not a silent drop')
 })
 
 test('the same line from an unknown sender changes nothing', async () => {
