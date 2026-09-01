@@ -195,11 +195,15 @@ test('dueTouches reads through selectable_businesses and excludes replied rows',
   assert.doesNotThrow(() => assertSelectable(text))
 })
 
-test('claimMailboxSlot increments only below the cap', () => {
+test('claimMailboxSlot increments only below the cap, and starts over on a new day', () => {
   let text = ''
   claimMailboxSlot((strings) => { text = strings.join('?'); return [] }, { address: 'a@b.test', cap: 5 })
-  assert.match(text, /sent_today = sent_today \+ 1/)
-  assert.match(text, /sent_today < \?/)
+  // A stale sent_on restarts the count at 1 rather than adding to yesterday's:
+  // without this the cap was a LIFETIME cap and the mailbox went quiet forever.
+  assert.match(text, /sent_today = case when sent_on = current_date then sent_today \+ 1 else 1 end/)
+  assert.match(text, /sent_on = current_date/)
+  // The day is a way past the cap guard, so a mailbox spent yesterday claims today.
+  assert.match(text, /sent_on is distinct from current_date or sent_today < \?/)
   assert.match(text, /returning \*/)
 })
 

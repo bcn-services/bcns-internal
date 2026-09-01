@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   assertSelectable, dueBusinesses, businessByEmail, businessByPlaceId,
   qualifiedBacklog, sourcedBacklog, suppress, logEvent, recordThread,
+  activeMailboxes, claimMailboxSlot,
 } from '../lib/db.mjs'
 
 // A postgres.js-shaped tagged-template fake. Records the static text of every
@@ -125,4 +126,20 @@ test('upsertCells never duplicates a grid cell', async () => {
   const writer = fakeClient()
   await saveCell(writer, { trade: 'roofers', town: 'Milford', state: 'CT', exhausted_at: null })
   assert.match(writer.calls[0].text, /update search_grid/i)
+})
+
+
+// --- the daily send cap ----------------------------------------------------
+// `sent_today` used to be incremented and never reset, which made `daily_cap` a
+// LIFETIME cap: a mailbox went quiet forever after `cap` sends and said so only
+// in a skipped event. The rollover now rides in the claim itself, so these
+// assert on the SQL — the tests stay pure, and there is no scheduled reset that
+// could silently stop firing.
+
+test('activeMailboxes reads yesterday\'s count as zero', async () => {
+  const sql = fakeClient()
+  await activeMailboxes(sql)
+  const { text } = sql.calls[0]
+  assert.match(text, /case when sent_on = current_date then sent_today else 0 end as sent_today/i)
+  assert.ok(!/select \* from mailboxes/i.test(text), 'sent_today is read raw')
 })

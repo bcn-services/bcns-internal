@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 const dir = new URL('../supabase/migrations/', import.meta.url)
 const reset = readFileSync(new URL('0017_reset.sql', dir), 'utf8')
 const pipeline = readFileSync(new URL('0018_pipeline.sql', dir), 'utf8')
+const dailyReset = readFileSync(new URL('0021_mailbox_daily_reset.sql', dir), 'utf8')
 
 const STAGES = [
   'sourced', 'qualified', 'call_due', 'drafted', 'approved', 'sent',
@@ -135,4 +136,14 @@ test('0020 enables RLS with no policies, matching 0018', () => {
   assert.ok(!/create policy/i.test(clients), '0020 adds a policy; deny-all is the absence of one')
   assert.equal((clients.match(/\bbegin\b/gi) || []).length, 1)
   assert.equal((clients.match(/\bcommit\b/gi) || []).length, 1)
+})
+
+
+test('0021 gives mailboxes the day its count belongs to', () => {
+  assert.match(dailyReset, /alter table mailboxes add column sent_on date/i)
+  // Backfilled to today, not null: a mailbox that has already sent today keeps
+  // its slots spent rather than being handed a fresh cap mid-day.
+  assert.match(dailyReset, /not null default current_date/i)
+  // Additive only — 0018's counter is not dropped or rewritten.
+  assert.ok(!/drop|delete/i.test(dailyReset.replace(/^--.*$/gm, '')), '0021 destroys something')
 })

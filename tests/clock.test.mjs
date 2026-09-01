@@ -225,3 +225,23 @@ test('fetchPage caps the body it returns and fails loudly on a bad status', asyn
   const bad = createFetchPage({ fetchImpl: async () => ({ ok: false, status: 404, text: async () => '' }) })
   await assert.rejects(bad('https://x.test'), /returned 404/)
 })
+
+
+test('buildDeps injects a voice rules reader only when OS_DIR is set', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+
+  // No clone, no reader: personalize already logs that and drafts without the
+  // voice, so a missing OS_DIR must stay a degraded run and never a thrown one.
+  const bare = await buildDeps({})
+  assert.equal(bare.readVoiceRules, undefined)
+
+  const os = mkdtempSync(join(tmpdir(), 'bcns-os-'))
+  mkdirSync(join(os, 'knowledge/library/bcns-voice'), { recursive: true })
+  writeFileSync(join(os, 'knowledge/library/bcns-voice/voice-rules.md'), 'no em dashes\n')
+
+  const cloned = await buildDeps({ OS_DIR: os })
+  assert.equal(typeof cloned.readVoiceRules, 'function')
+  assert.equal(await cloned.readVoiceRules(), 'no em dashes\n')
+})
