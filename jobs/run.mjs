@@ -172,6 +172,22 @@ export async function buildDeps(env = process.env) {
   }
 
   deps.dryRun = env.DRY_RUN !== 'false'
+
+  // The skill runner and the ~/os push helper. Both only make sense against
+  // the clone, so both appear only when OS_DIR does — same rule as the voice
+  // rules above. commitAndPush is bound to this run's dryRun so no module
+  // reads process.env to decide whether it is allowed to push.
+  if (env.OS_DIR) {
+    deps.osDir = env.OS_DIR
+    const [{ runSkill }, { commitAndPush }] = await Promise.all([
+      import('../lib/skills.mjs'),
+      import('../lib/osrepo.mjs'),
+    ])
+    deps.runSkill = (opts) => runSkill({ cwd: env.OS_DIR, ...opts })
+    deps.commitAndPush = (opts) =>
+      commitAndPush({ dir: env.OS_DIR, dryRun: deps.dryRun, ...opts })
+  }
+
   return deps
 }
 

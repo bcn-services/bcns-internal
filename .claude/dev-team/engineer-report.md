@@ -1,36 +1,34 @@
 # Engineer Report
-**Task:** Split `NOTIFY_ALLOWED_RECIPIENTS` into a send list and an internal list; give `personalize` a cron cell
-**Branch:** `outreach-pipeline` (main checkout — no worktree, per the task brief)
-**Date:** 2026-08-31
+**Task:** item 15 — headless-skill runner (`lib/skills.mjs`), os push helper (`lib/osrepo.mjs`), clock.yml wiring, buildDeps injection
+**Branch:** item/0015-skills
+**Date:** 2026-09-01
 
 ## Design Decisions
-- `deps.allowedRecipients` now reads `SEND_ALLOWED_RECIPIENTS` and is consumed only by `touch`'s `deliver` gate; `deps.internalRecipients` reads `NOTIFY_ALLOWED_RECIPIENTS` and is consumed only by `poll`/`notify` forwarding and `isAllowedSender`.
-- Renamed the parameter in `poll`/`notify`/`createNotifier` to `internalRecipients` rather than leaving both names live, so a caller that passes the wrong list is a missing-parameter bug (empty = fail closed) instead of a silent widening.
-- `assertAllowed(to, allowed, listName = 'SEND_ALLOWED_RECIPIENTS')` — the default serves `touch`, the only caller that passes nothing; the two internal call sites pass `'NOTIFY_ALLOWED_RECIPIENTS'` so a refusal always names the variable the operator must edit.
-- Both lists parse through one local `list()` helper in `buildDeps` and both fail closed when unset — unset is nobody, never everybody.
-- `personalize` is scheduled `'30 13 * * 1-5'` (weekdays, not Mondays only) so a draft that failed validation gets a retry tick rather than waiting a week.
-- The `clock.yml` drift test is table-driven both ways (every cron has a `SCHEDULES` key, every `SCHEDULES` key has a cron) instead of a pinned three-item list, since a pinned list is what let `personalize` go unscheduled.
+- `runSkill` parses the `result` field of the `--output-format json` envelope, falling back to raw stdout if it is not JSON; the test fake produces the real envelope shape.
+- Return shape is LANE's `{ wrote: [], repo, dryrun }`; `dryrun` is an array (parallel to `wrote`) since a skill can print several DRYRUN lines. `repo` is the last REPO line.
+- Invocation is claudeClient's verbatim (`-p`, `--model sonnet`, `--output-format json`) plus `cwd`; a test asserts `--bare` is absent, per the known failure mode.
+- `commitAndPush` takes an explicit `dryRun` parameter (defaulting to `true`, i.e. safe) — no `process.env` read inside the module; `buildDeps` binds it to `deps.dryRun`.
+- Only three exact line prefixes are matched by one regex; every other output line is ignored and nothing from Claude's output is executed.
+- `runSkill`/`commitAndPush`/`osDir` are gated on `OS_DIR`, matching the existing `readVoiceRules` rule, so a run with no clone has no capability rather than a broken one.
 
 ## Files Changed
-- `jobs/run.mjs` — added the `'30 13 * * 1-5': 'personalize'` schedule; split the recipient env parse into `SEND_ALLOWED_RECIPIENTS` → `allowedRecipients` and `NOTIFY_ALLOWED_RECIPIENTS` → `internalRecipients`, both fail-closed.
-- `jobs/touch.mjs` — `assertAllowed` takes a `listName` third parameter (default `SEND_ALLOWED_RECIPIENTS`) so the refusal text names the right variable.
-- `jobs/poll.mjs` — `createNotifier`, the forward loop and `isAllowedSender` now take `internalRecipients`; both internal `assertAllowed` calls pass `'NOTIFY_ALLOWED_RECIPIENTS'`; header comment rewritten to say the command list is the internal one and explicitly not the send list.
-- `jobs/notify.mjs` — `run` takes `internalRecipients`; header comment names both lists.
-- `.github/workflows/clock.yml` — added `- cron: '30 13 * * 1-5'   # personalize` and `SEND_ALLOWED_RECIPIENTS: ${{ vars.SEND_ALLOWED_RECIPIENTS }}` (no value set anywhere).
-- `LANE.md` — corrected the four places that named `NOTIFY_ALLOWED_RECIPIENTS` as `touch`'s send gate; marked both findings FIXED with what replaced them.
-- `tests/clock.test.mjs` — replaced the pinned three-cron assertion with the two-way drift test; added the `personalize` dispatch assertions and a `buildDeps` test covering both lists set, each unset independently, and both unset.
-- `tests/touch.test.mjs` — `assertAllowed` message assertions moved to `SEND_ALLOWED_RECIPIENTS` plus an explicit `listName` case; new tests that an internal-only address cannot be mailed by `touch` and that an empty send list refuses however full the internal list is.
-- `tests/poll.test.mjs` — harness passes `internalRecipients`; new tests that a prospect on the send list has `won 2400` forwarded rather than honoured and receives no forward, and that an empty internal list forwards to nobody and records an error.
-- `tests/notify.test.mjs` — harness and `createNotifier` calls pass `internalRecipients`; new tests that internal mail goes only to the internal list and that an empty internal list mails nobody.
-- `tests/pipeline.test.mjs` — the end-to-end run now keeps the two lists disjoint (prospects on the send list, the teammate on the internal list), which is the live-pilot shape.
+- `lib/claude.mjs` — exported the module-local `run = promisify(execFile)` so skills.mjs wraps it and tests inject a fake.
+- `lib/skills.mjs` — new; `runSkill({ command, cwd, run, model, timeout })`, prefix parsing, non-zero exit rethrown naming the command.
+- `lib/osrepo.mjs` — new; `commitAndPush({ exec, dir, paths, message, dryRun })`, add → commit → pull --rebase → push, returns `{ dryRun, commands }`.
+- `jobs/run.mjs` — `buildDeps` injects `osDir`, `runSkill` (cwd bound to OS_DIR), `commitAndPush` (dir + dryRun bound) under `if (env.OS_DIR)`.
+- `.github/workflows/clock.yml` — new "Wire ~/os skills and git identity" step between the os checkout and Authenticate/Run job: symlinks `$OS_DIR/skills` → `~/.claude/skills`, sets `git -C "$OS_DIR" config user.name/email`.
+- `package.json` — `tests/skills.test.mjs` appended to the `test` script list.
+- `tests/skills.test.mjs` — new; 7 tests covering all four `done when:` criteria.
 
 ## Deferred / Out of Scope
-- `docs/NOTIFICATIONS.md` — its `NOTIFY_ALLOWED_RECIPIENTS` references are all about internal notification delivery and stay correct. The file is otherwise stale against a different codebase (`email_outbox`, `lib/agent/verbs/types.ts`, `tests/mailer-smtp.test.mjs` — none exist here); rewriting it is its own item.
-- The other four LANE findings from the 2026-08-31 run (notify batch threading, the dedupe key not re-arming, `mailboxes.sent_today` never resetting) are untouched.
-- `buildDeps` still supplies no `readVoiceRules`, so a scheduled `personalize` run logs `skipped: no voice rules reader injected` and falls back to the fixed blocks. Pre-existing, not introduced here, but it is the next thing to fix if the 13:30 cell is meant to produce voiced drafts.
+- No job calls `runSkill`/`commitAndPush` yet — item 15 builds the capability only.
+- No retry on a rejected push: a non-fast-forward propagates, since force-push is forbidden and a human should look.
 
 ## Flags for Reviewer
-- `touch` still burns a mailbox slot before the refusal is recorded (`claim()` runs after `assertAllowed`, but the claimed row is counted) — pre-existing, asserted by an existing test.
-- `poll`'s forward loop mails every internal recipient in series inside the message drain; a slow SMTP hop multiplies by the list length against the 20-minute tick.
-- `assertAllowed`'s `listName` is a plain string with no enum; a future third caller can pass a variable name that does not exist.
-- Two repo variables now have to stay in step with the workflow; nothing asserts that `clock.yml` exports every env var `buildDeps` reads.
+- **Live-path risk:** the `Check out ~/os` step sets `persist-credentials: false`, so `git push` inside `$OS_DIR` has no credentials — a live (`DRY_RUN=false`) `commitAndPush` will fail at push. Fixing it means either flipping that flag or setting a credential-bearing remote; out of scope for this item but it will bite whoever wires the first pushing job.
+- `runSkill` timeout defaults to 600s (a skill run is far slower than an `ask`), which exceeds clock.yml's `timeout-minutes: 10` job budget — the workflow will kill the run first.
+- `maxBuffer` is 8MB, same as claudeClient; a very chatty skill run could exceed it and reject.
+
+## Guardrails Reasoned About
+- "never runs at all when DRY_RUN is on" — implemented as an injected `dryRun` defaulting to `true`, so an omitted flag cannot push; asserted by a test.
+- "never touches main of this repo" — the git identity is set with `git -C "$OS_DIR"` only, and a test asserts every `git config` line in the step carries `-C`.

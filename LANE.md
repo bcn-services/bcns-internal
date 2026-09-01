@@ -488,7 +488,7 @@ against a fake `runSkill` only — that is by design, not a gap.
       and returns the would-be command list
     - `tests/clock.test.mjs` still passes and the new `clock.yml` step is
       present between the os checkout and the job step
-  status: not started
+  status: done
 
 - task: Remove the approval loop and author migration 0022. `jobs/notify.mjs`
     drops `drafted` from `NOTIFY_STAGES` and deletes the batch approval mail;
