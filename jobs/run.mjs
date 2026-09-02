@@ -158,6 +158,19 @@ export async function buildDeps(env = process.env) {
   deps.notifyFrom = env.NOTIFY_FROM || 'bot@bcn-services.com'
   deps.outreachAddress = env.SMTP_USER || 'outreach@send.bcn-services.com'
 
+  // The voice rules are a capability like SMTP: clock.yml clones ~/os and sets
+  // OS_DIR, and without that clone personalize has nothing to read. No OS_DIR
+  // means no reader, which is the case personalize already logs and drafts
+  // through — an unvoiced draft, never a failed run. Same path authcheck
+  // reports on, so one dispatch tells you whether this will work.
+  if (env.OS_DIR) {
+    deps.readVoiceRules = async () => {
+      const { readFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      return readFile(join(env.OS_DIR, 'knowledge/library/bcns-voice/voice-rules.md'), 'utf8')
+    }
+  }
+
   deps.dryRun = env.DRY_RUN !== 'false'
   return deps
 }

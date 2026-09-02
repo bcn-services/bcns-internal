@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { trim, MAX_CHARS } from '../lib/trim.mjs'
-import { run as qualify, PROMPT } from '../jobs/qualify.mjs'
+import { run as qualify, PROMPT, parseAnswer } from '../jobs/qualify.mjs'
 
 test('trim caps a 500KB page at 7000 characters', () => {
   const big = '<p>' + 'word '.repeat(120_000) + '</p>'
@@ -206,4 +206,31 @@ test('a probe that throws is an unknown, not a rejection', async () => {
   const h = harness(verifiable)
   h.deps.verify = async () => { throw new Error('ETIMEDOUT') }
   assert.equal((await qualify(h.deps)).qualified, 1)
+})
+
+
+// --- what a real run turned up ---------------------------------------------
+// The first live qualify run errored on a business whose site returned nothing:
+// the model, handed an empty PAGE TEXT, answered in prose about that, and the
+// unguarded JSON.parse threw. Both halves are covered here.
+
+test('an empty page is skipped without spending a Claude call', async () => {
+  const h = harness({ rows: [acme], pages: { home: '' } })
+  const out = await qualify(h.deps)
+  assert.equal(out.skipped, 1)
+  assert.equal(out.errors, 0, 'a dead site is not an error')
+  assert.equal(h.asks, 0, 'the model was asked to read an empty page')
+  assert.equal(h.updates.length, 0, 'the row moved off sourced and will not be retried')
+  assert.match(h.events.at(-1).detail.reason, /no text/)
+})
+
+test('parseAnswer digs the object out of a fenced or chatty reply', () => {
+  const obj = { email: null, facts: [], fit: 'weak', reason: 'thin' }
+  assert.deepEqual(parseAnswer(JSON.stringify(obj)), obj)
+  assert.deepEqual(parseAnswer('```json\n' + JSON.stringify(obj) + '\n```'), obj)
+  assert.deepEqual(parseAnswer(`Here you go:\n${JSON.stringify(obj)}\nHope that helps!`), obj)
+  // Already-parsed objects pass through; genuinely unusable prose still throws,
+  // which leaves the row at sourced for the next tick rather than mis-filing it.
+  assert.deepEqual(parseAnswer(obj), obj)
+  assert.throws(() => parseAnswer('The PAGE TEXT appears to be empty.'), /no JSON/)
 })

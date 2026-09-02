@@ -48,6 +48,11 @@ const BUSINESS_DEFAULTS = {
   research: {},
 }
 
+// `sent_on` is what makes `sent_today` a daily count rather than a lifetime
+// one, so the fake carries it: a store row dated before the run's `now` reads
+// as zero sends and the next claim restarts the count.
+const dayOf = (d) => new Date(d).toISOString().slice(0, 10)
+
 const MAILBOX = {
   address: 'outreach@send.bcn-services.com',
   domain: 'send.bcn-services.com',
@@ -71,9 +76,10 @@ function toJsonb(value) {
 const sortByCreated = (rows) => [...rows].sort((a, b) => a.created_at - b.created_at)
 
 function makeSql({ now }) {
+  const today = dayOf(now)
   const store = {
     businesses: [],
-    mailboxes: [{ id: 'mb1', ...MAILBOX, warmed_at: now }],
+    mailboxes: [{ id: 'mb1', ...MAILBOX, sent_on: dayOf(now), warmed_at: now }],
     search_grid: [],
     email_threads: [],
     events: [],
@@ -180,16 +186,22 @@ function makeSql({ now }) {
     if (q.includes('from businesses')) throw new Error(`read bypassed the view: ${q}`)
 
     // --- mailboxes ---
-    if (q.startsWith('select * from mailboxes')) {
-      return store.mailboxes.filter((m) => m.status === 'active').map(clone)
+    if (q.startsWith('select *, case when sent_on') && q.includes('from mailboxes')) {
+      return store.mailboxes
+        .filter((m) => m.status === 'active')
+        .map((m) => ({ ...clone(m), sent_today: m.sent_on === today ? m.sent_today : 0 }))
     }
     if (q.startsWith('update mailboxes set sent_today')) {
       const [address, cap] = values
       const mb = store.mailboxes.find(
-        (m) => m.address === address && m.status === 'active' && m.sent_today < cap
+        (m) =>
+          m.address === address &&
+          m.status === 'active' &&
+          (m.sent_on !== today || m.sent_today < cap)
       )
       if (!mb) return []
-      mb.sent_today += 1
+      mb.sent_today = mb.sent_on === today ? mb.sent_today + 1 : 1
+      mb.sent_on = today
       return [clone(mb)]
     }
 
@@ -510,7 +522,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
 
   p.sql.phase('qualify')
   const qualified = await qualify(p.deps)
-  assert.deepEqual(qualified, { qualified: 1, callDue: 0, errors: 0 })
+  assert.deepEqual(qualified, { qualified: 1, callDue: 0, skipped: 0, errors: 0 })
 
   row = p.row('Acme Roofing')
   assert.equal(row.stage, 'qualified')
@@ -674,4 +686,33 @@ test('an opt-out reply sets suppressed_at, and no later job in the same run sele
   )
   assert.equal(outreachToBolt.length, 1)
   assert.equal(p.store.businesses.find((b) => b.id === bolt.id).touches, 1)
+})
+
+test('a mailbox spent yesterday sends again today rather than going quiet forever', async () => {
+  const p = pipeline({ places: [PLACE] })
+  p.deps.allowedRecipients = ['hello@acmeroofing.example']
+
+  // Yesterday this mailbox hit its cap. Before the rollover the counter was
+  // never reset by anything, so `daily_cap` was a LIFETIME cap: touch logged
+  // `every mailbox is at its warmed cap` and stopped sending, silently, for
+  // good. The count is stale, not spent.
+  const mb = p.store.mailboxes[0]
+  mb.sent_today = mb.daily_cap
+  mb.sent_on = '2026-09-06'
+
+  p.sql.phase('source')
+  await source(p.deps)
+  p.sql.phase('qualify')
+  await qualify(p.deps)
+  p.sql.phase('personalize')
+  await personalize(p.deps)
+  p.sql.phase('touch')
+  const res = await touch(p.deps)
+
+  assert.equal(res.sent, 1, 'yesterday’s count blocked today’s send')
+  assert.equal(p.row('Acme Roofing').stage, 'sent')
+  // The claim restarted the day rather than adding to yesterday's total.
+  assert.equal(mb.sent_today, 1)
+  assert.equal(mb.sent_on, '2026-09-07')
+  assert.equal(p.events('touch', 'skipped').length, 0)
 })
