@@ -22,7 +22,7 @@ import { createNotifier } from './poll.mjs'
 // Read in this order every tick. `drafted` is deliberately absent: there is no
 // approval step, so a draft is not a task for a human — `touch` sends it at
 // 14:00 without anyone being asked.
-export const NOTIFY_STAGES = ['call_due', 'replied', 'quoting', 'quoted']
+export const NOTIFY_STAGES = ['call_due', 'replied', 'quoting', 'quoted', 'onboarded']
 
 function parseResearch(research) {
   if (!research) return {}
@@ -152,6 +152,41 @@ export function quoteReadyEmail(row) {
   return { subject: `[pipeline] quote ready for ${row.name}`, text }
 }
 
+// The one mail that does not go to the internal list. `onboard` has just built
+// the repo and the intake folder; this hands them to the one person who works
+// them, named by ONBOARD_NOTIFY_TO alone.
+export function onboardedEmail(row) {
+  const research = parseResearch(row.research)
+  const text = [
+    `${row.name} signed. The repo and the intake folder exist — over to you.`,
+    '',
+    ...[
+      line('Repo', research.repo_url),
+      line('Intake checklist', research.intake_checklist_path),
+      line('Request email', research.request_email_path),
+      line('Contact', research.owner_name),
+      line('Email', row.email),
+      line('Phone', row.phone),
+      line('Where', where(row)),
+    ].filter(Boolean),
+    '',
+    'Send the request email, then work the checklist.',
+  ].join('\n')
+  return { subject: `Signed: ${row.name} — your turn`, text }
+}
+
+// One template per stage. A lookup rather than a ternary chain: the chain's
+// last arm was the default, so a new stage that forgot its template silently
+// mailed the quote-ready body.
+export const TEMPLATES = {
+  call_due: (row) => callTaskEmail(row),
+  replied: async (row, { db, sql }) =>
+    meetingEmail(row, (await db.firstOutbound(sql, row.id))?.[0] ?? null),
+  quoting: (row) => quoteEmail(row),
+  quoted: (row) => quoteReadyEmail(row),
+  onboarded: (row) => onboardedEmail(row),
+}
+
 // --- the job ---------------------------------------------------------------
 
 export async function run({
@@ -160,6 +195,7 @@ export async function run({
   notify = null,
   transport = null,
   internalRecipients = [],
+  onboardRecipient = '',
   notifyFrom = 'bot@bcn-services.com',
   dryRun = true,
   now = new Date(),
@@ -167,7 +203,7 @@ export async function run({
   limit = 50,
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'notify', kind, detail)
-  const result = { call_due: 0, replied: 0, quoting: 0, quoted: 0, emails: 0, errors: 0 }
+  const result = { call_due: 0, replied: 0, quoting: 0, quoted: 0, onboarded: 0, emails: 0, errors: 0 }
 
   // Nobody on the list is not "mail everybody" — it is a job with nothing to do.
   if (!internalRecipients.length) {
@@ -178,6 +214,22 @@ export async function run({
   const send =
     notify ?? createNotifier({ transport, internalRecipients, from: notifyFrom, dryRun, uuid, now })
 
+  // The onboarded mail gets its own notifier whose allow-list is exactly the
+  // one address. Passing it through `send` would refuse it (it is not on
+  // NOTIFY_ALLOWED_RECIPIENTS) — and, worse, an address that happened to be on
+  // that list would then be mailed alongside everyone else on it.
+  const sendOnboard = onboardRecipient
+    ? notify ??
+      createNotifier({
+        transport,
+        internalRecipients: [onboardRecipient],
+        from: notifyFrom,
+        dryRun,
+        uuid,
+        now,
+      })
+    : null
+
   for (const stage of NOTIFY_STAGES) {
     const rows = (await db.businessesByStage(sql, stage, { limit })) ?? []
     if (!rows.length) continue
@@ -187,26 +239,27 @@ export async function run({
     const fresh = rows.filter((row) => !done.has(notifyKey(row)))
     if (!fresh.length) continue
 
+    // Fail closed: no ONBOARD_NOTIFY_TO is nobody, never the internal list.
+    if (stage === 'onboarded' && !sendOnboard) {
+      result.errors++
+      await log('error', { stage, reason: 'ONBOARD_NOTIFY_TO is unset — nothing mailed' })
+      continue
+    }
+    const recipients = stage === 'onboarded' ? [onboardRecipient] : internalRecipients
+
     // One email per row: each is a task somebody picks up individually.
     const batches = await Promise.all(
       fresh.map(async (row) => ({
         rows: [row],
-        mail:
-          stage === 'call_due'
-            ? callTaskEmail(row)
-            : stage === 'replied'
-              ? meetingEmail(row, (await db.firstOutbound(sql, row.id))?.[0] ?? null)
-              : stage === 'quoting'
-                ? quoteEmail(row)
-                : quoteReadyEmail(row),
+        mail: await TEMPLATES[stage](row, { db, sql }),
       }))
     )
 
     for (const batch of batches) {
       let delivered = false
-      for (const to of internalRecipients) {
+      for (const to of recipients) {
         try {
-          await send({ to, ...batch.mail })
+          await (stage === 'onboarded' ? sendOnboard : send)({ to, ...batch.mail })
           delivered = true
         } catch (err) {
           result.errors++

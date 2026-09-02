@@ -126,6 +126,10 @@ export async function buildDeps(env = process.env) {
       .filter(Boolean)
   deps.allowedRecipients = list(env.SEND_ALLOWED_RECIPIENTS)
   deps.internalRecipients = list(env.NOTIFY_ALLOWED_RECIPIENTS)
+  // A third list of exactly one, and deliberately not part of either. The
+  // `onboarded` mail hands over a signed client and goes to one person; unset
+  // means notify mails nobody about it, never the internal list.
+  deps.onboardRecipient = String(env.ONBOARD_NOTIFY_TO || '').trim()
 
   // SMTP is a capability like any other: no app password, no transport, and
   // touch writes a skipped event instead of half-sending. The transport is a
@@ -187,11 +191,22 @@ export async function buildDeps(env = process.env) {
       import('../lib/osrepo.mjs'),
     ])
     deps.runSkill = (opts) => runSkill({ cwd: env.OS_DIR, ...opts })
-    deps.commitAndPush = (opts) =>
-      commitAndPush({ dir: env.OS_DIR, dryRun: deps.dryRun, ...opts })
+    // `...opts` last on purpose, so a caller can override — but the defaults
+    // must be complete on their own: a missing `exec` here made every live
+    // push call undefined(). commitDefaults is where that is asserted.
+    const defaults = await commitDefaults(env, deps.dryRun)
+    deps.commitAndPush = (opts) => commitAndPush({ ...defaults, ...opts })
   }
 
   return deps
+}
+
+// The default options every ~/os push is made with. Exported so the wiring can
+// be asserted without executing a push: `exec` going missing here is the whole
+// bug this exists to catch.
+export async function commitDefaults(env = process.env, dryRun = env.DRY_RUN !== 'false') {
+  const { run: exec } = await import('../lib/claude.mjs')
+  return { exec, dir: env.OS_DIR, dryRun }
 }
 
 // mailparser only html→text converts when the html node is the root or a

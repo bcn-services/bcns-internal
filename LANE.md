@@ -619,7 +619,7 @@ against a fake `runSkill` only — that is by design, not a gap.
     - A unit test asserts the `onboarded` mail has exactly one recipient equal to
       `ONBOARD_NOTIFY_TO`, and that an unset variable yields an `error` event
       and no mail
-  status: not started
+  status: done
 
 > **⚠️ AUTONOMOUS RUN — STOP HERE**
 
