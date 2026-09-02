@@ -3,6 +3,8 @@
 // It never catches a job's error: a failed job must fail the workflow run, or
 // a broken pipeline looks green forever.
 
+import { existsSync } from 'node:fs'
+
 export const SCHEDULES = {
   // Read the inbox, then tell the humans what it left behind. Notify runs at
   // the end of the tick because it reports on what poll just wrote.
@@ -39,7 +41,7 @@ export function jobName(input) {
 // inspectable without a database or a Google token in sight. A missing
 // credential means the job simply is not given that capability; jobs decide
 // what to do about it and write their own skipped event.
-export async function buildDeps(env = process.env) {
+export async function buildDeps(env = process.env, exists = existsSync) {
   const deps = {}
   if (env.DATABASE_URL) {
     const [{ default: postgres }, db] = await Promise.all([
@@ -170,11 +172,18 @@ export async function buildDeps(env = process.env) {
   // means no reader, which is the case personalize already logs and drafts
   // through — an unvoiced draft, never a failed run. Same path authcheck
   // reports on, so one dispatch tells you whether this will work.
-  if (env.OS_DIR) {
+  //
+  // The probe is the directory, not the variable: clock.yml sets OS_DIR
+  // unconditionally, so a failed or skipped clone leaves the variable pointing
+  // at nothing. Resolving it once here is what makes every `!osDir` skip
+  // downstream honest — a missing ~/os is a `skipped` event, never a throw.
+  const osDir = env.OS_DIR && exists(env.OS_DIR) ? env.OS_DIR : null
+
+  if (osDir) {
     deps.readVoiceRules = async () => {
       const { readFile } = await import('node:fs/promises')
       const { join } = await import('node:path')
-      return readFile(join(env.OS_DIR, 'knowledge/library/bcns-voice/voice-rules.md'), 'utf8')
+      return readFile(join(osDir, 'knowledge/library/bcns-voice/voice-rules.md'), 'utf8')
     }
   }
 
@@ -184,13 +193,13 @@ export async function buildDeps(env = process.env) {
   // the clone, so both appear only when OS_DIR does — same rule as the voice
   // rules above. commitAndPush is bound to this run's dryRun so no module
   // reads process.env to decide whether it is allowed to push.
-  if (env.OS_DIR) {
-    deps.osDir = env.OS_DIR
+  if (osDir) {
+    deps.osDir = osDir
     const [{ runSkill }, { commitAndPush }] = await Promise.all([
       import('../lib/skills.mjs'),
       import('../lib/osrepo.mjs'),
     ])
-    deps.runSkill = (opts) => runSkill({ cwd: env.OS_DIR, ...opts })
+    deps.runSkill = (opts) => runSkill({ cwd: osDir, ...opts })
     // `...opts` last on purpose, so a caller can override — but the defaults
     // must be complete on their own: a missing `exec` here made every live
     // push call undefined(). commitDefaults is where that is asserted.

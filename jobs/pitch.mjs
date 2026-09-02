@@ -68,6 +68,7 @@ export async function run({
   runSkill,
   commitAndPush,
   osDir,
+  dryRun = true,
   limit = 25,
   mkTempDir = () => mkdtemp(join(tmpdir(), 'bcns-pitch-')),
 } = {}) {
@@ -108,7 +109,34 @@ export async function run({
       await writeFile(pageTextPath, String(research.page_text ?? ''))
 
       command = `/pitch ${slug} --facts ${factsPath} --page-text ${pageTextPath} --no-browse`
+
+      // The skill run is a paid Claude call and it rewrites files in the ~/os
+      // clone. `pushOrSkip` below leaves the row unmarked on a dry tick, so a
+      // call after this point is spent 37 times a weekday and marks nothing.
+      // Check before, not after — same shape as jobs/onboard.mjs.
+      if (dryRun) {
+        await log('skipped', {
+          business: row.id,
+          slug,
+          reason: 'dry run — no skill call, row left unmarked',
+          command,
+        })
+        continue
+      }
+
       const { wrote } = await runSkill({ command, cwd: osDir })
+      // `git add` with no pathspec is a no-op and the commit that follows exits
+      // non-zero every tick. A skill that wrote nothing is a real failure.
+      if (!wrote?.length) {
+        result.errors++
+        await log('error', {
+          business: row.id,
+          slug,
+          command,
+          error: 'skill reported no written files — nothing to commit',
+        })
+        continue
+      }
 
       const push = await pushOrSkip({
         commitAndPush,

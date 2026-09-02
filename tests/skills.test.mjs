@@ -133,7 +133,10 @@ test('buildDeps injects runSkill, commitAndPush and osDir only with OS_DIR', asy
   assert.equal(bare.commitAndPush, undefined)
   assert.equal(bare.osDir, undefined)
 
-  const deps = await buildDeps({ OS_DIR: '/w/os' })
+  // `exists` is injected so the test stays off the filesystem; the real
+  // default is existsSync, and the directory — not the variable — is the gate.
+  const yes = () => true
+  const deps = await buildDeps({ OS_DIR: '/w/os' }, yes)
   assert.equal(deps.osDir, '/w/os')
   assert.equal(typeof deps.runSkill, 'function')
   assert.equal(typeof deps.commitAndPush, 'function')
@@ -144,7 +147,7 @@ test('buildDeps injects runSkill, commitAndPush and osDir only with OS_DIR', asy
   assert.equal(called, 0)
   assert.equal(dry.dryRun, true)
 
-  const live = await buildDeps({ OS_DIR: '/w/os', DRY_RUN: 'false' })
+  const live = await buildDeps({ OS_DIR: '/w/os', DRY_RUN: 'false' }, yes)
   await live.commitAndPush({ exec: async () => called++, paths: ['a'], message: 'm' })
   assert.equal(called, 4)
 
@@ -152,6 +155,20 @@ test('buildDeps injects runSkill, commitAndPush and osDir only with OS_DIR', asy
   let seen
   await deps.runSkill({ command: '/pitch x', run: async (_b, _a, o) => ((seen = o), envelope('')) })
   assert.equal(seen.cwd, '/w/os')
+})
+
+// Fix 2 — clock.yml sets OS_DIR unconditionally, so the variable proves
+// nothing. A set-but-missing directory must degrade to "no ~/os capability",
+// which is what every job's `!osDir` skip already claims to handle.
+test('OS_DIR pointing at a directory that is not there yields no ~/os capability', async () => {
+  const probed = []
+  const deps = await buildDeps({ OS_DIR: '/w/os' }, (p) => (probed.push(p), false))
+  assert.deepEqual(probed, ['/w/os'])
+  assert.equal(deps.osDir, undefined)
+  assert.equal(deps.runSkill, undefined)
+  assert.equal(deps.commitAndPush, undefined)
+  // The voice rules live in the same clone and go the same way.
+  assert.equal(deps.readVoiceRules, undefined)
 })
 
 test('clock.yml wires the skills symlink between the os checkout and the job', () => {

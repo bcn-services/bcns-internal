@@ -43,6 +43,7 @@ function harness({ rows = [], runSkill, push = { dryRun: false, commands: [] }, 
 
   const deps = {
     sql: {},
+    dryRun: false,
     db: {
       logEvent: (_s, job, kind, detail) => (events.push({ job, kind, detail }), Promise.resolve([])),
       businessesByStage: (_s, stage) => Promise.resolve(store.filter((r) => r.stage === stage)),
@@ -235,6 +236,123 @@ test('a dry-run pitch tick marks nothing and leaves the row pitchable next tick'
     const live = await pitch(h.deps)
     assert.deepEqual(live, { pitched: 1, errors: 0 })
     assert.equal(JSON.parse(h.store[0].research).pitch_path, 'clients/acme-roofing-danbury/pitch/')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+// --- fix 1: the dry-run guard sits before the paid skill call ---------------
+//
+// `pushOrSkip` leaving the row unmarked is the second line of defence, tested
+// above. These prove the first: under DRY_RUN nothing is ever handed to the
+// Claude CLI, so a row cannot cost 37 sonnet runs a weekday forever.
+
+test('a DRY_RUN quote tick makes no skill call at all, and stays quotable', async () => {
+  const calls = []
+  const h = harness({
+    rows: [biz()],
+    runSkill: async (opts) => (calls.push(opts), { wrote: ['/w/os/x.pdf'], dryrun: [] }),
+  })
+  h.deps.dryRun = true
+  try {
+    const out = await quote(h.deps)
+    assert.deepEqual(out, { quoted: 0, errors: 0 })
+
+    // Observable state, not just the mock: nothing ran, nothing was pushed.
+    assert.deepEqual(calls, [])
+    assert.deepEqual(h.pushes, [])
+    assert.deepEqual(h.inserts, [])
+    assert.equal(h.store[0].stage, 'quoting')
+    assert.equal(JSON.parse(h.store[0].research).quote_path, undefined)
+    // Only the slug claim, which is deliberately idempotent.
+    assert.deepEqual(h.updates.map((u) => Object.keys(u.patch)), [['os_slug']])
+
+    // The skipped event carries the command a live tick would have run.
+    assert.deepEqual(kinds(h.events), ['skipped'])
+    assert.match(h.events[0].detail.reason, /dry run/)
+    assert.equal(
+      h.events[0].detail.command,
+      `/quote acme-roofing-danbury --notes ${join(h.dirs[0], 'notes.md')} --yes`
+    )
+
+    // The row is untouched, so the next live tick quotes it for real.
+    h.deps.dryRun = false
+    assert.deepEqual(await quote(h.deps), { quoted: 1, errors: 0 })
+    assert.equal(calls.length, 1)
+    assert.equal(h.store[0].stage, 'quoted')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('a DRY_RUN pitch tick makes no skill call at all, and stays pitchable', async () => {
+  const calls = []
+  const h = harness({
+    rows: [biz({ stage: 'call_due' })],
+    runSkill: async (opts) => (calls.push(opts), { wrote: ['/w/os/x.md'], dryrun: [] }),
+  })
+  h.deps.dryRun = true
+  try {
+    const out = await pitch(h.deps)
+    assert.deepEqual(out, { pitched: 0, errors: 0 })
+
+    assert.deepEqual(calls, [])
+    assert.deepEqual(h.pushes, [])
+    assert.equal(h.store[0].stage, 'call_due')
+    assert.equal(JSON.parse(h.store[0].research).pitch_path, undefined)
+    assert.deepEqual(h.updates.map((u) => Object.keys(u.patch)), [['os_slug']])
+
+    assert.deepEqual(kinds(h.events), ['skipped'])
+    assert.match(h.events[0].detail.reason, /dry run/)
+    assert.match(h.events[0].detail.command, /^\/pitch acme-roofing-danbury --facts /)
+
+    h.deps.dryRun = false
+    assert.deepEqual(await pitch(h.deps), { pitched: 1, errors: 0 })
+    assert.equal(calls.length, 1)
+    assert.equal(
+      JSON.parse(h.store[0].research).pitch_path,
+      'clients/acme-roofing-danbury/pitch/'
+    )
+  } finally {
+    await h.cleanup()
+  }
+})
+
+// --- fix 3: a skill that wrote nothing is an error, not a push -------------
+//
+// `git add` with no pathspec is a no-op and the `git commit` after it exits
+// non-zero, so pushing an empty `wrote` is a permanent failing loop.
+
+test('a quote skill run that wrote nothing is an error event and no push', async () => {
+  const h = harness({ rows: [biz()], runSkill: async () => ({ wrote: [], dryrun: [] }) })
+  try {
+    const out = await quote(h.deps)
+    assert.deepEqual(out, { quoted: 0, errors: 1 })
+    assert.deepEqual(h.pushes, [])
+    assert.deepEqual(h.inserts, [])
+    assert.equal(h.store[0].stage, 'quoting')
+    assert.deepEqual(kinds(h.events), ['error'])
+    assert.match(h.events[0].detail.error, /no written files/)
+    assert.match(h.events[0].detail.command, /^\/quote acme-roofing-danbury /)
+    assert.equal(h.events[0].detail.business, 'b1')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('a pitch skill run that wrote nothing is an error event and no push', async () => {
+  const h = harness({
+    rows: [biz({ stage: 'call_due' })],
+    runSkill: async () => ({ wrote: [], dryrun: [] }),
+  })
+  try {
+    const out = await pitch(h.deps)
+    assert.deepEqual(out, { pitched: 0, errors: 1 })
+    assert.deepEqual(h.pushes, [])
+    assert.equal(JSON.parse(h.store[0].research).pitch_path, undefined)
+    assert.deepEqual(kinds(h.events), ['error'])
+    assert.match(h.events[0].detail.error, /no written files/)
+    assert.match(h.events[0].detail.command, /^\/pitch acme-roofing-danbury /)
   } finally {
     await h.cleanup()
   }

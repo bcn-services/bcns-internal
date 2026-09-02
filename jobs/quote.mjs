@@ -24,6 +24,7 @@ export async function run({
   runSkill,
   commitAndPush,
   osDir,
+  dryRun = true,
   limit = 25,
   mkTempDir = () => mkdtemp(join(tmpdir(), 'bcns-quote-')),
 } = {}) {
@@ -60,7 +61,31 @@ export async function run({
       await writeFile(notesPath, `${notesOf(research).map((n) => `- ${n}`).join('\n')}\n`)
 
       command = `/quote ${slug} --notes ${notesPath} --yes`
+
+      // Paid Claude call before the dry-run guard is 37 sonnet runs a weekday
+      // that mark nothing. Check first — same shape as jobs/onboard.mjs.
+      if (dryRun) {
+        await log('skipped', {
+          business: row.id,
+          slug,
+          reason: 'dry run — no skill call, row left unmarked',
+          command,
+        })
+        continue
+      }
+
       const { wrote } = await runSkill({ command, cwd: osDir })
+      // No pathspec means `git add` is a no-op and the commit fails every tick.
+      if (!wrote?.length) {
+        result.errors++
+        await log('error', {
+          business: row.id,
+          slug,
+          command,
+          error: 'skill reported no written files — nothing to commit',
+        })
+        continue
+      }
 
       const push = await pushOrSkip({
         commitAndPush,

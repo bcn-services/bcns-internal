@@ -206,7 +206,11 @@ export async function run({
   const result = { call_due: 0, replied: 0, quoting: 0, quoted: 0, onboarded: 0, emails: 0, errors: 0 }
 
   // Nobody on the list is not "mail everybody" — it is a job with nothing to do.
-  if (!internalRecipients.length) {
+  // `onboardRecipient` keeps the job alive on its own: the handover mail has
+  // its own independent allow-list, so an empty NOTIFY_ALLOWED_RECIPIENTS must
+  // not silently drop the one mail that never reads that list anyway. With
+  // both empty there is genuinely no addressee and the early return stands.
+  if (!internalRecipients.length && !onboardRecipient) {
     await log('skipped', { reason: 'no allow-listed recipient' })
     return result
   }

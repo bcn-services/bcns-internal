@@ -370,7 +370,11 @@ const onboardedRow = (over = {}) => ({
   ...over,
 })
 
-function notifyHarness({ rows = [onboardedRow()], onboardRecipient = ONBOARD_TO } = {}) {
+function notifyHarness({
+  rows = [onboardedRow()],
+  onboardRecipient = ONBOARD_TO,
+  internalRecipients = INTERNAL,
+} = {}) {
   const events = []
   const sent = []
   const store = rows.map((r) => ({ ...r }))
@@ -387,7 +391,7 @@ function notifyHarness({ rows = [onboardedRow()], onboardRecipient = ONBOARD_TO 
     },
     // The real notifier, not an injected send: the allow-list gate has to run.
     transport: async () => ({ sendMail: async (m) => sent.push(m) }),
-    internalRecipients: INTERNAL,
+    internalRecipients,
     onboardRecipient,
     notifyFrom: 'bot@bcn-services.com',
     dryRun: false,
@@ -431,6 +435,37 @@ test('an unset ONBOARD_NOTIFY_TO mails nobody and writes an error event', async 
   assert.match(h.events[0].detail.reason, /ONBOARD_NOTIFY_TO/)
   // Nothing was marked, so a run with the variable set still mails it.
   assert.equal(h.events.filter((e) => e.kind === 'notified').length, 0)
+})
+
+// Fix 4 — the handover mail has its own independent allow-list, so an empty
+// NOTIFY_ALLOWED_RECIPIENTS must not take it down with the internal mail. The
+// failure this pins is silent: the early return logged a generic `skipped`
+// and the fail-closed error below it never ran.
+test('an empty internal allow-list still delivers the onboarded handover mail', async () => {
+  const h = notifyHarness({ internalRecipients: [] })
+
+  const out = await notify(h.deps)
+
+  assert.equal(out.onboarded, 1)
+  assert.equal(out.errors, 0)
+  assert.equal(h.sent.length, 1)
+  assert.deepEqual(h.sent[0].envelope.to, 'ops@bcn-services.com')
+  assert.ok(!kinds(h.events).includes('skipped'))
+  assert.equal(h.events.filter((e) => e.kind === 'notified').length, 1)
+})
+
+// Both lists empty is genuinely nobody to mail: the early return stands, and
+// the handover mail must not fall back to the internal list it never uses.
+test('no internal allow-list and no ONBOARD_NOTIFY_TO mails nobody', async () => {
+  const h = notifyHarness({ internalRecipients: [], onboardRecipient: '' })
+
+  const out = await notify(h.deps)
+
+  assert.deepEqual(h.sent, [])
+  assert.equal(out.onboarded, 0)
+  assert.equal(out.emails, 0)
+  assert.deepEqual(kinds(h.events), ['skipped'])
+  assert.match(h.events[0].detail.reason, /no allow-listed recipient/)
 })
 
 test('the onboarded body names the repo, the checklist and the request email', () => {

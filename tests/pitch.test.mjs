@@ -56,6 +56,9 @@ function harness({ rows = [], runSkill, commitAndPush, updateThrows = null } = {
       },
     },
     osDir: '/w/os',
+    // Live by default: the dry-run path is exercised explicitly by the tests
+    // that set `dryRun: true`, and under it no skill call is made at all.
+    dryRun: false,
     runSkill: runSkill ?? (async () => ({ wrote: ['/w/os/clients/x/pitch/call-script.md'], dryrun: [] })),
     // A live push by default: under `dryRun: true` nothing is pushed and the
     // job deliberately marks nothing (see lib/osrepo.mjs pushOrSkip), which
