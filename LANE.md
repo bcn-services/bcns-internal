@@ -592,7 +592,7 @@ against a fake `runSkill` only — that is by design, not a gap.
     - A unit test asserts `signed` with no attachment applies nothing and forwards
     - A unit test asserts a `text/html` attachment or an 11 MB PDF is refused with
       an `error` event and nothing written
-  status: not started
+  status: done
 
 - task: Build the onboard job — `jobs/onboard.mjs`, run on the poll tick. For
     each row at `won` whose `clients.repo_url` is null and `signed_at` is set:
