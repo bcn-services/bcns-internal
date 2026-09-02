@@ -147,3 +147,55 @@ test('0021 gives mailboxes the day its count belongs to', () => {
   // Additive only — 0018's counter is not dropped or rewritten.
   assert.ok(!/drop|delete/i.test(dailyReset.replace(/^--.*$/gm, '')), '0021 destroys something')
 })
+
+// --- 0022 ------------------------------------------------------------------
+
+const pipelineV2 = readFileSync(new URL('0022_pipeline_v2.sql', dir), 'utf8')
+
+test('0022 gives businesses os_slug and clients the paperwork columns', () => {
+  assert.match(pipelineV2, /alter table businesses add column os_slug text unique/i)
+  assert.match(pipelineV2, /alter table clients add column signed_at\s+timestamptz/i)
+  assert.match(pipelineV2, /alter table clients add column contract_path\s+text/i)
+  assert.match(pipelineV2, /alter table clients add column repo_url\s+text/i)
+  assert.equal((pipelineV2.match(/\bbegin\b/gi) || []).length, 1)
+  assert.equal((pipelineV2.match(/\bcommit\b/gi) || []).length, 1)
+  const parens = pipelineV2.replace(/^--.*$/gm, '')
+  assert.equal((parens.match(/\(/g) || []).length, (parens.match(/\)/g) || []).length)
+})
+
+test('0022 adds onboarded and keeps approved so existing rows stay valid', () => {
+  const check = pipelineV2.match(
+    /add constraint businesses_stage_check check \(stage in \(([\s\S]*?)\)\s*\)/i
+  )
+  assert.ok(check, '0022 re-adds no stage check')
+  const listed = [...check[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1])
+  assert.equal(listed.length, 13)
+  assert.deepEqual(listed.sort(), [...STAGES, 'quoting', 'onboarded'].sort())
+  // `quoted` was already in the vocabulary from 0018 — 0022 re-states it, it
+  // does not introduce it. `approved` is retained on purpose: nothing writes it
+  // any more, but rows written before the approval loop was removed carry it.
+  assert.ok(listed.includes('quoted'))
+  assert.ok(listed.includes('approved'))
+  assert.ok(/quoted/i.test(pipeline), 'quoted was never new — 0018 already listed it')
+})
+
+test('0022 edits no applied migration and contradicts none of them', () => {
+  // 0018/0019/0020 are applied and immutable; 0022 is the additive follow-up.
+  assert.ok(!/onboarded/i.test(pipeline), '0018 was edited — it is applied')
+  assert.ok(!/onboarded/i.test(quoting), '0019 was edited — it is applied')
+  assert.ok(!/os_slug|signed_at|contract_path|repo_url/i.test(pipeline), '0018 was edited')
+  assert.ok(!/os_slug|signed_at|contract_path|repo_url/i.test(clients), '0020 was edited')
+  // The only drop is the stage constraint it immediately re-adds.
+  const body = pipelineV2.replace(/^--.*$/gm, '')
+  assert.deepEqual(
+    [...body.matchAll(/\bdrop\b[^\n;]*/gi)].map((m) => m[0].trim()),
+    ['drop constraint businesses_stage_check']
+  )
+  assert.ok(!/\bdelete\b|\bdrop table\b|\bdrop column\b/i.test(body), '0022 destroys something')
+})
+
+test('0022 adds no RLS policy — businesses and clients stay deny-all', () => {
+  assert.ok(!/create policy/i.test(pipelineV2), '0022 adds a policy; deny-all is the absence of one')
+  assert.ok(!/create policy/i.test(pipeline), '0018 grew a policy')
+  assert.ok(!/create policy/i.test(clients), '0020 grew a policy')
+})

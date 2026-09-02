@@ -13,9 +13,26 @@ schedule at all. Mail is fully set up — aliases, app password, the `pipeline`
 filter, and `SEND_ALLOWED_RECIPIENTS`/`NOTIFY_ALLOWED_RECIPIENTS` as repo
 variables — and blocks nothing.
 
-**Scope of this round:** items above the stop marker were the autonomous run.
-Everything below it is the same pipeline, continued by hand or by a restarted
-run once Nate moves the marker.
+**Status 2026-09-01:** items 1–14 merged (PR #3); PR #4 `pipeline-fixes` holds
+the daily-cap reset, the qualify crash fix and migrations 0019–0021. Nothing has
+run live. Design change 2026-09-01: **there is no approval step.** `touch` sends
+on schedule; a `call_due` row gets a `/pitch` folder; Brandon's `notes` reply
+runs `/quote`; his `signed` reply with the PDF runs `/new-client-repo` +
+`/intake` and mails Nate. Every artifact lands in `bcns-os` under
+`clients/<slug>/`; mail carries paths and instructions, never attachments.
+
+**Scope of this round:** items 15–20, above the stop marker, are the autonomous
+run. Item 21 below it waits.
+
+**Verification split (decided 2026-09-01):** items 17–20 carried `caution: true`
+and it was dropped. Nate verifies these four by hand — the pitch, quote, signed
+and onboard paths all produce a visible artifact he checks himself. Each runs
+`dt-engineer` alone, self-verified against its `done when:` criteria, gate mode
+`tests`. This is a decision about who verifies, not a lower bar: every `done
+when:` criterion still gets proven by execution, and every guardrail still binds.
+Known trade accepted: item 19's refusal criteria (non-PDF, second attachment,
+over 10 MB) are false-negative shaped — a refusal that never fires looks like a
+clean run. Mutation-check those three assertions rather than trusting a green.
 
 **Mail architecture (decided 2026-08-30, supersedes "two mailboxes"):** one
 Google Workspace seat — Nate's — with two aliases. `outreach@send.bcn-services.com`
@@ -66,6 +83,25 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
   function parameter with a fake supplied in the test.
 - A test that needs a live service is the wrong test. Assert on the request the
   code *would* have made instead.
+
+**Headless-skill CLI contract (shared with `~/os`, lane `headless-skills`).**
+Every skill call is `claude -p "<slash command>" --output-format json`, run with
+`cwd=$OS_DIR`, with `~/.claude/skills` symlinked to `$OS_DIR/skills` on the
+runner. A headless skill never prompts, never opens a browser, never reads the
+Master Client List sheet, exits non-zero on failure, and prints one line per
+file written as `WROTE: <abs path>`, plus `REPO: <url>` or `DRYRUN: <cmd>`
+where relevant. Jobs parse only those lines. Commands:
+
+```
+/pitch <slug> --facts <json-file> --page-text <txt-file> --no-browse [--no-demo]
+/quote <slug> --notes <md-file> --yes
+/new-client-repo <slug> --brief <md-file> --yes [--dry-run]
+/intake <slug> --yes
+```
+
+All four write only under `$OS_DIR/clients/<slug>/`. `<slug>` is
+`businesses.os_slug`. Until `~/os` ships the flags, every job here is tested
+against a fake `runSkill` only — that is by design, not a gap.
 
 ## Conventions this round establishes
 
@@ -432,24 +468,161 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
     - `pnpm test` runs it and the whole suite exits zero
   status: done
 
+- task: Build the headless-skill runner and the os push helper. `lib/skills.mjs`
+    exports `runSkill({ command, cwd, run })` — wraps the existing `run` from
+    `lib/claude.mjs` (same `claude -p … --output-format json` invocation), adds a
+    `cwd` option so the CLI runs inside `$OS_DIR`, and parses stdout for lines of
+    the exact forms `WROTE: <abs path>`, `REPO: <url>`, `DRYRUN: <cmd>`,
+    returning `{ wrote: [], repo, dryrun }`. `lib/osrepo.mjs` exports
+    `commitAndPush({ exec, dir, paths, message })` — `git add <paths>`,
+    `git commit -m`, `git pull --rebase`, `git push`, in that order, via the
+    injected `exec`. `clock.yml` gains, after the `~/os` checkout step, a step
+    that symlinks `$OS_DIR/skills` to `~/.claude/skills` and sets
+    `git config user.name "bcns bot"` / `user.email "bot@bcn-services.com"`
+    inside `$OS_DIR`. `buildDeps` in `jobs/run.mjs` injects `runSkill`,
+    `commitAndPush` and `osDir` (from `OS_DIR`).
+  guardrails:
+    - Only the three line prefixes above are parsed; nothing else in Claude's
+      output is trusted or acted on
+    - `commitAndPush` never runs `push --force`, never touches `main` of this
+      repo, and never runs at all when `DRY_RUN` is on (it logs the would-be
+      command instead)
+    - The Claude CLI is never actually invoked in a test; `run` is a fake
+  done when:
+    - A unit test asserts `runSkill` returns the parsed `wrote` paths from a fake
+      stdout and throws, naming the command, when the fake exits non-zero
+    - A unit test asserts `commitAndPush` calls the fake `exec` in the order
+      add → commit → pull --rebase → push, and that a throw from push propagates
+      with no further calls
+    - A unit test asserts `commitAndPush` under `DRY_RUN` makes zero `exec` calls
+      and returns the would-be command list
+    - `tests/clock.test.mjs` still passes and the new `clock.yml` step is
+      present between the os checkout and the job step
+  status: done
+
+- task: Remove the approval loop and author migration 0022. `jobs/notify.mjs`
+    drops `drafted` from `NOTIFY_STAGES` and deletes the batch approval mail;
+    `jobs/poll.mjs` drops the `yes` command (`no`, `no answer`, `stop`, `won`,
+    `notes` stay), so `yes` falls through to the unknown-command forward.
+    `supabase/migrations/0022_pipeline_v2.sql` adds `businesses.os_slug text
+    unique`, `clients.signed_at timestamptz`, `clients.contract_path text`,
+    `clients.repo_url text`, and extends the stage CHECK with `quoted` and
+    `onboarded`. `touch` keeps sending from `drafted` unchanged.
+  guardrails:
+    - The migration is a file only — never applied, never edited after this item
+    - `approved` stays in the CHECK so existing rows remain valid; nothing writes it
+  done when:
+    - A unit test asserts a `yes` reply from an allow-listed sender is forwarded
+      as an unknown command and changes no stage
+    - A unit test asserts `notify` writes no `notified` event and sends no mail
+      for a `drafted` row
+    - The migration file is listed wherever the existing migration tests
+      enumerate files, and the schema test that replays migrations on a temp DB
+      (if present) still passes
+    - Existing passing tests remain passing
+  status: done
+
+- task: Build the pitch job — `jobs/pitch.mjs`, run on the poll tick. For each
+    row from `selectable_businesses` at `call_due` with no `research.pitch_path`:
+    set `os_slug` if null (kebab of name + city; on unique-violation append the
+    last 6 chars of the place id); write `research.facts` as JSON and the stored
+    page text as a `.txt` to a temp dir; call
+    `runSkill('/pitch <slug> --facts <json> --page-text <txt> --no-browse')`
+    with `cwd: osDir`; `commitAndPush` the returned `wrote` paths with message
+    `pitch: <slug>`; store `research.pitch_path = clients/<slug>/pitch/`; write
+    event `pitched`. `qualify` must persist the fetched page text on the row
+    (`research.page_text`, truncated to 20k chars) if it does not already.
+    `SCHEDULES` for the poll cron becomes `['poll','pitch','quote','onboard','notify']`
+    (quote/onboard modules may be stubs until their items land). The `call_due`
+    template in `notify` carries `Pitch folder: clients/<slug>/pitch/` and the
+    `pitchAvailable` homedir check is deleted.
+  guardrails:
+    - One pitch per business, ever — a row with `pitch_path` set is skipped
+    - A failed `runSkill` writes an `error` event with the command and stderr
+      and leaves the row's stage and `research` untouched
+    - The pitch is the general bcns service pitch built from stored facts and
+      page text; the job never fetches a website
+  done when:
+    - A unit test asserts the exact `/pitch` command string built for a fixture
+      row, including the slug and both temp-file paths
+    - A unit test asserts a throwing fake `runSkill` yields an `error` event and
+      no change to the row
+    - A unit test asserts the `call_due` mail body contains `clients/<slug>/pitch/`
+    - `tests/clock.test.mjs` asserts the poll cron maps to the five-job list
+  status: done
+
+- task: Build the quote job — `jobs/quote.mjs`, run on the poll tick. For each
+    row at `quoting` with `research.notes` and no `research.quote_path`: write
+    the notes to a temp `.md`; `runSkill('/quote <slug> --notes <md> --yes')`;
+    `commitAndPush` the `wrote` paths with message `quote: <slug>`; insert a
+    `clients` row (migration 0020 shape) if none exists for the business; set
+    `stage = quoted`, `research.quote_path`; write event `quoted`. `notify` gains
+    a `quoted` stage with template "Quote ready for <name>" to
+    `NOTIFY_ALLOWED_RECIPIENTS` carrying the quote path(s) and the instruction:
+    send it to the client yourself; when they sign, reply to this mail with the
+    word `signed` and the signed PDF attached.
+  guardrails:
+    - Nothing here mails the prospect; the quote reaches them only by Brandon's hand
+    - Re-running on a `quoted` row is a no-op with a `skipped` event
+  done when:
+    - A unit test asserts the exact `/quote` command string for a fixture row
+    - A unit test asserts the `clients` insert happens exactly once across two
+      runs on the same row
+    - A unit test asserts the `quoted` mail names the quote path and contains
+      the word `signed`
+  status: done
+
+- task: Handle the signed contract in `poll`. A message from an allow-listed
+    sender whose body's first word is `signed`, on a thread whose business is at
+    `quoted`, and carrying exactly one `application/pdf` part of at most 10 MB:
+    write the part to `$OS_DIR/clients/<slug>/contract/<YYYY-MM-DD>-signed.pdf`,
+    `commitAndPush` it with message `contract: <slug>`, set
+    `clients.signed_at = now()`, `clients.contract_path`, `stage = won`, write
+    event `signed`. `lib/mail.mjs`'s IMAP parse must expose attachment parts
+    (content type, size, bytes) to `poll`; today attachments are never read.
+  guardrails:
+    - Only `application/pdf` is ever written to disk; any other MIME type, a
+      second attachment, or a size over 10 MB refuses the whole message with a
+      forward to the humans and an `error` event
+    - `signed` with no attachment is forwarded, never applied
+    - The `won <amount>` command keeps working unchanged
+  done when:
+    - A unit test asserts the happy path from a fake IMAP message with one PDF
+      part: file written under a temp `osDir`, stage `won`, `signed_at` set
+    - A unit test asserts `signed` with no attachment applies nothing and forwards
+    - A unit test asserts a `text/html` attachment or an 11 MB PDF is refused with
+      an `error` event and nothing written
+  status: done
+
+- task: Build the onboard job — `jobs/onboard.mjs`, run on the poll tick. For
+    each row at `won` whose `clients.repo_url` is null and `signed_at` is set:
+    write a brief `.md` (name, city, site, facts, notes, quote path) to a temp
+    dir; `runSkill('/new-client-repo <slug> --brief <md> --yes')` and read
+    `repo`; then `runSkill('/intake <slug> --yes')`; rewrite
+    `clients/<slug>/README.md` frontmatter `status: lead` → `status: in-progress`;
+    `commitAndPush` with message `onboard: <slug>`; set `clients.repo_url`,
+    `stage = onboarded`; write event `onboarded`. `notify` gains an `onboarded`
+    stage whose mail goes only to the address in the new variable
+    `ONBOARD_NOTIFY_TO` (fail closed when unset), subject "Signed: <name> — your
+    turn", body carrying the repo URL, the intake checklist path and the
+    request-email path.
+  guardrails:
+    - Tests inject a fake `runSkill`; `gh repo create` is never executed in a test
+    - Rows at `won` via the manual `won <amount>` command with no `signed_at` are
+      skipped with a `skipped` event, not onboarded
+    - The onboarded mail never goes to `NOTIFY_ALLOWED_RECIPIENTS` as a whole
+  done when:
+    - A unit test asserts the two `runSkill` command strings in order for a
+      fixture row and that `repo_url` is stored from the `REPO:` line
+    - A unit test asserts a second run on the same row makes zero `runSkill`
+      calls
+    - A unit test asserts the `onboarded` mail has exactly one recipient equal to
+      `ONBOARD_NOTIFY_TO`, and that an unset variable yields an `error` event
+      and no mail
+  status: done
+
 > **⚠️ AUTONOMOUS RUN — STOP HERE**
 
-- task: Build the quote handoff — when `poll` receives `notes` from Brandon for a
-    business at `call_due` or `replied`, save the body to `research.notes`, set
-    `stage=quoting`, and run `claude -p "/quote --notes <file> <slug>"` with `~/os`
-    cloned into the runner, then email Brandon the draft plus its open questions
-    from `bot@`. Nate is cc'd.
-  guardrails:
-    - The quote is a draft for review; nothing here sends anything to the prospect
-    - Depends on `/quote` growing a headless `--notes` mode in `~/os` (see Out of
-      scope); until then the job writes the notes and emails them back with a
-      `skipped` event
-  done when:
-    - A unit test asserts `notes` on a `call_due` row sets `quoting` and stores the
-      body, and on a `sourced` row is refused with an `error` event
-    - A unit test asserts the handoff email goes only to allow-listed recipients
-      and carries the notes verbatim
-  status: not started
 
 - task: Build alert triage — `alerts@` messages become draft pull requests,
     never merges, capped at three triage runs per day.
@@ -486,7 +659,7 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
   so a `qualified` row never becomes `drafted` and `touch` finds nothing to send.
   The pipeline stalls one step before its first live send. Verified against
   `.github/workflows/clock.yml` and the map in `jobs/run.mjs`.
-- **notify's mail has no thread, so `yes`/`no` replies do not land.** The batch
+- ~~**notify's mail has no thread, so `yes`/`no` replies do not land.**~~ **MOOT 2026-09-01** — item 16 removes the approval mail and the `yes` command. Original finding: The batch
   approval mail is one message covering N businesses, while
   `email_threads.message_id` is a primary key carrying a single `business_id`, so
   the batch cannot be recorded at all. A reply matches no thread and `poll`
@@ -527,11 +700,11 @@ anything repo-scoped. A 404 here means the token, not a missing repo.
 - A demo link or attachment in cold mail, and a `demos.bcn-services.com` host —
   decided against 2026-08-30 in `~/os/skills/outreach`; `/pitch` builds the demo
   after a reply
-- Won → `/new-client-repo` + `/intake` automation (Nate's step 7) — deferred; the
-  quote handoff ends with Brandon holding a draft and Nate cc'd
-- `~/os` skill changes this pipeline needs: `/quote --notes <file>` headless
-  mode; `/pitch` resolving a lead from Postgres (or a JSON row) instead of the
-  Sheet — they are `~/os` work, not this repo's
+- The `~/os` side of the headless contract (the four skills' flags and their
+  fixture) — built on the `headless-skills` branch of `bcns-os`; this repo only
+  calls the contract
+- Any approval or draft-review step before a cold send — removed 2026-09-01;
+  the warming cap and `SEND_ALLOWED_RECIPIENTS` are the safety rails
 - Retiring the Google Sheet funnel and porting `sheets.py stats` onto SQL —
   agreed, but it is `~/os` work, not this repo's
 - Google Workspace aliases, DNS records, GitHub secrets, Workload Identity

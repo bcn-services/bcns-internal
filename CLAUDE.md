@@ -34,6 +34,10 @@ When they disagree, LANE.md wins.
 - **Every job writes at least one `events` row** — job, kind, detail JSON. A job
   that did nothing writes a `skipped` event saying why.
 - **`DRY_RUN` defaults to on.** A job opts into side effects explicitly.
+- **A completion marker is written only after a real push.** A job that pushes
+  to ~/os goes through `pushOrSkip` (`lib/osrepo.mjs`): a dry-run push writes a
+  `skipped` event and the row keeps its stage and its research, so the next live
+  tick redoes it. Marking a row done on a dry run makes it unreachable forever.
 - **Tests are pure.** No network, no database, no filesystem outside a temp dir.
   Every boundary (Places, Claude, HTTP fetch, Postgres, SMTP) is a parameter with
   a fake supplied in the test. A test needing a live service is the wrong test —

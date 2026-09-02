@@ -67,3 +67,45 @@ test('htmlToText decodes hex and named quote entities, and closes inline tags up
   assert.equal(htmlToText('<div>Please <b>un</b>subscribe me</div>'), 'Please unsubscribe me')
   assert.equal(htmlToText('<table><tr><td>stop</td><td>emailing me</td></tr></table>'), 'stop\n\nemailing me')
 })
+
+// Attachments: the shape mailparser really hands back, parameters and casing
+// included. `poll` decides whether to write a file to ~/os off these fields.
+test('the parse exposes attachment parts with a normalised content type', () => {
+  const content = Buffer.from('%PDF-1.7 countersigned')
+  const m = toMessage(
+    parsed({
+      attachments: [
+        {
+          type: 'attachment',
+          contentType: 'application/pdf; name=contract.pdf',
+          contentDisposition: 'attachment',
+          filename: 'contract.pdf',
+          headers: new Map(),
+          checksum: 'd41d8cd98f00b204e9800998ecf8427e',
+          content,
+          size: content.length,
+        },
+      ],
+    }),
+    7
+  )
+
+  assert.equal(m.attachments.length, 1)
+  assert.equal(m.attachments[0].contentType, 'application/pdf')
+  assert.equal(m.attachments[0].size, content.length)
+  assert.equal(m.attachments[0].filename, 'contract.pdf')
+  assert.equal(m.attachments[0].content.toString('utf8'), '%PDF-1.7 countersigned')
+})
+
+test('a mixed-case content type normalises, and a missing size falls back to the bytes', () => {
+  const m = toMessage(
+    parsed({ attachments: [{ contentType: 'Application/PDF', content: Buffer.alloc(11) }] }),
+    7
+  )
+  assert.equal(m.attachments[0].contentType, 'application/pdf')
+  assert.equal(m.attachments[0].size, 11)
+})
+
+test('a message with no attachments yields an empty array, never undefined', () => {
+  assert.deepEqual(toMessage(parsed(), 7).attachments, [])
+})

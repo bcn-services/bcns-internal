@@ -3,10 +3,15 @@
 // It never catches a job's error: a failed job must fail the workflow run, or
 // a broken pipeline looks green forever.
 
+import { existsSync } from 'node:fs'
+
 export const SCHEDULES = {
   // Read the inbox, then tell the humans what it left behind. Notify runs at
   // the end of the tick because it reports on what poll just wrote.
-  '*/20 8-20 * * 1-5': ['poll', 'notify'],
+  // pitch/quote/onboard sit between them: each reads what poll just wrote and
+  // notify reports on what they left behind. A module that is not built yet is
+  // skipped by main(), not a failed tick.
+  '*/20 8-20 * * 1-5': ['poll', 'pitch', 'quote', 'onboard', 'notify'],
   '0 14 * * 1-5': 'touch',
   // The Monday tick is a chain: source finds businesses, qualify reads the
   // ones it just wrote. Order is the contract, so it lives in this list.
@@ -36,7 +41,7 @@ export function jobName(input) {
 // inspectable without a database or a Google token in sight. A missing
 // credential means the job simply is not given that capability; jobs decide
 // what to do about it and write their own skipped event.
-export async function buildDeps(env = process.env) {
+export async function buildDeps(env = process.env, exists = existsSync) {
   const deps = {}
   if (env.DATABASE_URL) {
     const [{ default: postgres }, db] = await Promise.all([
@@ -109,9 +114,9 @@ export async function buildDeps(env = process.env) {
   // Two lists, deliberately not one. `allowedRecipients` is the hard gate the
   // touch job applies to every PROSPECT recipient, dry run or not.
   // `internalRecipients` is the set of internal humans poll/notify forward to,
-  // and the only senders whose one-word commands (`yes`, `won 2400`, `stop`)
+  // and the only senders whose one-word commands (`no`, `won 2400`, `stop`)
   // are obeyed. Merging them means going live delivers every internal call task
-  // and approval mail to a prospect, forwards a prospect's own opt-out back to
+  // and meeting alert to a prospect, forwards a prospect's own opt-out back to
   // them, and lets that prospect drive the pipeline.
   //
   // Both are unset means nobody is reachable — never everybody. Widening either
@@ -123,6 +128,10 @@ export async function buildDeps(env = process.env) {
       .filter(Boolean)
   deps.allowedRecipients = list(env.SEND_ALLOWED_RECIPIENTS)
   deps.internalRecipients = list(env.NOTIFY_ALLOWED_RECIPIENTS)
+  // A third list of exactly one, and deliberately not part of either. The
+  // `onboarded` mail hands over a signed client and goes to one person; unset
+  // means notify mails nobody about it, never the internal list.
+  deps.onboardRecipient = String(env.ONBOARD_NOTIFY_TO || '').trim()
 
   // SMTP is a capability like any other: no app password, no transport, and
   // touch writes a skipped event instead of half-sending. The transport is a
@@ -163,16 +172,50 @@ export async function buildDeps(env = process.env) {
   // means no reader, which is the case personalize already logs and drafts
   // through — an unvoiced draft, never a failed run. Same path authcheck
   // reports on, so one dispatch tells you whether this will work.
-  if (env.OS_DIR) {
+  //
+  // The probe is the directory, not the variable: clock.yml sets OS_DIR
+  // unconditionally, so a failed or skipped clone leaves the variable pointing
+  // at nothing. Resolving it once here is what makes every `!osDir` skip
+  // downstream honest — a missing ~/os is a `skipped` event, never a throw.
+  const osDir = env.OS_DIR && exists(env.OS_DIR) ? env.OS_DIR : null
+
+  if (osDir) {
     deps.readVoiceRules = async () => {
       const { readFile } = await import('node:fs/promises')
       const { join } = await import('node:path')
-      return readFile(join(env.OS_DIR, 'knowledge/library/bcns-voice/voice-rules.md'), 'utf8')
+      return readFile(join(osDir, 'knowledge/library/bcns-voice/voice-rules.md'), 'utf8')
     }
   }
 
   deps.dryRun = env.DRY_RUN !== 'false'
+
+  // The skill runner and the ~/os push helper. Both only make sense against
+  // the clone, so both appear only when OS_DIR does — same rule as the voice
+  // rules above. commitAndPush is bound to this run's dryRun so no module
+  // reads process.env to decide whether it is allowed to push.
+  if (osDir) {
+    deps.osDir = osDir
+    const [{ runSkill }, { commitAndPush }] = await Promise.all([
+      import('../lib/skills.mjs'),
+      import('../lib/osrepo.mjs'),
+    ])
+    deps.runSkill = (opts) => runSkill({ cwd: osDir, ...opts })
+    // `...opts` last on purpose, so a caller can override — but the defaults
+    // must be complete on their own: a missing `exec` here made every live
+    // push call undefined(). commitDefaults is where that is asserted.
+    const defaults = await commitDefaults(env, deps.dryRun)
+    deps.commitAndPush = (opts) => commitAndPush({ ...defaults, ...opts })
+  }
+
   return deps
+}
+
+// The default options every ~/os push is made with. Exported so the wiring can
+// be asserted without executing a push: `exec` going missing here is the whole
+// bug this exists to catch.
+export async function commitDefaults(env = process.env, dryRun = env.DRY_RUN !== 'false') {
+  const { run: exec } = await import('../lib/claude.mjs')
+  return { exec, dir: env.OS_DIR, dryRun }
 }
 
 // mailparser only html→text converts when the html node is the root or a
@@ -250,6 +293,16 @@ export function toMessage(parsed, uid, header) {
     headers: Object.fromEntries(
       ['auto-submitted', 'x-autoreply', 'x-autorespond'].map((n) => [n, String(get(n) ?? '')])
     ),
+    // Always an array. mailparser gives `{ contentType, size, content: Buffer,
+    // filename }`; a real contentType carries parameters and arbitrary case
+    // (`Application/PDF; name=x.pdf`), so it is normalised once here rather
+    // than at every place a consumer compares it.
+    attachments: [...(parsed.attachments ?? [])].map((a) => ({
+      contentType: String(a?.contentType ?? '').split(';')[0].trim().toLowerCase(),
+      size: Number(a?.size ?? a?.content?.length ?? 0),
+      filename: a?.filename ?? '',
+      content: a?.content ?? null,
+    })),
   }
 }
 

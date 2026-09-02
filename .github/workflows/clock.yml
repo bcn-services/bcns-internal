@@ -62,6 +62,19 @@ jobs:
           path: os
           persist-credentials: false
 
+      # The skills the jobs shell out to only load from ~/.claude/skills, so
+      # the clone is symlinked into place. The identity is set inside the
+      # clone alone: nothing here ever commits to this repo's main.
+      - name: Wire ~/os skills and git identity
+        if: vars.OS_REPO != ''
+        env:
+          OS_DIR: ${{ github.workspace }}/os
+        run: |
+          mkdir -p ~/.claude
+          ln -sfn "$OS_DIR/skills" ~/.claude/skills
+          git -C "$OS_DIR" config user.name 'bcns bot'
+          git -C "$OS_DIR" config user.email 'bot@bcn-services.com'
+
       # Keyless: no service account key exists, and none can be created —
       # the org enforces iam.managed.disableServiceAccountKeyCreation.
       # Skipped when the vars are unset so the workflow still parses and runs
