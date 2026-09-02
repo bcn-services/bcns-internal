@@ -21,7 +21,11 @@
 
 import { assertAllowed, buildMime, RecipientRefused } from './touch.mjs'
 import { SIGNATURE, toHtml } from '../lib/template.mjs'
+import { pushOrSkip } from '../lib/osrepo.mjs'
+import { claimSlug } from './pitch.mjs'
 import { randomUUID } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 // Stages past `replied`: a late prospect reply must not walk a won deal back.
 export const ADVANCED_STAGES = ['meeting', 'quoted', 'won', 'lost']
@@ -35,6 +39,13 @@ export const NO_ANSWER_DAYS = 2
 // every tick, forever. After this many failed attempts the message is marked
 // seen and dead-lettered for a human to find in `events`.
 export const MAX_ATTEMPTS = 3
+
+// The ceiling on a countersigned contract PDF. Anything larger is not a
+// contract we can file, and an unbounded attachment is a mail-sized write into
+// the ~/os checkout. Refused, never truncated.
+export const MAX_CONTRACT_BYTES = 10 * 1024 * 1024
+
+export const CONTRACT_MIME = 'application/pdf'
 
 // --- quoted regions --------------------------------------------------------
 // Truncate at the first quote marker, then drop any surviving `>` lines. Kept
@@ -151,6 +162,7 @@ export function parseCommand(body) {
   if (/^stop\b/.test(lower)) return { command: 'stop' }
   const won = /^won[ \t]+\$?([\d,]+(?:\.\d+)?)\b/.exec(lower)
   if (won) return { command: 'won', amount: Number(won[1].replace(/,/g, '')) }
+  if (/^signed\b/.test(lower)) return { command: 'signed' }
   if (/^notes\b/.test(lower)) return { command: 'notes', notes: stripQuoted(body).replace(/^\s*notes\b[:\s]*/i, '').trim() }
   return null
 }
@@ -266,6 +278,8 @@ export async function run({
   notifyFrom = 'bot@bcn-services.com',
   outreachAddress = 'outreach@send.bcn-services.com',
   botAddress = 'bot@bcn-services.com',
+  osDir = null,
+  commitAndPush = null,
   dryRun = true,
   now = new Date(),
   uuid = randomUUID,
@@ -488,6 +502,8 @@ export async function run({
       return
     }
 
+    if (cmd.command === 'signed') return handleSigned({ message, businessId, row })
+
     const patch = {}
     if (cmd.command === 'no') patch.stage = 'lost'
     else if (cmd.command === 'no answer') {
@@ -518,5 +534,78 @@ export async function run({
       command: cmd.command,
       ...(cmd.amount === undefined ? {} : { amount: cmd.amount }),
     })
+  }
+
+  // --- signed contract ------------------------------------------------------
+  // A countersigned PDF mailed back by one of the internal humans. The four
+  // refusals below are deliberately four separate checks: each one is the only
+  // thing standing between a hostile or malformed attachment and a write into
+  // the ~/os checkout, so none of them may be folded into another.
+  async function handleSigned({ message, businessId, row }) {
+    const parts = message.attachments ?? []
+
+    // (d) `signed` with nothing attached. Forwarded, never applied, and NOT an
+    // error — a human mailing the word without the file is an ordinary slip.
+    if (parts.length === 0) {
+      return forward(message, 'signed with no attachment — nothing filed', { business: businessId })
+    }
+
+    const refuse = async (reason, detail = {}) => {
+      result.errors++
+      await log('error', { stage: 'contract', business: businessId, reason, ...detail })
+      await forward(message, `signed contract refused: ${reason}`, { business: businessId, ...detail })
+    }
+
+    // (b) more than one part: which one is the contract is a guess, and this
+    // path does not guess.
+    if (parts.length > 1) {
+      return refuse('more than one attachment', { attachments: parts.length })
+    }
+    const [part] = parts
+    // (a) only a PDF is ever written to disk.
+    if (part.contentType !== CONTRACT_MIME) {
+      return refuse('attachment is not a pdf', { content_type: part.contentType })
+    }
+    // (c) size ceiling, read off the real part.
+    if (part.size > MAX_CONTRACT_BYTES) {
+      return refuse('attachment is over the size limit', { size: part.size, limit: MAX_CONTRACT_BYTES })
+    }
+
+    if (row.stage !== 'quoted') {
+      return forward(message, `signed on a business at stage ${row.stage}, not quoted`, {
+        business: businessId,
+      })
+    }
+    if (!osDir || !commitAndPush) {
+      return refuse('no ~/os checkout on this runner', {
+        missing: [!osDir && 'osDir', !commitAndPush && 'commitAndPush'].filter(Boolean),
+      })
+    }
+
+    const slug = await claimSlug(sql, db, row)
+    const contractPath = `clients/${slug}/contract/${now.toISOString().slice(0, 10)}-signed.pdf`
+    const absolute = join(osDir, contractPath)
+    await mkdir(dirname(absolute), { recursive: true })
+    await writeFile(absolute, part.content)
+
+    const push = await pushOrSkip({
+      commitAndPush,
+      paths: [contractPath],
+      message: `contract: ${slug}`,
+      log,
+      detail: { business: businessId, slug },
+    })
+    // Nothing pushed: the row keeps its stage and the message stays unseen, so
+    // the next live tick files the contract for real.
+    if (!push) return
+
+    const existing = (await db.clientByBusiness(sql, businessId)) ?? []
+    if (!existing.length) {
+      await db.insertClient(sql, { slug, display_name: row.name, business_id: businessId })
+    }
+    await db.updateClient(sql, businessId, { signed_at: now, contract_path: contractPath })
+    await db.updateBusiness(sql, businessId, { stage: 'won' })
+    result.commands++
+    await log('signed', { business: businessId, slug, contract_path: contractPath })
   }
 }

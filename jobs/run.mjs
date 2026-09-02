@@ -269,6 +269,16 @@ export function toMessage(parsed, uid, header) {
     headers: Object.fromEntries(
       ['auto-submitted', 'x-autoreply', 'x-autorespond'].map((n) => [n, String(get(n) ?? '')])
     ),
+    // Always an array. mailparser gives `{ contentType, size, content: Buffer,
+    // filename }`; a real contentType carries parameters and arbitrary case
+    // (`Application/PDF; name=x.pdf`), so it is normalised once here rather
+    // than at every place a consumer compares it.
+    attachments: [...(parsed.attachments ?? [])].map((a) => ({
+      contentType: String(a?.contentType ?? '').split(';')[0].trim().toLowerCase(),
+      size: Number(a?.size ?? a?.content?.length ?? 0),
+      filename: a?.filename ?? '',
+      content: a?.content ?? null,
+    })),
   }
 }
 

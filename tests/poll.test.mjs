@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { mkdtemp, readdir, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { toMessage, htmlToText } from '../jobs/run.mjs'
 import {
   run as poll,
@@ -69,8 +73,11 @@ function harness({
   classify = async () => 'interested',
   dryRun = false,
   allowed = ALLOWED,
+  osDir = null,
+  commitAndPush = null,
 } = {}) {
   const store = new Map(rows.map((r) => [r.id, { ...r }]))
+  const clients = []
   const events = []
   const updates = []
   const suppressions = []
@@ -111,6 +118,16 @@ function harness({
         Object.assign(store.get(id) ?? {}, patch)
         return Promise.resolve([store.get(id)])
       },
+      clientByBusiness: (_s, id) => Promise.resolve(clients.filter((c) => c.business_id === id)),
+      insertClient: (_s, row) => {
+        clients.push({ ...row })
+        return Promise.resolve([{ ...row }])
+      },
+      updateClient: (_s, id, patch) => {
+        const row = clients.find((c) => c.business_id === id)
+        if (row) Object.assign(row, patch)
+        return Promise.resolve(row ? [row] : [])
+      },
       suppress: (_s, id, reason) => {
         const row = store.get(id)
         suppressions.push({ id, reason })
@@ -126,11 +143,13 @@ function harness({
     claude: classify === null ? null : { ask: classify },
     notify: async (m) => forwards.push(m),
     internalRecipients: allowed,
+    osDir,
+    commitAndPush,
     dryRun,
     now: NOW,
   }
 
-  return { deps, store, events, updates, suppressions, forwards, seen }
+  return { deps, store, events, updates, suppressions, forwards, seen, clients }
 }
 
 const kinds = (events) => events.map((e) => e.kind)
@@ -1263,4 +1282,214 @@ test('qa: a bare STOP still suppresses, in the subject and in the body', async (
   const body = harness({ messages: [msg({ subject: 'Re: hello', text: 'STOP' })] })
   await poll(body.deps)
   assert.deepEqual(body.suppressions, [{ id: 'b1', reason: 'reply opt-out' }])
+})
+
+// --- the signed contract ---------------------------------------------------
+// Built through `toMessage` rather than hand-rolled, so the shape these tests
+// assert against is the one the real IMAP parse produces — a fixture invented
+// here would pass while the producer and the consumer disagreed.
+
+const pdfBytes = Buffer.from('%PDF-1.7 countersigned')
+
+// mailparser's real attachment node, parameters and casing included.
+const part = (over = {}) => ({
+  type: 'attachment',
+  contentType: 'application/pdf; name=contract.pdf',
+  contentDisposition: 'attachment',
+  filename: 'contract.pdf',
+  headers: new Map(),
+  checksum: 'd41d8cd98f00b204e9800998ecf8427e',
+  content: pdfBytes,
+  size: pdfBytes.length,
+  ...over,
+})
+
+const signedMessage = (attachments) =>
+  toMessage(
+    {
+      from: { value: [{ address: 'bchung@bcn-services.com' }] },
+      subject: 'Re: your quote',
+      text: 'signed\n\nCountersigned, see attached.',
+      messageId: '<signed-9@bcn-services.com>',
+      inReplyTo: FIRST_ID,
+      references: [],
+      headers: new Map([['delivered-to', BOT]]),
+      attachments,
+    },
+    9
+  )
+
+const quotedBiz = (over = {}) => biz({ stage: 'quoted', os_slug: 'acme-roofing', ...over })
+
+const osTemp = () => mkdtemp(join(tmpdir(), 'bcns-poll-contract-'))
+
+test('parseCommand reads signed, and the other commands still parse', () => {
+  assert.deepEqual(parseCommand('signed'), { command: 'signed' })
+  assert.deepEqual(parseCommand('Signed!\n\nsee attached'), { command: 'signed' })
+  assert.deepEqual(parseCommand('won 2400'), { command: 'won', amount: 2400 })
+  assert.deepEqual(parseCommand('no answer'), { command: 'no answer' })
+  assert.equal(parseCommand('signature attached'), null)
+})
+
+test('a signed pdf on a quoted thread is filed, pushed and won', async () => {
+  const osDir = await osTemp()
+  const pushes = []
+  const h = harness({
+    messages: [signedMessage([part()])],
+    rows: [quotedBiz()],
+    osDir,
+    commitAndPush: async (args) => {
+      pushes.push(args)
+      return { dryRun: false }
+    },
+  })
+
+  await poll(h.deps)
+
+  const written = join(osDir, 'clients/acme-roofing/contract/2026-09-02-signed.pdf')
+  assert.equal(await readFile(written, 'utf8'), '%PDF-1.7 countersigned')
+  assert.deepEqual(pushes, [
+    { paths: ['clients/acme-roofing/contract/2026-09-02-signed.pdf'], message: 'contract: acme-roofing' },
+  ])
+  assert.equal(h.store.get('b1').stage, 'won')
+  assert.deepEqual(h.clients, [
+    {
+      slug: 'acme-roofing',
+      display_name: 'Acme Roofing',
+      business_id: 'b1',
+      signed_at: NOW,
+      contract_path: 'clients/acme-roofing/contract/2026-09-02-signed.pdf',
+    },
+  ])
+  assert.ok(kinds(h.events).includes('signed'))
+})
+
+test('under the dry-run default a signed pdf marks nothing and writes a skipped event', async () => {
+  const osDir = await osTemp()
+  const h = harness({
+    messages: [signedMessage([part()])],
+    rows: [quotedBiz()],
+    osDir,
+    dryRun: true,
+    commitAndPush: async () => ({ dryRun: true, commands: ['git push'] }),
+  })
+
+  await poll(h.deps)
+
+  assert.equal(h.store.get('b1').stage, 'quoted')
+  assert.deepEqual(h.clients, [])
+  assert.ok(kinds(h.events).includes('skipped'))
+  assert.ok(!kinds(h.events).includes('signed'))
+  assert.deepEqual(h.seen, [], 'the message stays unseen so the next live tick redoes it')
+})
+
+test('signed with no attachment is forwarded and applies nothing', async () => {
+  const osDir = await osTemp()
+  const h = harness({
+    messages: [signedMessage([])],
+    rows: [quotedBiz()],
+    osDir,
+    commitAndPush: async () => ({ dryRun: false }),
+  })
+
+  await poll(h.deps)
+
+  assert.deepEqual(await readdir(osDir), [])
+  assert.equal(h.store.get('b1').stage, 'quoted')
+  assert.deepEqual(h.clients, [])
+  assert.equal(h.forwards.length, ALLOWED.length)
+  assert.ok(!kinds(h.events).includes('error'), 'a human forgetting the file is not an error')
+  assert.ok(kinds(h.events).includes('forwarded'))
+})
+
+test('a second attachment refuses the whole message', async () => {
+  const osDir = await osTemp()
+  const h = harness({
+    // Both parts are pdfs, so only the count can be what refuses this.
+    messages: [signedMessage([part(), part({ filename: 'also.pdf' })])],
+    rows: [quotedBiz()],
+    osDir,
+    commitAndPush: async () => ({ dryRun: false }),
+  })
+
+  await poll(h.deps)
+
+  assert.deepEqual(await readdir(osDir), [])
+  assert.equal(h.store.get('b1').stage, 'quoted')
+  assert.ok(kinds(h.events).includes('error'))
+  assert.equal(h.forwards.length, ALLOWED.length)
+})
+
+test('a text/html attachment is refused and nothing is written', async () => {
+  const osDir = await osTemp()
+  const h = harness({
+    messages: [
+      signedMessage([
+        part({ contentType: 'text/html; charset=utf-8', filename: 'contract.html' }),
+      ]),
+    ],
+    rows: [quotedBiz()],
+    osDir,
+    commitAndPush: async () => ({ dryRun: false }),
+  })
+
+  await poll(h.deps)
+
+  assert.deepEqual(await readdir(osDir), [])
+  assert.equal(h.store.get('b1').stage, 'quoted')
+  assert.deepEqual(h.clients, [])
+  assert.ok(kinds(h.events).includes('error'))
+  assert.equal(h.forwards.length, ALLOWED.length)
+})
+
+test('an 11 MB pdf is refused and nothing is written', async () => {
+  const osDir = await osTemp()
+  // A literal 11 MB, not a value read off the source constant: widening the
+  // constant must break this test, not silently widen it too.
+  const big = Buffer.alloc(11 * 1024 * 1024, 0x20)
+  const h = harness({
+    messages: [signedMessage([part({ content: big, size: big.length })])],
+    rows: [quotedBiz()],
+    osDir,
+    commitAndPush: async () => ({ dryRun: false }),
+  })
+
+  await poll(h.deps)
+
+  assert.deepEqual(await readdir(osDir), [])
+  assert.equal(h.store.get('b1').stage, 'quoted')
+  assert.deepEqual(h.clients, [])
+  assert.ok(kinds(h.events).includes('error'))
+  assert.equal(h.forwards.length, ALLOWED.length)
+})
+
+test('signed from a stranger is forwarded and files nothing', async () => {
+  const osDir = await osTemp()
+  const m = signedMessage([part()])
+  const h = harness({
+    messages: [{ ...m, from: 'dana@acmeroofing.example' }],
+    rows: [quotedBiz()],
+    osDir,
+    commitAndPush: async () => ({ dryRun: false }),
+  })
+
+  await poll(h.deps)
+
+  assert.deepEqual(await readdir(osDir), [])
+  assert.equal(h.store.get('b1').stage, 'quoted')
+})
+
+test('signed on a business that is not at quoted files nothing', async () => {
+  const osDir = await osTemp()
+  const h = harness({
+    messages: [signedMessage([part()])],
+    rows: [biz({ stage: 'replied', os_slug: 'acme-roofing' })],
+    osDir,
+    commitAndPush: async () => ({ dryRun: false }),
+  })
+
+  await poll(h.deps)
+
+  assert.deepEqual(await readdir(osDir), [])
+  assert.equal(h.store.get('b1').stage, 'replied')
 })
