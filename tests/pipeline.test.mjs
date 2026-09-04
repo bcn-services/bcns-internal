@@ -186,6 +186,9 @@ function makeSql({ now }) {
     if (q.includes('from businesses')) throw new Error(`read bypassed the view: ${q}`)
 
     // --- mailboxes ---
+    if (q.startsWith('select address from mailboxes')) {
+      return store.mailboxes.map(({ address }) => ({ address }))
+    }
     if (q.startsWith('select *, case when sent_on') && q.includes('from mailboxes')) {
       return store.mailboxes
         .filter((m) => m.status === 'active')

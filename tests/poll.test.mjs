@@ -75,6 +75,7 @@ function harness({
   allowed = ALLOWED,
   osDir = null,
   commitAndPush = null,
+  mailboxes = [OUTREACH],
 } = {}) {
   const store = new Map(rows.map((r) => [r.id, { ...r }]))
   const clients = []
@@ -91,6 +92,7 @@ function harness({
         events.push({ job, kind, detail })
         return Promise.resolve([])
       },
+      mailboxAddresses: async () => mailboxes.map((address) => ({ address })),
       // Counts the same rows lib/db.mjs's query counts: poll error/dead_letter
       // events carrying this message key (the Message-ID, not the uid).
       messageFailureCount: (_s, key) =>
@@ -680,6 +682,22 @@ test('an unrecognised Delivered-To is forwarded', async () => {
 
   assert.equal(result.forwarded, 1)
   assert.deepEqual(h.updates, [])
+})
+
+// After a domain flip the old outreach address keeps receiving replies. Every
+// row in `mailboxes`, active or retired, is a prospect address, so the reply
+// still lands on its thread's business instead of a human's inbox.
+test('a reply to a retired outreach mailbox is still a prospect reply', async () => {
+  const h = harness({
+    messages: [msg({ deliveredTo: 'outreach@old.example' })],
+    mailboxes: ['outreach@trybcns.example', 'outreach@old.example'],
+  })
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.forwarded, 0)
+  assert.equal(result.replied, 1)
+  assert.equal(h.store.get('b1').stage, 'replied')
 })
 
 // A reply to bot@ sent from the account bot@ is aliased under never gets a

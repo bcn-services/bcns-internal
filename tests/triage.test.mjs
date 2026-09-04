@@ -38,6 +38,7 @@ function harness({ messages, priorOpens = 0 } = {}) {
         events.push({ job, kind, detail })
         return Promise.resolve([])
       },
+      mailboxAddresses: async () => [],
       // Same rows the real query counts: job='triage', kind='opened', today.
       triageOpenedToday: () =>
         Promise.resolve([

@@ -52,7 +52,7 @@ test('every job runs under a thirty-minute timeout', () => {
 test('clock.yml references no secret that does not yet exist', () => {
   const src = readFileSync(new URL('../.github/workflows/clock.yml', import.meta.url), 'utf8')
   const named = [...src.matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1])
-  const existing = ['DATABASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'GH_PACKAGES_TOKEN', 'IMAP_PASS', 'MAIL_FROM', 'OS_TOKEN', 'SMTP_HOST', 'SMTP_PASS', 'SMTP_PORT', 'SMTP_USER', 'SMTP_AUTH_USER']
+  const existing = ['DATABASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'GH_PACKAGES_TOKEN', 'IMAP_PASS', 'MAIL_FROM', 'OS_TOKEN', 'SMTP_HOST', 'SMTP_PASS', 'SMTP_PORT', 'SMTP_USER', 'SMTP_AUTH_USER', 'SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_USER', 'SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS']
   for (const s of named) assert.ok(existing.includes(s), `secret ${s} is not set on the repo`)
 })
 

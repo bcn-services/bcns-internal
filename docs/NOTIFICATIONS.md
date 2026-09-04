@@ -160,6 +160,48 @@ top-level `SMTP_USER`/`SMTP_PASS` are used for it. Any other uncredentialed
 mailbox gets neither — it is skipped with its own `skipped` event, never
 someone else's pair.
 
+## Switching the outreach domain to trybcns.com
+
+State on 2026-09-04: `mailboxes` holds `outreach@trybcns.com` (migration
+0025) at `status = 'paused'`; the runner and `.env.local` carry
+`SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_USER` / `_PASS` (the same seat and app
+password as today's mailbox); `poll` routes a reply to *any* `mailboxes`
+address, active or not, as a prospect reply, so the old address keeps working
+after the flip. `trybcns.com` already has MX at Google. What is missing is
+human-only, none of it costs money:
+
+1. **Send-as alias.** Admin console → Users → the sending seat → Alternate
+   emails: add `outreach@trybcns.com` (the domain must be a secondary or alias
+   domain on the Workspace account first: Account → Domains → Manage domains).
+   Then Gmail → Settings → Accounts → "Send mail as" → add the alias, treat as
+   alias, no SMTP server. Without this Google rewrites the From header to the
+   seat address and every cold mail goes out as `nseluga@`.
+2. **Authentication DNS at Namecheap** (trybcns.com's registrar):
+   - SPF: `TXT @ "v=spf1 include:_spf.google.com ~all"`
+   - DKIM: Admin console → Apps → Gmail → Authenticate email → select
+     trybcns.com → Generate new record → publish `TXT google._domainkey` →
+     Start authentication.
+   - DMARC: `TXT _dmarc "v=DMARC1; p=none; rua=mailto:dmarc@bcn-services.com"`
+   Verify with `dig TXT trybcns.com`, `dig TXT google._domainkey.trybcns.com`,
+   `dig TXT _dmarc.trybcns.com`, then send one mail to your own address and
+   check "show original" reads SPF PASS, DKIM PASS, DMARC PASS.
+3. **Flip.** Repo secrets `SMTP_USER` and `MAIL_FROM` → `outreach@trybcns.com`
+   (`MAIL_FROM` is also what `resolveMailboxAuth` uses as the fallback key, so
+   both must move together). Then, in one statement:
+
+   ```sql
+   update mailboxes set status = case address
+     when 'outreach@trybcns.com' then 'active'
+     when 'outreach@send.bcn-services.com' then 'paused' end
+   where address in ('outreach@trybcns.com', 'outreach@send.bcn-services.com');
+   ```
+
+   A paused row is never claimed, so the old address stops sending on the next
+   `touch` tick. Keep it paused, not burned: it still receives replies.
+4. **Warm-up restarts.** `warmed_at` is null on the new row, so the daily cap
+   ramps from the warm-up floor again. Watch Postmaster Tools for trybcns.com
+   for the first two weeks before raising `daily_cap`.
+
 ## Failure behaviour, as built
 
 | Situation | Inbox item | Email payload | `email_outbox.status` |

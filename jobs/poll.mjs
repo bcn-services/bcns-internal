@@ -315,6 +315,13 @@ export async function run({
     return result
   }
 
+  // Prospect mail is anything addressed to an outreach mailbox, current or
+  // retired: after a domain flip the old address keeps receiving replies for
+  // weeks, and each one still belongs to its thread's business.
+  const outreach = new Set(
+    [outreachAddress, ...(await db.mailboxAddresses(sql)).map((r) => r.address)].map(addr),
+  )
+
   const send =
     notify ??
     createNotifier({ transport, internalRecipients, from: notifyFrom, dryRun, uuid, now })
@@ -423,7 +430,7 @@ export async function run({
           ? [message.deliveredTo]
           : message.toAddresses ?? []
         const to =
-          toCandidates.map(addr).find((a) => a === addr(botAddress) || a === addr(outreachAddress)) ??
+          toCandidates.map(addr).find((a) => a === addr(botAddress) || outreach.has(a)) ??
           addr(message.deliveredTo)
         const ids = threadIds(message)
         const [thread] = ids.length ? ((await db.threadByMessageIds(sql, ids)) ?? []) : []
@@ -434,7 +441,7 @@ export async function run({
         // now falls through to a human.
         if (to === addr(botAddress)) {
           await handleTeammate({ message, businessId })
-        } else if (to === addr(outreachAddress)) {
+        } else if (outreach.has(to)) {
           await handleProspect({ message, businessId })
         } else if (to === addr(alertsAddress)) {
           await handleAlert({ message })
