@@ -549,8 +549,10 @@ export async function main(env = process.env, load = (n) => import(`./${n}.mjs`)
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((err) => {
-    console.error(err)
-    process.exit(1)
-  })
+  main()
+    .then((out) => console.log(JSON.stringify(out)))
+    .catch((err) => {
+      console.error(err)
+      process.exit(1)
+    })
 }
