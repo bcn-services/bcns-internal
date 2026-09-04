@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { htmlToText, toMessage, drainMessages, MAX_MESSAGES_PER_TICK } from '../jobs/run.mjs'
+import { htmlToText, toMessage, drainMessages, MAX_MESSAGES_PER_TICK, buildDeps } from '../jobs/run.mjs'
 
 test('the constants this suite asserts against are what they claim to be', () => {
   assert.equal(MAX_MESSAGES_PER_TICK, 100)
@@ -129,4 +129,37 @@ test('a mixed-case content type normalises, and a missing size falls back to the
 
 test('a message with no attachments yields an empty array, never undefined', () => {
   assert.deepEqual(toMessage(parsed(), 7).attachments, [])
+})
+
+// --- item 23: one IMAP source per outreach mailbox --------------------------
+// Tonight's live pipeline is ONE account (bot@/outreach@ as aliases), so
+// `deps.imap` must stay a single object with no extra env set — poll.mjs
+// normalises with `[].concat`, and that path is the whole compatibility
+// contract. Extra mailboxes only turn `deps.imap` into a list when their env
+// keys actually show up.
+
+test('buildDeps keeps deps.imap a single object when no extra mailbox env is set', async () => {
+  const deps = await buildDeps({ IMAP_PASS: 'basepass', IMAP_USER: 'nseluga@bcn-services.com' })
+
+  assert.equal(typeof deps.imap, 'function')
+  assert.equal(deps.imap.account, 'nseluga@bcn-services.com')
+})
+
+test('buildDeps enumerates IMAP_MAILBOX_<KEY>_USER/_PASS/_HOST into a list, base first', async () => {
+  const env = {
+    IMAP_PASS: 'basepass',
+    IMAP_USER: 'nseluga@bcn-services.com',
+    IMAP_MAILBOX_OUTREACH2_SEND_BCN_SERVICES_COM_USER: 'outreach2@send.bcn-services.com',
+    IMAP_MAILBOX_OUTREACH2_SEND_BCN_SERVICES_COM_PASS: 'apppass2',
+    IMAP_MAILBOX_OUTREACH2_SEND_BCN_SERVICES_COM_HOST: 'imap.example.com',
+    // A key with no PASS is dropped, not thrown — same "capability not
+    // granted" shape as the rest of buildDeps.
+    IMAP_MAILBOX_BROKEN_USER: 'broken@example.com',
+  }
+  const deps = await buildDeps(env)
+
+  assert.ok(Array.isArray(deps.imap))
+  assert.equal(deps.imap.length, 2)
+  assert.equal(deps.imap[0].account, 'nseluga@bcn-services.com')
+  assert.equal(deps.imap[1].account, 'outreach2@send.bcn-services.com')
 })

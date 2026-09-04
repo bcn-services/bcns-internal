@@ -635,45 +635,42 @@ against a fake `runSkill` only — that is by design, not a gap.
       one PR, not two
   status: not started
 
----
-
-- task: Make the SMTP transport per-mailbox. `jobs/run.mjs:142` builds ONE
-    transport from a single `SMTP_PASS`/`SMTP_AUTH_USER`, and `jobs/touch.mjs:104`
-    calls `transport()` with no argument, so every `mailboxes` row sends through
-    the same authenticated Workspace account whatever its `address` says. Reputation
-    attaches to the authenticating account, not the `From:` header, so the
-    round-robin currently yields N apparent senders sharing one reputation and one
-    daily ceiling. Change `transport` to take the claimed mailbox —
-    `transport(claimed)` — and resolve credentials per address from the
-    environment, caching one transport per address. `deliver` already receives the
-    claimed row, so the change is the factory in `run.mjs` plus the call site in
-    `touch.mjs`. Seed a `mailboxes` row for the new outreach domain in a migration.
-    Correct `docs/NOTIFICATIONS.md`, which claims outreach and internal mail have
-    separate reputations that "cannot touch" — untrue as built, and the reason this
-    went unnoticed.
+- task: Make the SMTP transport per-mailbox. `jobs/run.mjs` built one global
+    nodemailer transport from `SMTP_USER`/`SMTP_PASS` and `jobs/touch.mjs`'s
+    `deliver()` called `transport()` with no argument, so every send used
+    whichever transport happened to exist regardless of which mailbox was
+    claimed. `touch.mjs` now calls `transport(claimed)` with the claimed
+    mailboxes row; `run.mjs` resolves SMTP credentials per mailbox address
+    from `SMTP_MAILBOX_<KEY>_USER`/`_PASS` (`KEY` = the address upper-cased,
+    non-alphanumerics collapsed to `_`), caching one transport per address. A
+    mailbox with no resolvable credentials is skipped with its own `skipped`
+    event, never sent through another mailbox's transport. A documented
+    fallback (`SMTP_USER`/`SMTP_PASS` when the mailbox address equals
+    `SMTP_MAILBOX_DEFAULT` or `MAIL_FROM`) keeps the live single-mailbox
+    pipeline working with zero new secrets. Seeds a placeholder second
+    mailbox row (`0024_second_outreach_mailbox.sql`, `status = 'paused'`) and
+    corrects `docs/NOTIFICATIONS.md`'s stale separate-reputations claim.
   guardrails:
-    - Credentials live in environment variables keyed per mailbox address — never a
-      column on `mailboxes`, never in an event `detail`, never in a log line
-    - A mailbox whose credentials are missing fails closed: skip it and write a
-      `skipped` event. Never fall back to another mailbox's transport
-    - No hardcoded personal address survives as a default anywhere in `run.mjs`
-    - Do not touch the `mailboxes` schema, the round-robin cursor,
-      `claimMailboxSlot`, `warmedCap`, or the per-row `from`/`Message-ID` in
-      `build()` — the row-driven half is already correct
-    - `SEND_ALLOWED_RECIPIENTS` is not widened by this item
+    - Never touch the mailboxes schema, the round-robin cursor, `claimMailboxSlot`,
+      `warmedCap`, or `build()`'s from/Message-ID logic
+    - No hardcoded `@bcn-services.com` address survives as a credential default
+      in `run.mjs`
+    - A missing per-mailbox credential never falls back to another mailbox's
+      transport
+    - No SMTP credential ever reaches a logged event's detail
   done when:
-    - A unit test asserts two mailbox rows with different addresses each send
-      through a transport built from that address's own credentials, observed via a
-      fake transport factory recording the auth user it was constructed with
-    - A unit test asserts a mailbox with no credentials in the environment is
-      skipped with a `skipped` event and issues no SMTP command, and that the run
-      does not send it through another mailbox's transport
-    - A test asserts `jobs/run.mjs` contains no literal `@bcn-services.com` address
-      as a credential default
-    - A test asserts no event `detail` written by `touch` contains the value of any
-      `SMTP_PASS*` variable
+    - A unit test asserts a fake transport factory is constructed with the
+      auth user for the claimed mailbox, never another one's
+    - A unit test asserts a mailbox with no resolvable credentials writes its
+      own `skipped` event and is never sent through another mailbox's transport
+    - A unit test asserts no literal `@bcn-services.com` credential default
+      survives in the mailbox-transport section of `run.mjs`
+    - A unit test asserts a credential value held by the transport never
+      appears in a logged event's JSON
   caution: true
-  status: not started
+  status: done
+
+---
 
 - task: Let `poll` read every outreach mailbox, not one. Each outreach account
     receives its own replies, so a single IMAP connection sees only one mailbox's

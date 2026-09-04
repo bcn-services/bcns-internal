@@ -37,6 +37,91 @@ export function jobName(input) {
   return jobNames(input)[0]
 }
 
+// Turn a mailbox address into the KEY half of `SMTP_MAILBOX_<KEY>_USER` /
+// `SMTP_MAILBOX_<KEY>_PASS` — upper-cased, every run of non-alphanumerics
+// collapsed to one underscore. `outreach@send.bcn-services.com` becomes
+// `OUTREACH_SEND_BCN_SERVICES_COM`. See docs/NOTIFICATIONS.md.
+export function mailboxEnvKey(address) {
+  return String(address || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '_')
+}
+
+// MAIL_FROM / SMTP_MAILBOX_DEFAULT may carry a display name; only the address
+// is ever compared.
+function bareAddress(value) {
+  const m = /<([^>]+)>/.exec(String(value ?? ''))
+  return (m ? m[1] : String(value ?? '')).trim().toLowerCase()
+}
+
+// Per-mailbox SMTP credentials, resolved from the environment and never
+// mixed across addresses. Two sources, tried in this order — the scheme is
+// documented in docs/NOTIFICATIONS.md:
+//
+//   1. `SMTP_MAILBOX_<KEY>_USER` / `SMTP_MAILBOX_<KEY>_PASS`, keyed by
+//      `mailboxEnvKey(address)`.
+//   2. `SMTP_USER` + `SMTP_PASS` — but ONLY for the one address already
+//      wired tonight: the mailbox `SMTP_MAILBOX_DEFAULT` names, or
+//      `MAIL_FROM`'s address when that variable is unset. This is what lets
+//      the existing single mailbox keep sending with zero new secrets.
+//
+// Anything else is `null`. There is no third path: a mailbox matching
+// neither has no credentials, full stop — never another mailbox's pair.
+export function resolveMailboxAuth(address, env = process.env) {
+  const key = mailboxEnvKey(address)
+  const user = env[`SMTP_MAILBOX_${key}_USER`]
+  const pass = env[`SMTP_MAILBOX_${key}_PASS`]
+  if (user && pass) return { user, pass }
+
+  const fallbackAddress = bareAddress(env.SMTP_MAILBOX_DEFAULT || env.MAIL_FROM)
+  if (env.SMTP_USER && env.SMTP_PASS && fallbackAddress && fallbackAddress === bareAddress(address)) {
+    return { user: env.SMTP_USER, pass: env.SMTP_PASS }
+  }
+  return null
+}
+
+export class MissingMailboxCredentials extends Error {
+  constructor(address) {
+    super(`no SMTP credentials configured for mailbox ${address}`)
+    this.name = 'MissingMailboxCredentials'
+    this.address = address
+  }
+}
+
+async function defaultCreateTransport(opts) {
+  const { default: nodemailer } = await import('nodemailer')
+  return nodemailer.createTransport(opts)
+}
+
+// One nodemailer transport per mailbox address, built lazily and cached —
+// never reused across addresses. Called with no mailbox at all (poll/notify's
+// internal mail, which sends as `notifyFrom` rather than any row in
+// `mailboxes`), it keeps today's behaviour exactly: one transport from
+// SMTP_USER/SMTP_PASS, cached under its own slot. `createTransport` is
+// injectable so tests can record what a transport was built with instead of
+// touching nodemailer at all.
+export function createMailboxTransport(env = process.env, createTransport = defaultCreateTransport) {
+  const cache = new Map()
+  const host = env.SMTP_HOST || 'smtp.gmail.com'
+  const port = Number(env.SMTP_PORT) || 465
+
+  const transport = async (mailbox) => {
+    const address = mailbox?.address ?? null
+    if (cache.has(address)) return cache.get(address)
+    const auth = address
+      ? resolveMailboxAuth(address, env)
+      : env.SMTP_USER && env.SMTP_PASS
+        ? { user: env.SMTP_USER, pass: env.SMTP_PASS }
+        : null
+    if (!auth) throw new MissingMailboxCredentials(address ?? '(default)')
+    const built = await createTransport({ host, port, secure: port === 465, auth })
+    cache.set(address, built)
+    return built
+  }
+  // Lets touch's mailbox picker skip an uncredentialed mailbox BEFORE
+  // claiming its send slot, without constructing anything.
+  transport.hasCredentials = (address) => Boolean(resolveMailboxAuth(address, env))
+  return transport
+}
+
 // Deps are built from the environment alone, so what a job is handed is
 // inspectable without a database or a Google token in sight. A missing
 // credential means the job simply is not given that capability; jobs decide
@@ -140,41 +225,65 @@ export async function buildDeps(env = process.env, exists = existsSync) {
   if (env.JITTER_WINDOW_MS) deps.jitterWindowMs = Number(env.JITTER_WINDOW_MS)
   if (env.SKILL_JOB_LIMIT) deps.skillLimit = Number(env.SKILL_JOB_LIMIT)
 
-  // SMTP is a capability like any other: no app password, no transport, and
+  // SMTP is a capability like any other: no credentials, no transport, and
   // touch writes a skipped event instead of half-sending. The transport is a
-  // factory and nothing connects until a send has already cleared the gate.
-  if (env.SMTP_PASS) {
-    let mailer = null
-    const port = Number(env.SMTP_PORT) || 465
-    deps.transport = async () => {
-      const { default: nodemailer } = await import('nodemailer')
-      return (mailer ??= nodemailer.createTransport({
-        host: env.SMTP_HOST || 'smtp.gmail.com',
-        port,
-        secure: port === 465,
-        auth: {
-          // Not SMTP_USER. `outreach@send.bcn-services.com` is a Gmail
-          // "send mail as" alias, and an alias cannot authenticate: the app
-          // password belongs to the Workspace account that owns the alias, so
-          // Google answers 535-5.7.8 BadCredentials for the alias every time.
-          // The visible From is the mailbox row's own address, set per send.
-          user: env.SMTP_AUTH_USER || 'nseluga@bcn-services.com',
-          pass: env.SMTP_PASS,
-        },
-      }))
-    }
+  // per-MAILBOX factory (createMailboxTransport, above) and nothing connects
+  // until a send has already cleared the allow-list gate. A global SMTP_PASS
+  // OR any SMTP_MAILBOX_*_PASS is enough to build the factory — which
+  // mailbox actually has credentials is resolveMailboxAuth's call, not this
+  // one's.
+  const hasMailboxCreds =
+    Boolean(env.SMTP_PASS) ||
+    Object.keys(env).some((k) => k.startsWith('SMTP_MAILBOX_') && k.endsWith('_PASS'))
+  if (hasMailboxCreds) {
+    deps.transport = createMailboxTransport(env)
   }
 
-  // IMAP is the poller's only input. Same app password as SMTP, one label.
-  // No password means poll writes a skipped event rather than a half-read inbox.
+  // IMAP is the poller's only input. Tonight there is one account
+  // (IMAP_USER/IMAP_PASS) that receives bot@ and outreach@ as aliases, so
+  // `deps.imap` stays a single object — poll.mjs normalises with
+  // `[].concat(deps.imap)` — and nothing below changes that. Each outreach
+  // mailbox that later gets its own real account is read over its own
+  // connection instead: the scheme parallels the SMTP one (item 22),
+  // `IMAP_MAILBOX_<KEY>_USER/_PASS/_HOST`, keys enumerated from whatever is
+  // actually set in the environment, never a hardcoded address list. A key
+  // missing its PASS is dropped here, not thrown — same "capability not
+  // granted" shape as the rest of this file.
   if (env.IMAP_PASS) {
-    deps.imap = createImap({
+    const base = createImap({
       host: env.IMAP_HOST || 'imap.gmail.com',
       port: Number(env.IMAP_PORT) || 993,
       user: env.IMAP_USER || 'nseluga@bcn-services.com',
       pass: env.IMAP_PASS,
       mailbox: env.IMAP_MAILBOX || 'pipeline',
     })
+    base.account = env.IMAP_USER || 'nseluga@bcn-services.com'
+
+    const extraKeys = [
+      ...new Set(
+        Object.keys(env)
+          .map((k) => /^IMAP_MAILBOX_(.+)_USER$/.exec(k)?.[1])
+          .filter(Boolean)
+      ),
+    ]
+    const extras = extraKeys
+      .map((key) => {
+        const user = env[`IMAP_MAILBOX_${key}_USER`]
+        const pass = env[`IMAP_MAILBOX_${key}_PASS`]
+        if (!user || !pass) return null
+        const source = createImap({
+          host: env[`IMAP_MAILBOX_${key}_HOST`] || 'imap.gmail.com',
+          port: 993,
+          user,
+          pass,
+          mailbox: 'INBOX',
+        })
+        source.account = user
+        return source
+      })
+      .filter(Boolean)
+
+    deps.imap = extras.length ? [base, ...extras] : base
   }
   deps.notifyFrom = env.NOTIFY_FROM || 'bot@bcn-services.com'
   deps.outreachAddress = env.SMTP_USER || 'outreach@send.bcn-services.com'
@@ -200,6 +309,17 @@ export async function buildDeps(env = process.env, exists = existsSync) {
   }
 
   deps.dryRun = env.DRY_RUN !== 'false'
+
+  // Alert triage's PR opener. No repo variable, no `github` on deps at all —
+  // poll.mjs's `handleAlert` already treats a missing opener as an `error`
+  // event, same shape as every other missing capability in this file.
+  if (env.ALERT_REPO) {
+    const [{ createGithubPr }, { run: exec }] = await Promise.all([
+      import('../lib/github.mjs'),
+      import('../lib/claude.mjs'),
+    ])
+    deps.github = createGithubPr({ exec, repo: env.ALERT_REPO, dryRun: deps.dryRun })
+  }
 
   // The skill runner and the ~/os push helper. Both only make sense against
   // the clone, so both appear only when OS_DIR does — same rule as the voice

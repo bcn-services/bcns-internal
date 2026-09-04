@@ -219,21 +219,22 @@ test('the send list and the internal list are two independent variables', async 
   assert.deepEqual(bare.internalRecipients, [])
 })
 
-// A Gmail alias cannot authenticate. Wiring the auth user to SMTP_USER made
-// every live send die on 535-5.7.8 while the dry run looked perfect.
-test('SMTP authenticates as the account, not as the outreach alias', async () => {
-  const deps = await buildDeps({ SMTP_PASS: 'x'.repeat(16) })
+// Superseded by item 22's per-mailbox transport (jobs/run.mjs
+// createMailboxTransport): the old design hardcoded a personal address
+// ('nseluga@bcn-services.com') as the SMTP_AUTH_USER default so the outreach
+// alias could authenticate. That guardrail explicitly forbids a hardcoded
+// address default, so a no-mailbox transport() call now falls back to an
+// EXPLICIT SMTP_USER/SMTP_PASS pair, and has no credentials at all without one.
+test('SMTP transport with no mailbox uses an explicit account, no hardcoded default', async () => {
+  const deps = await buildDeps({ SMTP_USER: 'nseluga@bcn-services.com', SMTP_PASS: 'x'.repeat(16) })
   const mailer = await deps.transport()
   assert.equal(mailer.options.auth.user, 'nseluga@bcn-services.com')
-  assert.equal(deps.outreachAddress, 'outreach@send.bcn-services.com')
+  assert.equal(deps.outreachAddress, 'nseluga@bcn-services.com')
 
-  const overridden = await buildDeps({
-    SMTP_PASS: 'x'.repeat(16),
-    SMTP_AUTH_USER: 'other@bcn-services.com',
-    SMTP_USER: 'hello@send.bcn-services.com',
-  })
-  assert.equal((await overridden.transport()).options.auth.user, 'other@bcn-services.com')
-  assert.equal(overridden.outreachAddress, 'hello@send.bcn-services.com')
+  // No SMTP_USER: nothing to fall back to, so the internal-mail transport has
+  // no credentials — never a hardcoded personal address.
+  const noUser = await buildDeps({ SMTP_PASS: 'x'.repeat(16) })
+  await assert.rejects(() => noUser.transport(), /no SMTP credentials configured/)
 })
 
 test('no API key ever reaches the Claude client', () => {
