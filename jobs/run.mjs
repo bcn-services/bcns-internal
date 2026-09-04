@@ -201,6 +201,17 @@ export async function buildDeps(env = process.env, exists = existsSync) {
 
   deps.dryRun = env.DRY_RUN !== 'false'
 
+  // Alert triage's PR opener. No repo variable, no `github` on deps at all —
+  // poll.mjs's `handleAlert` already treats a missing opener as an `error`
+  // event, same shape as every other missing capability in this file.
+  if (env.ALERT_REPO) {
+    const [{ createGithubPr }, { run: exec }] = await Promise.all([
+      import('../lib/github.mjs'),
+      import('../lib/claude.mjs'),
+    ])
+    deps.github = createGithubPr({ exec, repo: env.ALERT_REPO, dryRun: deps.dryRun })
+  }
+
   // The skill runner and the ~/os push helper. Both only make sense against
   // the clone, so both appear only when OS_DIR does — same rule as the voice
   // rules above. commitAndPush is bound to this run's dryRun so no module
