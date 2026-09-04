@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { pushOrSkip } from '../lib/osrepo.mjs'
+import { normalizeDashes } from '../lib/skills.mjs'
 
 // Postgres unique_violation. The only failure of the slug write we handle:
 // anything else is a real database problem and belongs in the error event.
@@ -149,6 +150,8 @@ export async function run({
         })
         continue
       }
+
+      await normalizeDashes(wrote)
 
       const push = await pushOrSkip({
         commitAndPush,

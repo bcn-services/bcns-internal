@@ -15,6 +15,7 @@ import { join } from 'node:path'
 
 import { parseResearch, claimSlug } from './pitch.mjs'
 import { pushOrSkip } from '../lib/osrepo.mjs'
+import { normalizeDashes } from '../lib/skills.mjs'
 
 export const notesOf = (research) => [research.notes ?? []].flat().filter(Boolean)
 
@@ -101,6 +102,8 @@ export async function run({
         })
         continue
       }
+
+      await normalizeDashes(wrote)
 
       const push = await pushOrSkip({
         commitAndPush,

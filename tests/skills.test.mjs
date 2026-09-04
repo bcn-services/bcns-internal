@@ -1,9 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { parse } from 'yaml'
 
-import { runSkill } from '../lib/skills.mjs'
+import { runSkill, normalizeDashes } from '../lib/skills.mjs'
 import { commitAndPush } from '../lib/osrepo.mjs'
 import { buildDeps } from '../jobs/run.mjs'
 
@@ -188,4 +190,15 @@ test('clock.yml wires the skills symlink between the os checkout and the job', (
   assert.match(run, /config user\.email 'bot@bcn-services\.com'/)
   // The identity is set inside the clone, never on this repo.
   assert.ok(run.split('\n').filter((l) => l.includes('git config')).every((l) => l.includes('-C')))
+})
+
+test('normalizeDashes rewrites em and en dashes in written markdown, skips html and missing paths', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dash-'))
+  const md = join(dir, 'email.md')
+  const html = join(dir, 'demo.html')
+  writeFileSync(md, 'Hi Nate — quotes for Acme – phone only.\n')
+  writeFileSync(html, '<title>Acme — Mock</title>')
+  await normalizeDashes([md, html, join(dir, 'missing.md')])
+  assert.equal(readFileSync(md, 'utf8'), 'Hi Nate, quotes for Acme, phone only.\n')
+  assert.equal(readFileSync(html, 'utf8'), '<title>Acme — Mock</title>')
 })
