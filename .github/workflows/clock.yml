@@ -10,8 +10,11 @@ name: clock
 
 on:
   schedule:
-    - cron: '*/20 8-20 * * 1-5'   # poll
-    - cron: '0 14 * * 1-5'        # touch
+    # TEST WINDOW 2026-09-04 (trybcns.com live funnel) — restore before merge:
+    #   poll  '*/20 8-20 * * 1-5'
+    #   touch '0 14 * * 1-5'
+    - cron: '*/20 * * * *'        # poll  (test window)
+    - cron: '5,35 * * * *'        # touch (test window)
     - cron: '0 13 * * 1'          # source, then qualify
     - cron: '30 13 * * 1-5'       # personalize
   workflow_dispatch:
@@ -150,7 +153,9 @@ jobs:
           # Separate from NOTIFY_ALLOWED_RECIPIENTS on purpose — see notify.mjs.
           ONBOARD_NOTIFY_TO: ${{ vars.ONBOARD_NOTIFY_TO }}
           DRY_RUN: ${{ vars.DRY_RUN }}
-          SCHEDULE: ${{ github.event.schedule }}
+          # Test window: map the temporary crons back onto the canonical
+          # SCHEDULES keys in jobs/run.mjs so no code changes for the test.
+          SCHEDULE: ${{ github.event.schedule == '*/20 * * * *' && '*/20 8-20 * * 1-5' || github.event.schedule == '5,35 * * * *' && '0 14 * * 1-5' || github.event.schedule }}
           JOB: ${{ inputs.job }}
         run: pnpm job
 
