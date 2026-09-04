@@ -1,4 +1,6 @@
-// Builds the bcns pitch for a business that has gone to phone.
+// Builds the bcns pitch for a business that has gone to phone, or has replied
+// and is about to get a meeting. Either way a human is about to talk to them
+// and wants the script in hand, not a job to run first.
 //
 // One pitch per business, ever. The marker is `research.pitch_path`: a row
 // that has one is skipped forever, because a second /pitch run costs a Claude
@@ -19,6 +21,10 @@ import { normalizeDashes } from '../lib/skills.mjs'
 // Postgres unique_violation. The only failure of the slug write we handle:
 // anything else is a real database problem and belongs in the error event.
 const UNIQUE_VIOLATION = '23505'
+
+// Both stages precede a human conversation, and notify mails the folder path
+// on the same tick right after this job.
+export const PITCH_STAGES = ['call_due', 'replied']
 
 export function parseResearch(research) {
   if (!research) return {}
@@ -86,10 +92,11 @@ export async function run({
     return { ...result, skipped: missing }
   }
 
-  const rows = (await db.businessesByStage(sql, 'call_due', { limit })) ?? []
-  const todo = rows.filter((row) => !parseResearch(row.research).pitch_path)
+  const rows = []
+  for (const stage of PITCH_STAGES) rows.push(...((await db.businessesByStage(sql, stage, { limit })) ?? []))
+  const todo = rows.filter((row) => !parseResearch(row.research).pitch_path).slice(0, limit)
   if (!todo.length) {
-    await log('skipped', { reason: 'no call_due row without a pitch' })
+    await log('skipped', { reason: `no ${PITCH_STAGES.join('/')} row without a pitch` })
     return result
   }
 

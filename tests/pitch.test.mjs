@@ -260,3 +260,20 @@ test('qualify persists the page text it read, capped, alongside the facts', asyn
   assert.equal(research.fit, 'good')
   assert.equal(research.reason, 'r')
 })
+
+test('a replied row is pitched too, so the meeting mail can name the folder', async () => {
+  const h = harness({
+    rows: [biz({ id: 'r1', name: 'Reply Co', stage: 'replied' }), biz({ id: 'c1', stage: 'call_due' })],
+    runSkill: async () => ({ wrote: ['/w/os/clients/a/pitch/x.md'], dryrun: [] }),
+  })
+  try {
+    const out = await pitch(h.deps)
+    assert.equal(out.pitched, 2)
+    const marked = h.updates.filter((u) => u.patch.research).map((u) => u.id).sort()
+    assert.deepEqual(marked, ['c1', 'r1'])
+    // The row keeps its stage: pitch never moves a replied row anywhere.
+    assert.equal(h.store.find((r) => r.id === 'r1').stage, 'replied')
+  } finally {
+    await rm(h.tmp(), { recursive: true, force: true })
+  }
+})

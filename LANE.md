@@ -16,7 +16,8 @@ variables — and blocks nothing.
 **Status 2026-09-01:** items 1–14 merged (PR #3); PR #4 `pipeline-fixes` holds
 the daily-cap reset, the qualify crash fix and migrations 0019–0021. Nothing has
 run live. Design change 2026-09-01: **there is no approval step.** `touch` sends
-on schedule; a `call_due` row gets a `/pitch` folder; Brandon's `notes` reply
+on schedule; a `call_due` or `replied` row gets a `/pitch` folder (2026-09-04:
+replied too, so the meeting mail carries the script); Brandon's `notes` reply
 runs `/quote`; his `signed` reply with the PDF runs `/new-client-repo` +
 `/intake` and mails Nate. Every artifact lands in `bcns-os` under
 `clients/<slug>/`; mail carries paths and instructions, never attachments.
@@ -523,7 +524,8 @@ against a fake `runSkill` only — that is by design, not a gap.
   status: done
 
 - task: Build the pitch job — `jobs/pitch.mjs`, run on the poll tick. For each
-    row from `selectable_businesses` at `call_due` with no `research.pitch_path`:
+    row from `selectable_businesses` at `call_due` or `replied` (added 2026-09-04)
+    with no `research.pitch_path`:
     set `os_slug` if null (kebab of name + city; on unique-violation append the
     last 6 chars of the place id); write `research.facts` as JSON and the stored
     page text as a `.txt` to a temp dir; call

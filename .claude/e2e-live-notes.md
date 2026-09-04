@@ -39,3 +39,11 @@ A resumed session reads this first. One line per decision; stage checklist at th
 - trybcns.com conversion, code side done: 0025 seeds `outreach@trybcns.com` paused; `SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_USER/_PASS` on the runner and in .env.local (same seat, same app password); poll treats every `mailboxes` address as a prospect address; docs/NOTIFICATIONS.md "Switching the outreach domain" has the human steps. Not done because each needs a password re-challenge or mails a code to an address outside the allow-list: send-as alias, DKIM generation, SPF/DKIM/DMARC at Namecheap, the status swap.
 - The new client repo's own deploy workflow fails at `migrate` (two GitHub mails 16:52Z/16:54Z): expected, it has none of the five per-repo secrets. Not part of tonight's scope.
 - PR: https://github.com/bcn-services/bcns-internal/pull/6 (open, not merged). README bump is bcns-os c8de32b, pushed from the scratch clone: ~/os main is behind origin and `git pull` there aborts because untracked local pitch folders (perez, sos, statewide, fleet) collide with what the runner pushed. Left exactly as found, README bump sits there as an unstaged modification identical to the pushed one.
+
+## 2026-09-04 follow-up: pitch on replied rows
+
+Nate: the meeting notice should already carry the pitch so nobody runs it by
+hand before the call. Pitch now selects `call_due` and `replied` rows
+(`PITCH_STAGES`); it runs before notify on the same tick, so `meetingEmail`
+prints `Pitch folder:` like the call task does. Tests 369 pass. Not fired live
+yet — the next replied row on a live tick proves it.

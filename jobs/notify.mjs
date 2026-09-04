@@ -99,6 +99,10 @@ export function meetingEmail(row, thread = null) {
     ...(research.facts?.length ? ['', 'What we know:', ...facts(research)] : []),
     ...(research.last_reply ? ['', 'What they said:', research.last_reply] : []),
     '',
+    research.pitch_path
+      ? `Pitch folder: ${research.pitch_path}`
+      : 'Pitch folder: none yet — the pitch job has not reached this row.',
+    '',
     'Reply on their own thread when the meeting is set.',
   ].join('\n')
   return { subject: `[pipeline] ${row.name} replied — book the meeting`, text }

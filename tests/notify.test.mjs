@@ -289,6 +289,8 @@ test('the three templates render row fields and no prospect address is ever a re
   const meeting = body(/replied — book the meeting/)
   assert.match(meeting, /Thread: a question about Acme Roofing/)
   assert.match(meeting, /<msg-r1@send\.bcn-services\.com>/)
+  // The meeting mail carries the same folder: pitch runs on replied rows too.
+  assert.match(meeting, /Pitch folder: clients\/acme-roofing-danbury\/pitch\//)
 
   const quote = body(/quote Acme Roofing/)
   assert.match(quote, /wants a portal for his crews/)
@@ -306,6 +308,7 @@ test('the templates hold up on a row with nothing in research', () => {
     assert.ok(!/undefined|null|\[object/.test(mail.text), mail.text)
   }
   assert.match(callTaskEmail(bare).text, /Pitch folder: none yet/)
+  assert.match(meetingEmail(bare, null).text, /Pitch folder: none yet/)
   assert.match(quoteEmail(bare).text, /left no notes/)
 })
 
