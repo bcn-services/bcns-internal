@@ -43,9 +43,9 @@ test('no cron is more frequent than every twenty minutes', () => {
   }
 })
 
-test('every job runs under a ten-minute timeout', () => {
+test('every job runs under a thirty-minute timeout', () => {
   for (const job of Object.values(clock.jobs)) {
-    assert.equal(job['timeout-minutes'], 10)
+    assert.equal(job['timeout-minutes'], 30)
   }
 })
 

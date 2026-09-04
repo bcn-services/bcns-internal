@@ -64,7 +64,8 @@ export async function run({
   commitAndPush,
   osDir,
   dryRun = true,
-  limit = 25,
+  skillLimit,
+  limit = skillLimit ?? 25,
   mkTempDir = () => mkdtemp(join(tmpdir(), 'bcns-onboard-')),
 } = {}) {
   let logged = 0

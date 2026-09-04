@@ -25,7 +25,8 @@ export async function run({
   commitAndPush,
   osDir,
   dryRun = true,
-  limit = 25,
+  skillLimit,
+  limit = skillLimit ?? 25,
   mkTempDir = () => mkdtemp(join(tmpdir(), 'bcns-quote-')),
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'quote', kind, detail)

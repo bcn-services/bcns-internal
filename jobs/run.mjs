@@ -133,6 +133,13 @@ export async function buildDeps(env = process.env, exists = existsSync) {
   // means notify mails nobody about it, never the internal list.
   deps.onboardRecipient = String(env.ONBOARD_NOTIFY_TO || '').trim()
 
+  // Runner knobs. JITTER_WINDOW_MS shrinks touch's send spread so one run fits
+  // the workflow timeout (the default 55-minute window is why runner touch
+  // hung); SKILL_JOB_LIMIT caps how many rows pitch/quote/onboard shell out
+  // for per tick, each being a multi-minute claude call.
+  if (env.JITTER_WINDOW_MS) deps.jitterWindowMs = Number(env.JITTER_WINDOW_MS)
+  if (env.SKILL_JOB_LIMIT) deps.skillLimit = Number(env.SKILL_JOB_LIMIT)
+
   // SMTP is a capability like any other: no app password, no transport, and
   // touch writes a skipped event instead of half-sending. The transport is a
   // factory and nothing connects until a send has already cleared the gate.

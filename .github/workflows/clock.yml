@@ -28,7 +28,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
       contents: write   # the source run commits the heartbeat file
       id-token: write   # OIDC exchange for the GCP workload identity provider
@@ -60,7 +60,8 @@ jobs:
           repository: ${{ vars.OS_REPO }}
           token: ${{ secrets.OS_TOKEN }}
           path: os
-          persist-credentials: false
+          # Kept: pitch/quote/onboard push their folders back with this token.
+          persist-credentials: true
 
       # The skills the jobs shell out to only load from ~/.claude/skills, so
       # the clone is symlinked into place. The identity is set inside the
@@ -109,6 +110,14 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          # Polling. Same app password as SMTP; no IMAP_PASS means poll skips.
+          IMAP_PASS: ${{ secrets.IMAP_PASS }}
+          # Onboard creates the client repo under bcn-services with `gh`.
+          GH_TOKEN: ${{ secrets.OS_TOKEN }}
+          # Fit one run inside the job timeout: touch spreads its sends over
+          # this window, and the skill jobs take at most this many rows a tick.
+          JITTER_WINDOW_MS: '180000'
+          SKILL_JOB_LIMIT: '3'
           # Two lists, never one. SEND_ gates which PROSPECTS touch may mail;
           # NOTIFY_ gates which internal humans get forwards and whose replies
           # are obeyed as commands. Unset is nobody, so both stay empty until a

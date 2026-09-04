@@ -525,6 +525,10 @@ export async function run({
       patch.research = JSON.stringify({ ...parseResearch(row.research), won_amount: cmd.amount })
     } else if (cmd.command === 'notes') {
       const research = parseResearch(row.research)
+      // Notes are what the quote job runs on, so a note on a row still in
+      // conversation hands it to `quote`. A row already at or past quoting only
+      // gains the note.
+      if (!['quoting', 'quoted', 'won', 'onboarded', 'lost'].includes(row.stage)) patch.stage = 'quoting'
       patch.research = JSON.stringify({
         ...research,
         notes: [...new Set([...(research.notes ?? []), cmd.notes])].filter(Boolean),

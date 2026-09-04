@@ -137,6 +137,7 @@ export async function run({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   uuid = randomUUID,
   limit = 50,
+  jitterWindowMs = JITTER_WINDOW_MS,
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'touch', kind, detail)
   const result = { sent: 0, bumped: 0, callDue: 0, refused: 0, wouldSend: 0, skipped: 0, errors: 0 }
@@ -238,7 +239,7 @@ export async function run({
         to: row.email,
         claim,
         build,
-        beforeSend: () => sleep(jitterMs(random, JITTER_WINDOW_MS / rows.length)),
+        beforeSend: () => sleep(jitterMs(random, jitterWindowMs / rows.length)),
       })
 
       if (!claimed) {

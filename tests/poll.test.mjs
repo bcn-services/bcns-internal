@@ -494,6 +494,15 @@ test('a teammate stop suppresses the business', async () => {
   assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'teammate stop' }])
 })
 
+test('notes on a replied row move it to quoting', async () => {
+  const h = harness({ messages: [teammate({ text: 'notes: wants the starter tier' })], rows: [biz({ stage: 'replied' })] })
+
+  await poll(h.deps)
+
+  assert.equal(h.store.get('b1').stage, 'quoting')
+  assert.deepEqual(JSON.parse(h.store.get('b1').research).notes, ['wants the starter tier'])
+})
+
 test('notes append without moving the stage', async () => {
   const h = harness({ messages: [teammate({ text: 'notes owner wants a quote in October' })], rows: [biz({ stage: 'quoted' })] })
 

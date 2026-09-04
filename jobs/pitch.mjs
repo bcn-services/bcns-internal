@@ -69,7 +69,8 @@ export async function run({
   commitAndPush,
   osDir,
   dryRun = true,
-  limit = 25,
+  skillLimit,
+  limit = skillLimit ?? 25,
   mkTempDir = () => mkdtemp(join(tmpdir(), 'bcns-pitch-')),
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'pitch', kind, detail)
