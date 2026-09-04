@@ -102,6 +102,14 @@ export async function run({
 
   for (const b of businesses) {
     try {
+      // No website means nothing to read and no address to find. Per LANE that
+      // is a calling lead, not an error to retry every Monday forever.
+      if (!b.domain) {
+        await db.updateBusiness(sql, b.id, { stage: 'call_due' })
+        callDue++
+        await log('call_due', { business: b.id, reason: 'no domain' })
+        continue
+      }
       const home = await fetchPage(homepage(b))
       let contact = ''
       for (const path of contactPaths) {
