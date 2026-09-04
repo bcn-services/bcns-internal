@@ -264,7 +264,7 @@ job() { # name cron
     --uri "$URI" --http-method POST \
     --headers "Authorization=Bearer $PAT,Accept=application/vnd.github+json,User-Agent=bcns-clock" \
     --message-body "{\"ref\":\"$REF\",\"inputs\":{\"schedule\":\"$cron\"}}" \
-    --attempt-deadline 60s --max-retry-attempts 3 >/dev/null
+    --attempt-deadline 60s --max-retry-attempts 3 --format=none
   printf '  %s✓ %s%s %s (%s)\n' "$GREEN" "$verb" "$RESET" "$name" "$cron"
 }
 job clock-poll        '*/20 8-20 * * 1-5'

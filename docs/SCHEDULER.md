@@ -46,6 +46,6 @@ a human sends `job`. `gh run view <id> --json displayTitle` and the run's
 ## Rotating the PAT
 
 Fine-grained PATs expire. `gcloud scheduler jobs update http <job>
---update-headers "Authorization=Bearer $NEW"` for each job. Cloud Scheduler
+--update-headers "Authorization=Bearer $NEW" --format=none` for each job. Always pass `--format=none` to `jobs update`: the default output prints the headers, PAT included. Cloud Scheduler
 retries a failed POST (401 after expiry) and logs it; Monitoring alerts on
 `scheduler.googleapis.com/job/attempt_count` with a failed status if wanted.
