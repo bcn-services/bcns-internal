@@ -403,6 +403,47 @@ test('no rows and no transport each write their own skipped event', async () => 
   assert.match(noTransport.events.at(-1).detail.reason, /missing deps: transport/)
 })
 
+// Item 22 — the SMTP transport, per mailbox.
+test('a mailbox with no SMTP credentials is skipped, never sent through another mailbox\'s transport', async () => {
+  const A = mailbox({ address: 'a@x.test', domain: 'x.test' })
+  const B = mailbox({ address: 'b@y.test', domain: 'y.test' })
+  const h = harness({ mailboxes: [B, A], dryRun: false })
+
+  const constructedFor = []
+  const transport = async (mb) => {
+    constructedFor.push(mb.address)
+    return { sendMail: async (m) => h.sent.push(m) }
+  }
+  // Only A resolves credentials — B is exactly the "no SMTP_MAILBOX_*
+  // pair, and not the SMTP_USER/SMTP_PASS fallback address" case.
+  transport.hasCredentials = (address) => address === A.address
+  h.deps.transport = transport
+
+  const res = await touch(h.deps)
+
+  assert.equal(res.sent, 1)
+  assert.deepEqual(constructedFor, [A.address], 'transport was only ever built for the credentialed mailbox')
+  assert.equal(h.threads[0].mailbox, A.address)
+  const skip = h.events.find((e) => e.kind === 'skipped' && e.detail.mailbox === B.address)
+  assert.ok(skip, 'the uncredentialed mailbox got its own skipped event')
+  assert.match(skip.detail.reason, /credential/i)
+  // B's slot was never even claimed — the credential check runs before the claim.
+  assert.ok(!h.claims.some((c) => c.address === B.address))
+})
+
+test('no SMTP credential ever reaches a touch event, even one the transport itself holds', async () => {
+  const SECRET = 'sekrit-app-password-9f2c'
+  const h = harness({ dryRun: false })
+  h.deps.transport = async (mb) => ({
+    auth: { user: mb.address, pass: SECRET },
+    sendMail: async (m) => h.sent.push(m),
+  })
+  await touch(h.deps)
+  assert.equal(h.sent.length, 1, 'sanity: a send actually happened')
+  const blob = JSON.stringify(h.events)
+  assert.ok(!blob.includes(SECRET), 'a credential value leaked into a logged event')
+})
+
 test('buildMime omits In-Reply-To on a first send', () => {
   const raw = buildMime({
     from: 'a@b.test', to: 'c@d.test', subject: 's', text: 't', html: '<p>t</p>',

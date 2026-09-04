@@ -87,13 +87,17 @@ export function buildMime({ from, to, subject, text, html, messageId, date, inRe
 // The only place a transport is touched, and the only path to a send. The
 // refusal is its first statement, so an address off the list never reaches a
 // connection — and never burns a mailbox slot either, dry run or not.
+//
+// `transport(claimed)` — the claimed mailbox row, not a bare call — so the
+// transport that gets built is always the one for the mailbox that was
+// actually claimed. There is no other path to a mailer in this file.
 async function deliver({ transport, dryRun, allowed, to, claim, build }) {
   assertAllowed(to, allowed)
   const claimed = await claim()
   if (!claimed) return { claimed: null }
   const { raw, from, messageId } = build(claimed)
   if (dryRun) return { claimed, messageId, dryRun: true }
-  const mailer = await transport()
+  const mailer = await transport(claimed)
   await mailer.sendMail({ envelope: { from, to }, raw })
   return { claimed, messageId }
 }
@@ -195,6 +199,13 @@ export async function run({
           const mb = mailboxes[(rr + i) % mailboxes.length]
           const cap = warmedCap({ dailyCap: mb.daily_cap, warmedAt: mb.warmed_at, now })
           if (cap <= 0) continue
+          // A mailbox with no resolvable credentials is skipped exactly like
+          // one at cap — tried, logged, moved past — and is NEVER sent
+          // through with another mailbox's transport instead.
+          if (typeof transport?.hasCredentials === 'function' && !transport.hasCredentials(mb.address)) {
+            await log('skipped', { mailbox: mb.address, reason: 'no SMTP credentials configured for this mailbox' })
+            continue
+          }
           const [got] = dryRun ? [mb] : ((await db.claimMailboxSlot(sql, { address: mb.address, cap })) ?? [])
           if (got) {
             rr = (rr + i + 1) % mailboxes.length
