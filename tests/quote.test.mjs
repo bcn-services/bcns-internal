@@ -88,10 +88,11 @@ test('the /quote command names the slug, the notes file and --yes, verbatim', as
     )
     assert.equal(calls[0].cwd, '/w/os')
 
-    // The notes file carries Brandon's notes and nothing invented.
+    // The notes file carries the row's own facts, then Brandon's notes, and
+    // nothing invented (no phone on the fixture → no Phone line).
     assert.equal(
       await readFile(join(h.dirs[0], 'notes.md'), 'utf8'),
-      '- standard build, ~$4k\n- wants online booking\n'
+      '- Business: Acme Roofing\n- Contact: Dana Acme\n- Email: dana@acme.example\n- Where: Danbury, CT\n- standard build, ~$4k\n- wants online booking\n'
     )
 
     assert.deepEqual(h.pushes, [

@@ -59,7 +59,19 @@ export async function run({
       // only thing the headless run is told beyond the slug.
       const dir = await mkTempDir()
       const notesPath = join(dir, 'notes.md')
-      await writeFile(notesPath, `${notesOf(research).map((n) => `- ${n}`).join('\n')}\n`)
+      // The row's own facts go in first: the skill fills the quote's client
+      // table from these lines, and a quote that says "(not provided)" for a
+      // contact the pipeline already knows reads as carelessness.
+      const header = [
+        ['Business', row.name],
+        ['Contact', research.owner_name],
+        ['Email', row.email],
+        ['Phone', row.phone],
+        ['Where', [row.town, row.state].filter(Boolean).join(', ')],
+      ]
+        .filter(([, v]) => v)
+        .map(([k, v]) => `- ${k}: ${v}`)
+      await writeFile(notesPath, `${[...header, ...notesOf(research).map((n) => `- ${n}`)].join('\n')}\n`)
 
       command = `/quote ${slug} --notes ${notesPath} --yes`
 

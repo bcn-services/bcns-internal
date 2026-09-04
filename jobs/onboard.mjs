@@ -20,7 +20,7 @@
 
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, relative } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 
 import { parseResearch, claimSlug } from './pitch.mjs'
 import { pushOrSkip } from '../lib/osrepo.mjs'
@@ -48,14 +48,18 @@ export function briefMarkdown(row, research = {}) {
 }
 
 // Only the frontmatter's own `status:` line. A `status: lead` in the body of
-// the README is prose about something else and is left alone.
+// the README is prose about something else and is left alone. `active` is
+// what /new-client-repo stamps when it regenerates the README; onboarding is
+// the moment the build starts, so both move to in-progress.
 export function bumpReadmeStatus(text) {
   return String(text).replace(/^(---\r?\n)([\s\S]*?)(\r?\n---)/, (_all, open, front, close) =>
-    open + front.replace(/^status:[ \t]*lead[ \t]*$/m, 'status: in-progress') + close
+    open + front.replace(/^status:[ \t]*(lead|active)[ \t]*$/m, 'status: in-progress') + close
   )
 }
 
-const relativise = (osDir, path) => (path ? relative(osDir, path) || path : null)
+// The skills print paths relative to their own cwd (osDir) as often as
+// absolute ones; resolve against osDir, never process.cwd().
+const relativise = (osDir, path) => (path ? relative(osDir, resolve(osDir, path)) || path : null)
 
 export async function run({
   sql,
@@ -146,8 +150,8 @@ export async function run({
       const after = bumpReadmeStatus(before)
       if (after !== before) await writeFile(readmePath, after)
 
-      // Absolute, like the paths the skills report — these go to `git add`.
-      const paths = [...new Set([...repoWrote, ...intakeWrote, readmePath])]
+      // Absolute — these go to `git add`. The skills report relative paths too.
+      const paths = [...new Set([...repoWrote, ...intakeWrote, readmePath].map((p) => resolve(osDir, p)))]
       const push = await pushOrSkip({
         commitAndPush,
         paths,
