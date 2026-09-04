@@ -635,6 +635,41 @@ against a fake `runSkill` only — that is by design, not a gap.
       one PR, not two
   status: not started
 
+- task: Make the SMTP transport per-mailbox. `jobs/run.mjs` built one global
+    nodemailer transport from `SMTP_USER`/`SMTP_PASS` and `jobs/touch.mjs`'s
+    `deliver()` called `transport()` with no argument, so every send used
+    whichever transport happened to exist regardless of which mailbox was
+    claimed. `touch.mjs` now calls `transport(claimed)` with the claimed
+    mailboxes row; `run.mjs` resolves SMTP credentials per mailbox address
+    from `SMTP_MAILBOX_<KEY>_USER`/`_PASS` (`KEY` = the address upper-cased,
+    non-alphanumerics collapsed to `_`), caching one transport per address. A
+    mailbox with no resolvable credentials is skipped with its own `skipped`
+    event, never sent through another mailbox's transport. A documented
+    fallback (`SMTP_USER`/`SMTP_PASS` when the mailbox address equals
+    `SMTP_MAILBOX_DEFAULT` or `MAIL_FROM`) keeps the live single-mailbox
+    pipeline working with zero new secrets. Seeds a placeholder second
+    mailbox row (`0024_second_outreach_mailbox.sql`, `status = 'paused'`) and
+    corrects `docs/NOTIFICATIONS.md`'s stale separate-reputations claim.
+  guardrails:
+    - Never touch the mailboxes schema, the round-robin cursor, `claimMailboxSlot`,
+      `warmedCap`, or `build()`'s from/Message-ID logic
+    - No hardcoded `@bcn-services.com` address survives as a credential default
+      in `run.mjs`
+    - A missing per-mailbox credential never falls back to another mailbox's
+      transport
+    - No SMTP credential ever reaches a logged event's detail
+  done when:
+    - A unit test asserts a fake transport factory is constructed with the
+      auth user for the claimed mailbox, never another one's
+    - A unit test asserts a mailbox with no resolvable credentials writes its
+      own `skipped` event and is never sent through another mailbox's transport
+    - A unit test asserts no literal `@bcn-services.com` credential default
+      survives in the mailbox-transport section of `run.mjs`
+    - A unit test asserts a credential value held by the transport never
+      appears in a logged event's JSON
+  caution: true
+  status: done
+
 ---
 
 ## Found during the 2026-08-31 autonomous run — needs an item

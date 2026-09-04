@@ -17,10 +17,17 @@ Workspace mailbox carries that volume — a handful of messages a day against a
 Resend still has a job, and it is a different one. **Cold outreach to leads must
 never go through the bot mailbox.** Google's terms prohibit unsolicited bulk
 mail, and a complaint spiral against `bcn-services.com` would take down the
-mailbox that carries these internal notices along with it. When outreach sending
-is built, it gets its own subdomain and its own DKIM, exactly so the two
-reputations cannot touch. `lib/mailer.ts` already has the seam for a second
-transport.
+mailbox that carries these internal notices along with it.
+
+**Correction (2026-08-30, LANE.md item 22):** outreach and internal mail do
+**not** have separate reputations. Both live on the same Google Workspace
+seat — one mailbox, two aliases (`outreach@send.bcn-services.com` for cold
+outreach, `bot@bcn-services.com` for internal notify/receive) — sharing one
+app password. The `send.` subdomain gives outreach its own DKIM selector, but
+that isolates *deliverability signals*, not the underlying sending
+reputation: a suppression spiral against either alias risks the seat both
+depend on. This is a decided tradeoff (one Workspace seat instead of two),
+not an oversight — see per-mailbox credentials below.
 
 ## What is already built
 
@@ -123,6 +130,31 @@ sign-in, and step 3 produces a credential no agent may handle.
 
 `SMTP_PASS` is already in the redaction list in `lib/agent/verbs/types.ts#scrub`,
 so it cannot surface in a logged error message.
+
+## Per-mailbox SMTP credentials (item 22)
+
+`jobs/run.mjs` builds one nodemailer transport per mailbox address instead of
+one global transport, so a second outreach mailbox (a future domain, or the
+placeholder row seeded by `0024_second_outreach_mailbox.sql`) can carry its
+own app password without touching every other mailbox's credentials — and a
+mailbox with no credentials configured is skipped, never silently sent
+through another mailbox's transport.
+
+Naming scheme: `SMTP_MAILBOX_<KEY>_USER` / `SMTP_MAILBOX_<KEY>_PASS`, where
+`KEY` is the mailbox's `address` upper-cased with every run of
+non-alphanumeric characters collapsed to a single `_`. For example:
+
+```
+outreach@send.bcn-services.com  ->  SMTP_MAILBOX_OUTREACH_SEND_BCN_SERVICES_COM_USER
+                                     SMTP_MAILBOX_OUTREACH_SEND_BCN_SERVICES_COM_PASS
+```
+
+**Fallback (keeps today's single-mailbox pipeline working with zero new
+secrets):** if a mailbox has no `SMTP_MAILBOX_<KEY>_*` pair, and its address
+equals `SMTP_MAILBOX_DEFAULT` (or, absent that, `MAIL_FROM`), the existing
+top-level `SMTP_USER`/`SMTP_PASS` are used for it. Any other uncredentialed
+mailbox gets neither — it is skipped with its own `skipped` event, never
+someone else's pair.
 
 ## Failure behaviour, as built
 
