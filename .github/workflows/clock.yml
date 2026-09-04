@@ -125,6 +125,10 @@ jobs:
           IMAP_PASS: ${{ secrets.IMAP_PASS }}
           # Onboard creates the client repo under bcn-services with `gh`.
           GH_TOKEN: ${{ secrets.OS_TOKEN }}
+          # /new-client-repo's preflight: a classic PAT with read:packages so the
+          # new client repo's `pnpm install` can reach GitHub Packages. gh itself
+          # keeps using GH_TOKEN, which wins over GITHUB_TOKEN.
+          GITHUB_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
           # Fit one run inside the job timeout: touch spreads its sends over
           # this window, and the skill jobs take at most this many rows a tick.
           JITTER_WINDOW_MS: '180000'

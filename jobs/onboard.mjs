@@ -134,10 +134,15 @@ export async function run({
       }
 
       command = `/new-client-repo ${slug} --brief ${briefPath} --yes`
-      const { repo, wrote: repoWrote } = await runSkill({ command, cwd: osDir })
+      const { repo, wrote: repoWrote, text, denials } = await runSkill({ command, cwd: osDir })
       // No REPO: line means the repo was not created. Marking the row now would
-      // strand it forever with a null repo_url.
-      if (!repo) throw new Error(`/new-client-repo printed no REPO: line for ${slug}`)
+      // strand it forever with a null repo_url. What the skill said is the
+      // only clue to why, so it rides along on the error.
+      if (!repo) {
+        throw new Error(
+          `/new-client-repo printed no REPO: line for ${slug}; denials=${denials ?? 0}; said: ${String(text ?? '').slice(0, 400)}`
+        )
+      }
 
       command = `/intake ${slug} --yes`
       const { wrote: intakeWrote } = await runSkill({ command, cwd: osDir })
