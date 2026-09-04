@@ -149,6 +149,10 @@ outreach@send.bcn-services.com  ->  SMTP_MAILBOX_OUTREACH_SEND_BCN_SERVICES_COM_
                                      SMTP_MAILBOX_OUTREACH_SEND_BCN_SERVICES_COM_PASS
 ```
 
+`SMTP_AUTH_USER` (optional) is the account that logs in when `SMTP_USER` is a
+"send mail as" alias — an alias cannot authenticate, the seat that owns the
+app password can. It applies to both paths below.
+
 **Fallback (keeps today's single-mailbox pipeline working with zero new
 secrets):** if a mailbox has no `SMTP_MAILBOX_<KEY>_*` pair, and its address
 equals `SMTP_MAILBOX_DEFAULT` (or, absent that, `MAIL_FROM`), the existing

@@ -118,6 +118,8 @@ jobs:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
+          # The seat that owns the app password; SMTP_USER is a send-as alias.
+          SMTP_AUTH_USER: ${{ secrets.SMTP_AUTH_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           # Polling. Same app password as SMTP; no IMAP_PASS means poll skips.
           IMAP_PASS: ${{ secrets.IMAP_PASS }}

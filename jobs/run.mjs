@@ -65,6 +65,11 @@ function bareAddress(value) {
 //
 // Anything else is `null`. There is no third path: a mailbox matching
 // neither has no credentials, full stop — never another mailbox's pair.
+// SMTP_USER is the outreach address; a Workspace "send as" alias cannot log
+// in (Google answers 535 BadCredentials), so SMTP_AUTH_USER names the seat
+// that owns the app password when the two differ. Never a hardcoded address.
+const loginUser = (env) => env.SMTP_AUTH_USER || env.SMTP_USER
+
 export function resolveMailboxAuth(address, env = process.env) {
   const key = mailboxEnvKey(address)
   const user = env[`SMTP_MAILBOX_${key}_USER`]
@@ -73,7 +78,7 @@ export function resolveMailboxAuth(address, env = process.env) {
 
   const fallbackAddress = bareAddress(env.SMTP_MAILBOX_DEFAULT || env.MAIL_FROM)
   if (env.SMTP_USER && env.SMTP_PASS && fallbackAddress && fallbackAddress === bareAddress(address)) {
-    return { user: env.SMTP_USER, pass: env.SMTP_PASS }
+    return { user: loginUser(env), pass: env.SMTP_PASS }
   }
   return null
 }
@@ -109,7 +114,7 @@ export function createMailboxTransport(env = process.env, createTransport = defa
     const auth = address
       ? resolveMailboxAuth(address, env)
       : env.SMTP_USER && env.SMTP_PASS
-        ? { user: env.SMTP_USER, pass: env.SMTP_PASS }
+        ? { user: loginUser(env), pass: env.SMTP_PASS }
         : null
     if (!auth) throw new MissingMailboxCredentials(address ?? '(default)')
     const built = await createTransport({ host, port, secure: port === 465, auth })
