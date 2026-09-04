@@ -13,8 +13,7 @@ on:
     # TEST WINDOW 2026-09-04 (trybcns.com live funnel) — restore before merge:
     #   poll  '*/20 8-20 * * 1-5'
     #   touch '0 14 * * 1-5'
-    - cron: '*/20 * * * *'        # poll  (test window)
-    - cron: '5,35 * * * *'        # touch (test window)
+    - cron: '*/5 * * * *'         # poll set + touch, every landed tick (test window; GitHub's floor)
     - cron: '0 13 * * 1'          # source, then qualify
     - cron: '30 13 * * 1-5'       # personalize
   workflow_dispatch:
@@ -37,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        schedule: ${{ (github.event.schedule == '*/20 * * * *' || github.event.schedule == '5,35 * * * *') && fromJSON('["*/20 8-20 * * 1-5","0 14 * * 1-5"]') || fromJSON(format('["{0}"]', github.event.schedule)) }}
+        schedule: ${{ github.event.schedule == '*/5 * * * *' && fromJSON('["*/20 8-20 * * 1-5","0 14 * * 1-5"]') || fromJSON(format('["{0}"]', github.event.schedule)) }}
     timeout-minutes: 30
     permissions:
       contents: write   # the source run commits the heartbeat file

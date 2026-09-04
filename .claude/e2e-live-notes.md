@@ -87,3 +87,4 @@ Durgadevi email/chat case (#75114833).
 - 21:22Z test window opened: repo default_branch main→e2e-live (cron fires only on default), DRY_RUN true→false. Both restore at cleanup.
 - 22:58Z no scheduled clock run since 19:08Z (main's own crons had already stopped firing before the branch switch) → GitHub scheduler lag. Pushed empty commit 415a607 to re-register; still cron-only, no dispatch.
 - 23:05Z scheduler history on main shows ~6 landed */20 ticks per day, not 39 → GitHub drops most ticks here. Test-window change: clock.yml matrix runs poll-set + touch on every landed tick (workflow-only, still cron-driven). Restore with the crons.
+- 23:12Z Nate: raise tick rate for the window. Test crons collapsed to a single '*/5 * * * *' (GitHub's minimum) → matrix runs poll set + touch on each landed tick.
