@@ -47,6 +47,15 @@ jobs:
       - name: Install the Claude Code CLI
         run: npm i -g @anthropic-ai/claude-code
 
+      # Prove the CLI can answer before a job spends its tick on it. Prints
+      # only the exit code and the envelope — never the token.
+      - name: Claude CLI smoke test
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          claude --version
+          claude -p 'reply with the single word ok' --model sonnet --output-format json < /dev/null || echo "claude exit $?"
+
       # ~/os, for the skills the jobs shell out to (/pitch, /quote) and the
       # voice rules personalize reads. bcns-os is private and the bcn-services
       # org disables deploy keys, so this clones over a fine-grained PAT.
