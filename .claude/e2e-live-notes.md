@@ -47,3 +47,36 @@ hand before the call. Pitch now selects `call_due` and `replied` rows
 (`PITCH_STAGES`); it runs before notify on the same tick, so `meetingEmail`
 prints `Pitch folder:` like the call task does. Tests 369 pass. Not fired live
 yet — the next replied row on a live tick proves it.
+
+## 2026-09-04 follow-up: trybcns.com Workspace domain-conflict recovery
+
+Root cause confirmed live via Google Workspace support chat (agent Durgadevi,
+case #75114833): `trybcns.com` is already claimed by an orphaned/abandoned
+Google Workspace org, blocking bcn-services.com from adding it as a User alias
+domain ("This domain name has already been used as an alias or domain").
+
+Self-serve fix in progress via Google's own recovery tool (not the Durgadevi
+case): `toolbox.googleapps.com/apps/recovery/ownership` — generates a
+reference/case number, then verifies domain ownership via a DNS TXT record
+(`google-gws-recovery-domain-verification=<case>` at host `@`). New case
+#75117529 generated (contact nseluga@bcn-services.com). TXT record added at
+Namecheap and confirmed live via `dig +short TXT trybcns.com @8.8.8.8` and
+`@1.1.1.1` — correct and propagated.
+
+Clicking "CHECK AGAIN" 503'd on the verification RPC
+(`csp.withgoogle.com/csp/apps-toolbox-safehttp`) for two retries — transient
+backend flakiness, not a DNS/config issue (TXT confirmed live via dig). Third
+retry (2026-09-04, ~13:20Z) succeeded: page advanced to
+`/apps/recovery/domain_in_use`, step 4 "Complete your request", offering
+"Request to free up domain (Recommended)" (renames/removes the orphaned
+existing account) or "Request to contact admins" (just emails them, closes
+request). Awaiting Nate's go-ahead before clicking SUBMIT — it's irreversible
+for the orphaned account. Fallback if this path stalls: continue the
+Durgadevi email/chat case (#75114833).
+
+## 2026-09-04 trybcns.com cutover (orchestrated run)
+- Recovery submit landed: Google mail "[#75117529] Domain in use trybcns.com" 13:08 PT, "reply within one business day". Page URL that works: toolbox.googleapps.com/apps/recovery/domain_in_use?domain=trybcns.com&case=75117529&flow=contested (bare /ownership 400s).
+- The "orphaned org" is NOT a stranger's: it is a Workspace trial signed up 2026-09-03 20:22 PT for trybcns.com, admin outreach@trybcns.com, recovery contact nseluga@bcn-services.com, trial ends 2026-09-17, first bill 2026-10-01. Support's "abandoned" framing was wrong. Fastest route: sign in as that admin, cancel subscription, delete the account; the pending free-up request does the same within a business day.
+- Decision (Nate, 2026-09-04): KEEP the trybcns.com Workspace org as a separate sending org. Merging it as an alias domain would put bcn-services.com's reputation/suspension exposure in the same account; separate org isolates it. Subscription stays. NOTIFICATIONS.md step 1 (send-as alias) and the SMTP_USER/MAIL_FROM flip no longer apply; step 3 mailbox-swap SQL still does. Case #75117529 free-up request must be withdrawn (it would delete this org).
+- Creds for outreach@trybcns.com: 2SV on, app password minted, four repo secrets SMTP/IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_USER/PASS set 20:46Z via /wizard (also in .env.local). Live IMAP login (INBOX exists=5) and SMTP AUTH both OK. Zero code change needed: resolveMailboxAuth + buildDeps already key per-mailbox env. clock.yml patched to forward the four secrets.
+- DKIM generated in trybcns admin console (selector google, 2048) and published at Namecheap host google._domainkey 2026-09-04 ~21:00Z; awaiting propagation before START AUTHENTICATION.

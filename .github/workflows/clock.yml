@@ -121,10 +121,13 @@ jobs:
           # The seat that owns the app password; SMTP_USER is a send-as alias.
           SMTP_AUTH_USER: ${{ secrets.SMTP_AUTH_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          # Second outreach domain (migration 0025). Same seat, same app
-          # password, keyed per item 22 so the mailbox has its own pair.
+          # Second outreach domain (migration 0025): its own Workspace org and
+          # seat, so cold mail never authenticates through the bcn-services
+          # account. Keyed per item 22 (SMTP) and item 23 (IMAP).
           SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_USER: ${{ secrets.SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_USER }}
           SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS: ${{ secrets.SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS }}
+          IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_USER: ${{ secrets.IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_USER }}
+          IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS: ${{ secrets.IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS }}
           # Polling. Same app password as SMTP; no IMAP_PASS means poll skips.
           IMAP_PASS: ${{ secrets.IMAP_PASS }}
           # Onboard creates the client repo under bcn-services with `gh`.
