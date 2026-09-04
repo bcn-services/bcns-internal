@@ -106,7 +106,16 @@ export async function run({
       // The skill's documented `--facts` input is the businesses row plus its
       // research, not the fact strings alone: a call script needs the phone,
       // the town and the trade as much as it needs what qualify noticed.
-      await writeFile(factsPath, JSON.stringify({ ...row, research }))
+      await writeFile(
+        factsPath,
+        JSON.stringify({
+          ...row,
+          has_website: Boolean(row.domain),
+          rating: research.rating ?? null,
+          review_count: research.review_count ?? null,
+          research,
+        })
+      )
       await writeFile(pageTextPath, String(research.page_text ?? ''))
 
       command = `/pitch ${slug} --facts ${factsPath} --page-text ${pageTextPath} --no-browse`

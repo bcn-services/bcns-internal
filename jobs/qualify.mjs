@@ -57,6 +57,18 @@ export function parseAnswer(answer) {
   }
 }
 
+function parseResearch(research) {
+  if (!research) return {}
+  if (typeof research === 'string') {
+    try {
+      return JSON.parse(research)
+    } catch {
+      return {}
+    }
+  }
+  return research
+}
+
 export async function run({
   sql,
   db,
@@ -126,6 +138,7 @@ export async function run({
           : null
 
       const research = JSON.stringify({
+        ...parseResearch(b.research),
         facts,
         fit: parsed.fit ?? null,
         reason: parsed.reason ?? null,

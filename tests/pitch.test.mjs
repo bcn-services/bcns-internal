@@ -97,6 +97,10 @@ test('the /pitch command names the slug and both temp files, verbatim', async ()
     assert.equal(facts.name, 'Acme Roofing')
     assert.equal(facts.phone ?? null, null)
     assert.equal(facts.town, 'Danbury')
+    // The skill contract names these three at the top level; null beats absent.
+    assert.equal(facts.has_website, Boolean(facts.domain))
+    assert.equal(facts.rating, null)
+    assert.equal(facts.review_count, null)
     // research arrives parsed, not as a JSON string inside a JSON file.
     assert.deepEqual(facts.research.facts, ['no online booking', 'GAF certified'])
     assert.equal(facts.research.fit, 'good')
