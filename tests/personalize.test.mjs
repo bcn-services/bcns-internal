@@ -15,6 +15,8 @@ const FACTS = ['Family run since 1998', 'Serves Milford and Stratford', 'GAF cer
 const REACTION = 'that is a long time to keep a family business going'
 const ANSWER = `FACT: ${FACTS[0]}\nREACTION: ${REACTION}`
 const SENTENCE = composeCompliment('Acme Roofing 1', FACTS[0], REACTION)
+// render() hard-wraps the opener at ~78 cols, so assertions compare unwrapped text.
+const unwrap = (s) => s.replace(/\n/g, ' ')
 
 function biz(i, over = {}) {
   return {
@@ -56,7 +58,7 @@ test('render fills every slot and leaves the fixed blocks byte-identical', () =>
   const out = render({ name: 'Acme Roofing', ownerName: 'Dana', email: 'dana@acme.test', sentence: SENTENCE })
   assert.ok(out.startsWith('Subject: a question about Acme Roofing\n'))
   assert.match(out, /Hi Dana,/)
-  assert.ok(out.includes(`doing well. ${SENTENCE}`))
+  assert.ok(unwrap(out).includes(`doing well. ${SENTENCE}`))
   assert.ok(out.includes(SIGNATURE))
   assert.ok(out.endsWith('Reply "stop" and I won\'t write again.\n'))
   for (const slot of ['BUSINESS_NAME', 'OWNER_NAME', 'NATE_SIGNATURE', '>>> GENERATED <<<']) {
@@ -165,7 +167,7 @@ test('the draft is stored beside the existing research keys, not over them', asy
   assert.deepEqual(stored.facts, FACTS)
   assert.equal(stored.fit, 'good')
   assert.equal(stored.reason, 'no site')
-  assert.ok(stored.draft.includes(SENTENCE))
+  assert.ok(unwrap(stored.draft).includes(SENTENCE))
 })
 
 test('missing voice rules log a skipped reason and the run continues', async () => {

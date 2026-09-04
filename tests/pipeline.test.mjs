@@ -538,7 +538,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
   row = p.row('Acme Roofing')
   assert.equal(row.stage, 'drafted')
   assert.match(row.research.draft, /^Subject: a question about Acme Roofing\n\n/)
-  assert.match(row.research.draft, /I noticed Acme Roofing is family run since 1998, and that is a long run in this trade\./)
+  assert.match(row.research.draft.replace(/\n/g, ' '), /I noticed Acme Roofing is family run since 1998, and that is a long run in this trade\./)
   // personalize merges into `research`; it must not clobber qualify's keys.
   assert.equal(row.research.facts.length, 3)
   assert.equal(row.research.fit, 'good')
