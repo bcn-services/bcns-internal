@@ -256,13 +256,14 @@ step "Repository permissions: Actions → Read and write. Nothing else. Generate
 ask_secret PAT "Paste the PAT:"
 [[ -n "$PAT" ]] || { warn "no PAT, stopping"; exit 1; }
 job() { # name cron
-  local name="$1" cron="$2" verb=create
-  gcloud scheduler jobs describe "$name" --project "$PROJECT" --location "$LOCATION" >/dev/null 2>&1 && verb=update
+  local name="$1" cron="$2" verb=create hflag=--headers
+  # `update http` names the flag differently; its output also prints the headers, hence --format=none.
+  gcloud scheduler jobs describe "$name" --project "$PROJECT" --location "$LOCATION" >/dev/null 2>&1 && { verb=update; hflag=--update-headers; }
   gcloud scheduler jobs "$verb" http "$name" \
     --project "$PROJECT" --location "$LOCATION" \
     --schedule "$cron" --time-zone UTC \
     --uri "$URI" --http-method POST \
-    --headers "Authorization=Bearer $PAT,Accept=application/vnd.github+json,User-Agent=bcns-clock" \
+    "$hflag" "Authorization=Bearer $PAT,Accept=application/vnd.github+json,User-Agent=bcns-clock" \
     --message-body "{\"ref\":\"$REF\",\"inputs\":{\"schedule\":\"$cron\"}}" \
     --attempt-deadline 60s --max-retry-attempts 3 --format=none
   printf '  %s✓ %s%s %s (%s)\n' "$GREEN" "$verb" "$RESET" "$name" "$cron"
