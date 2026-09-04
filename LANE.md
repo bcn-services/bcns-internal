@@ -16,7 +16,8 @@ variables — and blocks nothing.
 **Status 2026-09-01:** items 1–14 merged (PR #3); PR #4 `pipeline-fixes` holds
 the daily-cap reset, the qualify crash fix and migrations 0019–0021. Nothing has
 run live. Design change 2026-09-01: **there is no approval step.** `touch` sends
-on schedule; a `call_due` row gets a `/pitch` folder; Brandon's `notes` reply
+on schedule; a `call_due` or `replied` row gets a `/pitch` folder (2026-09-04:
+replied too, so the meeting mail carries the script); Brandon's `notes` reply
 runs `/quote`; his `signed` reply with the PDF runs `/new-client-repo` +
 `/intake` and mails Nate. Every artifact lands in `bcns-os` under
 `clients/<slug>/`; mail carries paths and instructions, never attachments.
@@ -523,7 +524,8 @@ against a fake `runSkill` only — that is by design, not a gap.
   status: done
 
 - task: Build the pitch job — `jobs/pitch.mjs`, run on the poll tick. For each
-    row from `selectable_businesses` at `call_due` with no `research.pitch_path`:
+    row from `selectable_businesses` at `call_due` or `replied` (added 2026-09-04)
+    with no `research.pitch_path`:
     set `os_slug` if null (kebab of name + city; on unique-violation append the
     last 6 chars of the place id); write `research.facts` as JSON and the stored
     page text as a `.txt` to a temp dir; call
@@ -635,7 +637,67 @@ against a fake `runSkill` only — that is by design, not a gap.
       one PR, not two
   status: not started
 
+- task: Make the SMTP transport per-mailbox. `jobs/run.mjs` built one global
+    nodemailer transport from `SMTP_USER`/`SMTP_PASS` and `jobs/touch.mjs`'s
+    `deliver()` called `transport()` with no argument, so every send used
+    whichever transport happened to exist regardless of which mailbox was
+    claimed. `touch.mjs` now calls `transport(claimed)` with the claimed
+    mailboxes row; `run.mjs` resolves SMTP credentials per mailbox address
+    from `SMTP_MAILBOX_<KEY>_USER`/`_PASS` (`KEY` = the address upper-cased,
+    non-alphanumerics collapsed to `_`), caching one transport per address. A
+    mailbox with no resolvable credentials is skipped with its own `skipped`
+    event, never sent through another mailbox's transport. A documented
+    fallback (`SMTP_USER`/`SMTP_PASS` when the mailbox address equals
+    `SMTP_MAILBOX_DEFAULT` or `MAIL_FROM`) keeps the live single-mailbox
+    pipeline working with zero new secrets. Seeds a placeholder second
+    mailbox row (`0024_second_outreach_mailbox.sql`, `status = 'paused'`) and
+    corrects `docs/NOTIFICATIONS.md`'s stale separate-reputations claim.
+  guardrails:
+    - Never touch the mailboxes schema, the round-robin cursor, `claimMailboxSlot`,
+      `warmedCap`, or `build()`'s from/Message-ID logic
+    - No hardcoded `@bcn-services.com` address survives as a credential default
+      in `run.mjs`
+    - A missing per-mailbox credential never falls back to another mailbox's
+      transport
+    - No SMTP credential ever reaches a logged event's detail
+  done when:
+    - A unit test asserts a fake transport factory is constructed with the
+      auth user for the claimed mailbox, never another one's
+    - A unit test asserts a mailbox with no resolvable credentials writes its
+      own `skipped` event and is never sent through another mailbox's transport
+    - A unit test asserts no literal `@bcn-services.com` credential default
+      survives in the mailbox-transport section of `run.mjs`
+    - A unit test asserts a credential value held by the transport never
+      appears in a logged event's JSON
+  caution: true
+  status: done
+
 ---
+
+- task: Let `poll` read every outreach mailbox, not one. Each outreach account
+    receives its own replies, so a single IMAP connection sees only one mailbox's
+    threads. `createImap` in `jobs/run.mjs:336` is already a parameterized factory;
+    make `deps.imap` a list — the internal bot account plus one per outreach
+    mailbox — and have `poll` merge the streams before its existing routing runs.
+    The `to`-header split at `jobs/poll.mjs:356` that separates outreach replies
+    from internal mail keeps working once merged; it is only the single-connection
+    assumption that breaks.
+  guardrails:
+    - One source failing to connect never silently drops the others — write an
+      `error` event naming the account that failed and process the rest
+    - Deduplication stays keyed on `message_id`, so a message visible on two
+      connections is processed exactly once
+    - `NOTIFY_ALLOWED_RECIPIENTS` and `SEND_ALLOWED_RECIPIENTS` keep their existing
+      separate meanings and neither is widened
+  done when:
+    - A unit test asserts two IMAP sources each carrying one reply produce two
+      processed replies, each recorded against the right business
+    - A unit test asserts the same `message_id` arriving from two sources is
+      processed once
+    - A unit test asserts one source throwing yields an `error` event naming it
+      while the other source's messages still process
+  caution: true
+  status: not started
 
 ## Found during the 2026-08-31 autonomous run — needs an item
 - ~~**`NOTIFY_ALLOWED_RECIPIENTS` does double duty, and going live weaponises it.**~~
@@ -686,6 +748,28 @@ against a fake `runSkill` only — that is by design, not a gap.
   increments before the transport runs; a throw leaves the increment. Fails
   safe — it under-sends, never over-sends — so it is a lower priority than the
   reset above.
+
+- **Cold outreach authenticates as Nate's own Workspace account — blocks going
+  live.** `jobs/run.mjs:154` auths SMTP as `nseluga@bcn-services.com`;
+  `outreach@send.bcn-services.com` is only a Gmail "send mail as" alias, and an
+  alias cannot authenticate. So the reputation separation `docs/NOTIFICATIONS.md`
+  promised ("its own subdomain and its own DKIM, exactly so the two reputations
+  cannot touch") does not exist: one Workspace account carries both, Google signs
+  DKIM with the primary domain, and `send.bcn-services.com` shares the
+  organizational domain with `bcn-services.com`. Google Workspace ToS prohibits
+  generating or facilitating unsolicited bulk commercial email, and suspension can
+  be immediate and permanent. Widening `SEND_ALLOWED_RECIPIENTS` to a single
+  stranger on the current config is the moment this goes live. Verified against
+  Google's sender requirements (spam rate must stay under 0.30%) and 2026
+  deliverability guidance (30-day domain aging floor; 30-50/day/mailbox ceiling,
+  so the existing `daily_cap` of 20 and the `warmedCap` ramp are already fine —
+  volume is not the defect, the account is).
+
+  The fix is now two items above: per-mailbox SMTP transport, and per-mailbox
+  IMAP for `poll`. Both are blocked on a human first registering a separate
+  domain (not a subdomain) and creating a real Workspace user on it — a
+  30-day domain-aging floor runs before any send, so registration is the long
+  pole, not the code.
 
 ## Not yet specified
 

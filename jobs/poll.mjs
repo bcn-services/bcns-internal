@@ -23,7 +23,7 @@ import { assertAllowed, buildMime, RecipientRefused } from './touch.mjs'
 import { SIGNATURE, toHtml } from '../lib/template.mjs'
 import { pushOrSkip } from '../lib/osrepo.mjs'
 import { claimSlug } from './pitch.mjs'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
@@ -46,6 +46,20 @@ export const MAX_ATTEMPTS = 3
 export const MAX_CONTRACT_BYTES = 10 * 1024 * 1024
 
 export const CONTRACT_MIME = 'application/pdf'
+
+// Draft PRs opened per day, across every fingerprint. Read from `events`
+// (see `db.triageOpenedToday`), so there is no counter to reset at midnight.
+export const TRIAGE_DAILY_CAP = 3
+
+// Normalized subject + first body line, hashed. Loose on purpose: two alerts
+// that read the same to a human should collapse to one PR, not two — a
+// fingerprint keyed on raw bytes would miss the retried copy an alerting tool
+// sends seconds later with a different message id.
+export function alertFingerprint(message = {}) {
+  const subject = String(message.subject ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+  const firstLine = stripQuoted(message.text).split('\n')[0]?.trim().toLowerCase().replace(/\s+/g, ' ') ?? ''
+  return createHash('sha256').update(`${subject}\n${firstLine}`).digest('hex')
+}
 
 // --- quoted regions --------------------------------------------------------
 // Truncate at the first quote marker, then drop any surviving `>` lines. Kept
@@ -278,6 +292,8 @@ export async function run({
   notifyFrom = 'bot@bcn-services.com',
   outreachAddress = 'outreach@send.bcn-services.com',
   botAddress = 'bot@bcn-services.com',
+  alertsAddress = 'alerts@bcn-services.com',
+  github = null,
   osDir = null,
   commitAndPush = null,
   dryRun = true,
@@ -285,12 +301,26 @@ export async function run({
   uuid = randomUUID,
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'poll', kind, detail)
-  const result = { read: 0, suppressed: 0, replied: 0, commands: 0, forwarded: 0, auto: 0, errors: 0 }
+  const result = { read: 0, suppressed: 0, replied: 0, commands: 0, forwarded: 0, auto: 0, errors: 0, triaged: 0 }
+  // Alert events log under job 'triage', not 'poll' — the daily cap and the
+  // dedupe-hit trail are this job's own record, independent of the poller's.
+  const logTriage = (kind, detail) => db.logEvent(sql, 'triage', kind, detail)
 
-  if (!imap) {
+  // Tonight `imap` is a single factory (one account, bot@/outreach@ as
+  // aliases); once outreach mailboxes get their own accounts it is a list —
+  // `[].concat` treats either shape the same way.
+  const sources = [].concat(imap).filter(Boolean)
+  if (!sources.length) {
     await log('skipped', { reason: 'missing deps: imap' })
     return result
   }
+
+  // Prospect mail is anything addressed to an outreach mailbox, current or
+  // retired: after a domain flip the old address keeps receiving replies for
+  // weeks, and each one still belongs to its thread's business.
+  const outreach = new Set(
+    [outreachAddress, ...(await db.mailboxAddresses(sql)).map((r) => r.address)].map(addr),
+  )
 
   const send =
     notify ??
@@ -331,19 +361,77 @@ export async function run({
     if (delivered) result.forwarded++
   }
 
-  const client = await imap()
-  let messages = []
+  // Connect every source and pool its messages before any routing runs. One
+  // source failing to connect (or to list its messages) never drops the
+  // others — it is an `error` event naming the account, and the loop moves on.
+  // A message_id seen twice (two mailboxes, one thread) keeps only the first
+  // sighting to handle; the rest are recorded so their own connection still
+  // gets its `markSeen` once the first sighting is done with it.
+  const clients = []
+  const inbox = new Map() // messageKey -> { message, client, account, duplicates }
+  for (const source of sources) {
+    const account = source?.account ?? 'unknown'
+    let client
+    try {
+      client = await source()
+    } catch (err) {
+      result.errors++
+      await log('error', { stage: 'connect', account, error: String(err?.message ?? err) })
+      continue
+    }
+    clients.push(client)
+    try {
+      const messages = (await client.messages()) ?? []
+      for (const message of messages) {
+        const key = messageKey(message)
+        const existing = inbox.get(key)
+        if (existing) existing.duplicates.push({ client, uid: message.uid })
+        else inbox.set(key, { message, client, account, duplicates: [] })
+      }
+    } catch (err) {
+      result.errors++
+      await log('error', { stage: 'fetch', account, error: String(err?.message ?? err) })
+    }
+  }
+
   try {
-    messages = (await client.messages()) ?? []
-    if (!messages.length) {
-      await log('skipped', { reason: 'no unread messages on the pipeline label' })
+    if (!inbox.size) {
+      await log('skipped', { reason: 'no unread messages on any mailbox' })
       return result
     }
 
-    for (const message of messages) {
+    // Seen only AFTER the handler returns. A crash mid-handle leaves the
+    // message unseen so the next tick retries it: a duplicated forward is
+    // visible and cheap, a silently dropped opt-out is neither. Re-applying
+    // a retried message is safe — stage moves and `suppress` are idempotent,
+    // and the `notes` append dedupes on the note itself. A duplicate sighting
+    // is marked seen on its own connection right alongside the original, so
+    // it is never re-read (and re-deduped) forever.
+    const markSeen = async (client, uid, duplicates) => {
+      if (dryRun) return
+      await client.markSeen?.(uid)
+      for (const dup of duplicates) {
+        try {
+          await dup.client.markSeen?.(dup.uid)
+        } catch {
+          // best effort — a stuck duplicate just gets re-deduped next tick
+        }
+      }
+    }
+
+    for (const { message, client, duplicates } of inbox.values()) {
       try {
         result.read++
-        const to = addr(message.deliveredTo)
+        // Delivered-To is empty for a reply sent to bot@ from the very
+        // account bot@ is aliased under (no real SMTP delivery happens, so
+        // Gmail never stamps it) — fall back to the typed To: line, still
+        // matched as a full address, never a bare local-part.
+        const toCandidates = message.deliveredTo
+          ? [message.deliveredTo]
+          : message.toAddresses ?? []
+        const to =
+          toCandidates.map(addr).find((a) => a === addr(botAddress) || outreach.has(a)) ??
+          addr(message.deliveredTo)
         const ids = threadIds(message)
         const [thread] = ids.length ? ((await db.threadByMessageIds(sql, ids)) ?? []) : []
         const businessId = thread?.business_id ?? null
@@ -353,18 +441,15 @@ export async function run({
         // now falls through to a human.
         if (to === addr(botAddress)) {
           await handleTeammate({ message, businessId })
-        } else if (to === addr(outreachAddress)) {
+        } else if (outreach.has(to)) {
           await handleProspect({ message, businessId })
+        } else if (to === addr(alertsAddress)) {
+          await handleAlert({ message })
         } else {
           await forward(message, 'unrecognised Delivered-To', { delivered_to: to })
         }
 
-        // Seen only AFTER the handler returns. A crash mid-handle leaves the
-        // message unseen so the next tick retries it: a duplicated forward is
-        // visible and cheap, a silently dropped opt-out is neither. Re-applying
-        // a retried message is safe — stage moves and `suppress` are
-        // idempotent, and the `notes` append dedupes on the note itself.
-        if (!dryRun) await client.markSeen?.(message.uid)
+        await markSeen(client, message.uid, duplicates)
       } catch (err) {
         result.errors++
         // Bookkeeping for one bad message must never take the rest of the
@@ -398,7 +483,7 @@ export async function run({
               forwarded: forwardError === null,
               ...(forwardError === null ? {} : { forward_error: forwardError }),
             })
-            if (!dryRun) await client.markSeen?.(message?.uid)
+            await markSeen(client, message?.uid, duplicates)
           }
         } catch {
           // nothing left to do but keep going
@@ -406,7 +491,13 @@ export async function run({
       }
     }
   } finally {
-    await client.close?.()
+    for (const client of clients) {
+      try {
+        await client.close?.()
+      } catch {
+        // best effort — a close failure must not mask the tick's real result
+      }
+    }
   }
 
   return result
@@ -421,9 +512,7 @@ export async function run({
       result.suppressed++
       if (!dryRun) await db.suppress(sql, businessId, 'reply opt-out')
       await log(dryRun ? 'would_suppress' : 'suppressed', { business: businessId, by: 'keyword' })
-      return forward(message, 'opt-out — suppressed, do not mail this business again', {
-        business: businessId,
-      })
+      return
     }
 
     if (isAutoReply(message)) {
@@ -460,9 +549,7 @@ export async function run({
       result.suppressed++
       if (!dryRun) await db.suppress(sql, businessId, 'classified opt-out')
       await log(dryRun ? 'would_suppress' : 'suppressed', { business: businessId, by: 'classifier' })
-      return forward(message, 'opt-out — suppressed, do not mail this business again', {
-        business: businessId,
-      })
+      return
     }
     if (category === 'out_of_office') {
       result.auto++
@@ -481,7 +568,13 @@ export async function run({
     }
 
     result.replied++
-    if (!dryRun) await db.updateBusiness(sql, businessId, { stage: 'replied', next_touch_at: null })
+    if (!dryRun) {
+      await db.updateBusiness(sql, businessId, {
+        stage: 'replied',
+        next_touch_at: null,
+        research: JSON.stringify({ ...parseResearch(row.research), last_reply: body }),
+      })
+    }
     await log(dryRun ? 'would_reply' : 'replied', { business: businessId, category })
   }
 
@@ -514,6 +607,10 @@ export async function run({
       patch.research = JSON.stringify({ ...parseResearch(row.research), won_amount: cmd.amount })
     } else if (cmd.command === 'notes') {
       const research = parseResearch(row.research)
+      // Notes are what the quote job runs on, so a note on a row still in
+      // conversation hands it to `quote`. A row already at or past quoting only
+      // gains the note.
+      if (!['quoting', 'quoted', 'won', 'onboarded', 'lost'].includes(row.stage)) patch.stage = 'quoting'
       patch.research = JSON.stringify({
         ...research,
         notes: [...new Set([...(research.notes ?? []), cmd.notes])].filter(Boolean),
@@ -534,6 +631,52 @@ export async function run({
       command: cmd.command,
       ...(cmd.amount === undefined ? {} : { amount: cmd.amount }),
     })
+  }
+
+  // --- alert triage ---------------------------------------------------------
+  // Fed from the same IMAP stream poll already drains — a separate job would
+  // need its own connection and would reimplement the fetch/seen/dead-letter
+  // loop above for no reason. The cap is checked BEFORE anything is written:
+  // a fourth alert on a cap-full day touches neither `alerts` nor `github`.
+  async function handleAlert({ message }) {
+    const [row] = (await db.triageOpenedToday(sql)) ?? []
+    if (Number(row?.count ?? 0) >= TRIAGE_DAILY_CAP) {
+      await logTriage('skipped', {
+        reason: `triage daily cap of ${TRIAGE_DAILY_CAP} reached`,
+        subject: message.subject,
+      })
+      return
+    }
+
+    if (dryRun) {
+      await logTriage('would_triage', { subject: message.subject })
+      return
+    }
+
+    const fingerprint = alertFingerprint(message)
+    const [alert] = await db.upsertAlert(sql, { fingerprint, repo: null, source: 'alerts@' })
+    result.triaged++
+
+    // Already seen before today's count was checked, or on a prior day — either
+    // way an open PR for this fingerprint already exists, so `hits` alone
+    // decides, not the cap.
+    if (Number(alert?.hits ?? 1) > 1) {
+      await logTriage('duplicate', { fingerprint, hits: alert.hits })
+      return
+    }
+
+    if (!github) {
+      await logTriage('error', { reason: 'missing deps: github', fingerprint })
+      return
+    }
+
+    const pr = await github({
+      title: `alert: ${message.subject ?? '(no subject)'}`,
+      body: stripQuoted(message.text),
+      branch: `alert/${fingerprint.slice(0, 12)}`,
+    })
+    await db.setAlertPr(sql, fingerprint, pr?.url ?? null)
+    await logTriage('opened', { fingerprint, pr_url: pr?.url ?? null })
   }
 
   // --- signed contract ------------------------------------------------------

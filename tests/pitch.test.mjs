@@ -97,6 +97,10 @@ test('the /pitch command names the slug and both temp files, verbatim', async ()
     assert.equal(facts.name, 'Acme Roofing')
     assert.equal(facts.phone ?? null, null)
     assert.equal(facts.town, 'Danbury')
+    // The skill contract names these three at the top level; null beats absent.
+    assert.equal(facts.has_website, Boolean(facts.domain))
+    assert.equal(facts.rating, null)
+    assert.equal(facts.review_count, null)
     // research arrives parsed, not as a JSON string inside a JSON file.
     assert.deepEqual(facts.research.facts, ['no online booking', 'GAF certified'])
     assert.equal(facts.research.fit, 'good')
@@ -255,4 +259,21 @@ test('qualify persists the page text it read, capped, alongside the facts', asyn
   assert.deepEqual(research.facts, ['f1'])
   assert.equal(research.fit, 'good')
   assert.equal(research.reason, 'r')
+})
+
+test('a replied row is pitched too, so the meeting mail can name the folder', async () => {
+  const h = harness({
+    rows: [biz({ id: 'r1', name: 'Reply Co', stage: 'replied' }), biz({ id: 'c1', stage: 'call_due' })],
+    runSkill: async () => ({ wrote: ['/w/os/clients/a/pitch/x.md'], dryrun: [] }),
+  })
+  try {
+    const out = await pitch(h.deps)
+    assert.equal(out.pitched, 2)
+    const marked = h.updates.filter((u) => u.patch.research).map((u) => u.id).sort()
+    assert.deepEqual(marked, ['c1', 'r1'])
+    // The row keeps its stage: pitch never moves a replied row anywhere.
+    assert.equal(h.store.find((r) => r.id === 'r1').stage, 'replied')
+  } finally {
+    await rm(h.tmp(), { recursive: true, force: true })
+  }
 })

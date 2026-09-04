@@ -133,6 +133,17 @@ test('a fetch that throws leaves the row at sourced and writes one error event',
   assert.equal(errs[0].detail.name, 'Acme Roofing')
 })
 
+test('a business with no domain is a calling lead, not an error retried forever', async () => {
+  const h = harness({ rows: [{ ...acme, domain: null }] })
+  const out = await qualify(h.deps)
+  assert.equal(out.callDue, 1)
+  assert.equal(out.errors, 0)
+  assert.equal(h.updates.length, 1)
+  assert.equal(h.updates[0].patch.stage, 'call_due')
+  assert.ok(!('phone' in h.updates[0].patch), 'phone must stay as sourced')
+  assert.equal(h.events.find((e) => e.kind === 'call_due').detail.reason, 'no domain')
+})
+
 test('an unparseable Claude answer is an error, not a half-written row', async () => {
   const h = harness({ rows: [acme], answer: 'sorry, I cannot do that' })
   const out = await qualify(h.deps)

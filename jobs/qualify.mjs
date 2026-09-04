@@ -21,7 +21,10 @@ Rules:
   address appears, return null. Never construct one from the domain.
 - "facts" is three to five specific, checkable things about THIS business drawn
   from the page — services, years in business, towns served, named staff,
-  certifications. No generic filler.
+  certifications. No generic filler. Phrase each fact as a predicate that
+  completes the sentence "<business name> ..." and starts with a verb, e.g.
+  "has served Milford since 1998", "is GAF Master Elite certified",
+  "offers 24-hour emergency repairs". Never start a fact with the business name.
 - "fit" judges whether this business would benefit from a new website or an
   internal tool.
 
@@ -57,6 +60,18 @@ export function parseAnswer(answer) {
   }
 }
 
+function parseResearch(research) {
+  if (!research) return {}
+  if (typeof research === 'string') {
+    try {
+      return JSON.parse(research)
+    } catch {
+      return {}
+    }
+  }
+  return research
+}
+
 export async function run({
   sql,
   db,
@@ -90,6 +105,14 @@ export async function run({
 
   for (const b of businesses) {
     try {
+      // No website means nothing to read and no address to find. Per LANE that
+      // is a calling lead, not an error to retry every Monday forever.
+      if (!b.domain) {
+        await db.updateBusiness(sql, b.id, { stage: 'call_due' })
+        callDue++
+        await log('call_due', { business: b.id, reason: 'no domain' })
+        continue
+      }
       const home = await fetchPage(homepage(b))
       let contact = ''
       for (const path of contactPaths) {
@@ -126,6 +149,7 @@ export async function run({
           : null
 
       const research = JSON.stringify({
+        ...parseResearch(b.research),
         facts,
         fit: parsed.fit ?? null,
         reason: parsed.reason ?? null,

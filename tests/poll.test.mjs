@@ -75,6 +75,7 @@ function harness({
   allowed = ALLOWED,
   osDir = null,
   commitAndPush = null,
+  mailboxes = [OUTREACH],
 } = {}) {
   const store = new Map(rows.map((r) => [r.id, { ...r }]))
   const clients = []
@@ -91,6 +92,7 @@ function harness({
         events.push({ job, kind, detail })
         return Promise.resolve([])
       },
+      mailboxAddresses: async () => mailboxes.map((address) => ({ address })),
       // Counts the same rows lib/db.mjs's query counts: poll error/dead_letter
       // events carrying this message key (the Message-ID, not the uid).
       messageFailureCount: (_s, key) =>
@@ -494,6 +496,15 @@ test('a teammate stop suppresses the business', async () => {
   assert.deepEqual(h.suppressions, [{ id: 'b1', reason: 'teammate stop' }])
 })
 
+test('notes on a replied row move it to quoting', async () => {
+  const h = harness({ messages: [teammate({ text: 'notes: wants the starter tier' })], rows: [biz({ stage: 'replied' })] })
+
+  await poll(h.deps)
+
+  assert.equal(h.store.get('b1').stage, 'quoting')
+  assert.deepEqual(JSON.parse(h.store.get('b1').research).notes, ['wants the starter tier'])
+})
+
 test('notes append without moving the stage', async () => {
   const h = harness({ messages: [teammate({ text: 'notes owner wants a quote in October' })], rows: [biz({ stage: 'quoted' })] })
 
@@ -546,12 +557,12 @@ test('a dry run writes nothing and leaves the message unread', async () => {
 test('one bad message does not stop the rest of the batch', async () => {
   const h = harness({
     messages: [
-      Object.defineProperty(msg({ uid: 1 }), 'text', {
+      Object.defineProperty(msg({ uid: 1, messageId: '<reply-1@acmeroofing.example>' }), 'text', {
         get() {
           throw new Error('unparseable')
         },
       }),
-      msg({ uid: 2, text: 'unsubscribe' }),
+      msg({ uid: 2, messageId: '<reply-2@acmeroofing.example>', text: 'unsubscribe' }),
     ],
   })
 
@@ -561,8 +572,155 @@ test('one bad message does not stop the rest of the batch', async () => {
   assert.equal(h.store.get('b1').suppressed_at instanceof Date, true)
 })
 
+// --- item 23: one IMAP source per outreach mailbox --------------------------
+
+test('two IMAP sources each carrying one reply produce two processed replies, each recorded against the right business', async () => {
+  const idA = '<msg-a@send.bcn-services.com>'
+  const idB = '<msg-b@send.bcn-services.com>'
+  const h = harness({
+    rows: [biz({ id: 'b1' }), biz({ id: 'b2', email: 'sam@shinglepro.example' })],
+    threads: [
+      { message_id: idA, business_id: 'b1' },
+      { message_id: idB, business_id: 'b2' },
+    ],
+  })
+
+  const sourceA = async () => ({
+    messages: async () => [msg({ uid: 1, messageId: '<reply-a@x>', inReplyTo: idA, references: idA })],
+    markSeen: async () => {},
+    close: async () => {},
+  })
+  sourceA.account = 'outreach1@send.bcn-services.com'
+
+  const sourceB = async () => ({
+    messages: async () => [msg({ uid: 2, messageId: '<reply-b@x>', inReplyTo: idB, references: idB })],
+    markSeen: async () => {},
+    close: async () => {},
+  })
+  sourceB.account = 'outreach2@send.bcn-services.com'
+
+  h.deps.imap = [sourceA, sourceB]
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.read, 2)
+  assert.equal(result.replied, 2)
+  assert.equal(h.store.get('b1').stage, 'replied')
+  assert.equal(h.store.get('b2').stage, 'replied')
+})
+
+test('the same message_id arriving from two sources is processed once', async () => {
+  const h = harness()
+  const shared = msg({ uid: 1, messageId: '<dup-reply@x>' })
+
+  const seenA = []
+  const seenB = []
+  const sourceA = async () => ({
+    messages: async () => [shared],
+    markSeen: async (uid) => seenA.push(uid),
+    close: async () => {},
+  })
+  const sourceB = async () => ({
+    // Same message_id, a different uid — its own mailbox's own numbering.
+    messages: async () => [{ ...shared, uid: 99 }],
+    markSeen: async (uid) => seenB.push(uid),
+    close: async () => {},
+  })
+  h.deps.imap = [sourceA, sourceB]
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.read, 1)
+  assert.equal(result.replied, 1)
+  // Handled once, but both copies are marked seen so neither mailbox ever
+  // re-reads (and re-dedupes) the same message forever.
+  assert.deepEqual(seenA, [1])
+  assert.deepEqual(seenB, [99])
+})
+
+test('one source throwing yields an error event naming it while the other source\'s messages still process', async () => {
+  const h = harness()
+  const badSource = async () => {
+    throw new Error('ECONNREFUSED')
+  }
+  badSource.account = 'outreach-broken@send.bcn-services.com'
+
+  const goodSource = async () => ({
+    messages: async () => [msg()],
+    markSeen: async () => {},
+    close: async () => {},
+  })
+  goodSource.account = 'outreach-ok@send.bcn-services.com'
+
+  h.deps.imap = [badSource, goodSource]
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.replied, 1)
+  const err = h.events.find(
+    (e) => e.kind === 'error' && e.detail?.account === 'outreach-broken@send.bcn-services.com'
+  )
+  assert.ok(err, 'expected an error event naming the failed account')
+  assert.equal(err.detail.stage, 'connect')
+})
+
+test('a single deps.imap object (today\'s shape) keeps working exactly as before', async () => {
+  const h = harness({ messages: [msg({ text: 'unsubscribe' })] })
+  // h.deps.imap is already the single-factory shape harness() builds by
+  // default — this asserts run() does not require a list.
+  assert.equal(typeof h.deps.imap, 'function')
+
+  await poll(h.deps)
+
+  assert.equal(h.store.get('b1').suppressed_at instanceof Date, true)
+})
+
 test('an unrecognised Delivered-To is forwarded', async () => {
   const h = harness({ messages: [msg({ deliveredTo: 'someoneelse@bcn-services.com' })] })
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.forwarded, 1)
+  assert.deepEqual(h.updates, [])
+})
+
+// After a domain flip the old outreach address keeps receiving replies. Every
+// row in `mailboxes`, active or retired, is a prospect address, so the reply
+// still lands on its thread's business instead of a human's inbox.
+test('a reply to a retired outreach mailbox is still a prospect reply', async () => {
+  const h = harness({
+    messages: [msg({ deliveredTo: 'outreach@old.example' })],
+    mailboxes: ['outreach@trybcns.example', 'outreach@old.example'],
+  })
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.forwarded, 0)
+  assert.equal(result.replied, 1)
+  assert.equal(h.store.get('b1').stage, 'replied')
+})
+
+// A reply to bot@ sent from the account bot@ is aliased under never gets a
+// Delivered-To/X-Original-To — Gmail doesn't stamp them on same-account alias
+// mail. The typed To: line is the only signal left.
+test('an empty Delivered-To falls back to the To: line', async () => {
+  const h = harness({
+    messages: [
+      teammate({ deliveredTo: '', toAddresses: [BOT], text: 'won 2400' }),
+    ],
+    rows: [biz({ stage: 'call_due' })],
+  })
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.commands, 1)
+  assert.equal(result.forwarded, 0)
+})
+
+test('an empty Delivered-To with no matching To: still forwards', async () => {
+  const h = harness({
+    messages: [msg({ deliveredTo: '', toAddresses: ['someoneelse@bcn-services.com'] })],
+  })
 
   const result = await poll(h.deps)
 

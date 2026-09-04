@@ -203,8 +203,10 @@ test('the README frontmatter status moves to in-progress and the body is left al
   }
 })
 
-test('bumpReadmeStatus rewrites only the frontmatter, and only status: lead', () => {
+test('bumpReadmeStatus rewrites only the frontmatter, and only status: lead/active', () => {
   assert.match(bumpReadmeStatus(README), /^status: in-progress$/m)
+  // /new-client-repo regenerates the README with `active`; that moves too.
+  assert.match(bumpReadmeStatus(README.replace('status: lead', 'status: active')), /^status: in-progress$/m)
   // Already moved on: nothing to do, and no second rewrite.
   const done = README.replace('status: lead', 'status: in-progress')
   assert.equal(bumpReadmeStatus(done), done)
@@ -385,6 +387,7 @@ function notifyHarness({
       notifiedKeys: async () => [],
       firstOutbound: async () => [],
       logEvent: (_s, job, kind, detail) => (events.push({ job, kind, detail }), Promise.resolve([])),
+      recordThread: async () => [],
       updateBusiness: () => {
         throw new Error('notify must never write a business row')
       },

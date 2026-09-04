@@ -1,4 +1,6 @@
-// Builds the bcns pitch for a business that has gone to phone.
+// Builds the bcns pitch for a business that has gone to phone, or has replied
+// and is about to get a meeting. Either way a human is about to talk to them
+// and wants the script in hand, not a job to run first.
 //
 // One pitch per business, ever. The marker is `research.pitch_path`: a row
 // that has one is skipped forever, because a second /pitch run costs a Claude
@@ -14,10 +16,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { pushOrSkip } from '../lib/osrepo.mjs'
+import { normalizeDashes } from '../lib/skills.mjs'
 
 // Postgres unique_violation. The only failure of the slug write we handle:
 // anything else is a real database problem and belongs in the error event.
 const UNIQUE_VIOLATION = '23505'
+
+// Both stages precede a human conversation, and notify mails the folder path
+// on the same tick right after this job.
+export const PITCH_STAGES = ['call_due', 'replied']
 
 export function parseResearch(research) {
   if (!research) return {}
@@ -69,7 +76,8 @@ export async function run({
   commitAndPush,
   osDir,
   dryRun = true,
-  limit = 25,
+  skillLimit,
+  limit = skillLimit ?? 25,
   mkTempDir = () => mkdtemp(join(tmpdir(), 'bcns-pitch-')),
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'pitch', kind, detail)
@@ -84,10 +92,11 @@ export async function run({
     return { ...result, skipped: missing }
   }
 
-  const rows = (await db.businessesByStage(sql, 'call_due', { limit })) ?? []
-  const todo = rows.filter((row) => !parseResearch(row.research).pitch_path)
+  const rows = []
+  for (const stage of PITCH_STAGES) rows.push(...((await db.businessesByStage(sql, stage, { limit })) ?? []))
+  const todo = rows.filter((row) => !parseResearch(row.research).pitch_path).slice(0, limit)
   if (!todo.length) {
-    await log('skipped', { reason: 'no call_due row without a pitch' })
+    await log('skipped', { reason: `no ${PITCH_STAGES.join('/')} row without a pitch` })
     return result
   }
 
@@ -105,7 +114,16 @@ export async function run({
       // The skill's documented `--facts` input is the businesses row plus its
       // research, not the fact strings alone: a call script needs the phone,
       // the town and the trade as much as it needs what qualify noticed.
-      await writeFile(factsPath, JSON.stringify({ ...row, research }))
+      await writeFile(
+        factsPath,
+        JSON.stringify({
+          ...row,
+          has_website: Boolean(row.domain),
+          rating: research.rating ?? null,
+          review_count: research.review_count ?? null,
+          research,
+        })
+      )
       await writeFile(pageTextPath, String(research.page_text ?? ''))
 
       command = `/pitch ${slug} --facts ${factsPath} --page-text ${pageTextPath} --no-browse`
@@ -124,7 +142,7 @@ export async function run({
         continue
       }
 
-      const { wrote } = await runSkill({ command, cwd: osDir })
+      const { wrote, text, denials } = await runSkill({ command, cwd: osDir })
       // `git add` with no pathspec is a no-op and the commit that follows exits
       // non-zero every tick. A skill that wrote nothing is a real failure.
       if (!wrote?.length) {
@@ -134,9 +152,13 @@ export async function run({
           slug,
           command,
           error: 'skill reported no written files — nothing to commit',
+          denials,
+          said: text,
         })
         continue
       }
+
+      await normalizeDashes(wrote)
 
       const push = await pushOrSkip({
         commitAndPush,

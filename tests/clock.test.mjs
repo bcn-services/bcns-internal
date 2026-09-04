@@ -43,16 +43,16 @@ test('no cron is more frequent than every twenty minutes', () => {
   }
 })
 
-test('every job runs under a ten-minute timeout', () => {
+test('every job runs under a thirty-minute timeout', () => {
   for (const job of Object.values(clock.jobs)) {
-    assert.equal(job['timeout-minutes'], 10)
+    assert.equal(job['timeout-minutes'], 30)
   }
 })
 
 test('clock.yml references no secret that does not yet exist', () => {
   const src = readFileSync(new URL('../.github/workflows/clock.yml', import.meta.url), 'utf8')
   const named = [...src.matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1])
-  const existing = ['DATABASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'GH_PACKAGES_TOKEN', 'IMAP_PASS', 'MAIL_FROM', 'OS_TOKEN', 'SMTP_HOST', 'SMTP_PASS', 'SMTP_PORT', 'SMTP_USER']
+  const existing = ['DATABASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'GH_PACKAGES_TOKEN', 'IMAP_PASS', 'MAIL_FROM', 'OS_TOKEN', 'SMTP_HOST', 'SMTP_PASS', 'SMTP_PORT', 'SMTP_USER', 'SMTP_AUTH_USER', 'SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_USER', 'SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS', 'IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_USER', 'IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS']
   for (const s of named) assert.ok(existing.includes(s), `secret ${s} is not set on the repo`)
 })
 
@@ -217,6 +217,34 @@ test('the send list and the internal list are two independent variables', async 
   const bare = await buildDeps({})
   assert.deepEqual(bare.allowedRecipients, [])
   assert.deepEqual(bare.internalRecipients, [])
+})
+
+// Superseded by item 22's per-mailbox transport (jobs/run.mjs
+// createMailboxTransport): the old design hardcoded a personal address
+// ('nseluga@bcn-services.com') as the SMTP_AUTH_USER default so the outreach
+// alias could authenticate. That guardrail explicitly forbids a hardcoded
+// address default, so a no-mailbox transport() call now falls back to an
+// EXPLICIT SMTP_USER/SMTP_PASS pair, and has no credentials at all without one.
+test('SMTP transport with no mailbox uses an explicit account, no hardcoded default', async () => {
+  const deps = await buildDeps({ SMTP_USER: 'nseluga@bcn-services.com', SMTP_PASS: 'x'.repeat(16) })
+  const mailer = await deps.transport()
+  assert.equal(mailer.options.auth.user, 'nseluga@bcn-services.com')
+  assert.equal(deps.outreachAddress, 'nseluga@bcn-services.com')
+
+  // An alias as SMTP_USER logs in as the seat SMTP_AUTH_USER names, and the
+  // outreach address stays the alias.
+  const alias = await buildDeps({
+    SMTP_USER: 'outreach@send.bcn-services.com',
+    SMTP_AUTH_USER: 'seat@bcn-services.com',
+    SMTP_PASS: 'x'.repeat(16),
+  })
+  assert.equal((await alias.transport()).options.auth.user, 'seat@bcn-services.com')
+  assert.equal(alias.outreachAddress, 'outreach@send.bcn-services.com')
+
+  // No SMTP_USER: nothing to fall back to, so the internal-mail transport has
+  // no credentials — never a hardcoded personal address.
+  const noUser = await buildDeps({ SMTP_PASS: 'x'.repeat(16) })
+  await assert.rejects(() => noUser.transport(), /no SMTP credentials configured/)
 })
 
 test('no API key ever reaches the Claude client', () => {

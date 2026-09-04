@@ -97,6 +97,11 @@ export function meetingEmail(row, thread = null) {
       line('Message-ID', thread?.message_id),
     ].filter(Boolean),
     ...(research.facts?.length ? ['', 'What we know:', ...facts(research)] : []),
+    ...(research.last_reply ? ['', 'What they said:', research.last_reply] : []),
+    '',
+    research.pitch_path
+      ? `Pitch folder: ${research.pitch_path}`
+      : 'Pitch folder: none yet — the pitch job has not reached this row.',
     '',
     'Reply on their own thread when the meeting is set.',
   ].join('\n')
@@ -263,8 +268,20 @@ export async function run({
       let delivered = false
       for (const to of recipients) {
         try {
-          await (stage === 'onboarded' ? sendOnboard : send)({ to, ...batch.mail })
+          const sent = await (stage === 'onboarded' ? sendOnboard : send)({ to, ...batch.mail })
           delivered = true
+          // Register the thread so a reply lands back on this business — same
+          // bookkeeping `touch` does for its own sends. Absent in dry runs:
+          // `sent.messageId` only exists on a real send.
+          if (sent?.messageId) {
+            await db.recordThread(sql, {
+              messageId: sent.messageId,
+              businessId: batch.rows[0].id,
+              direction: 'outbound',
+              mailbox: notifyFrom,
+              subject: batch.mail.subject,
+            })
+          }
         } catch (err) {
           result.errors++
           await log('error', { stage, to, error: String(err?.message ?? err) })
@@ -287,6 +304,10 @@ export async function run({
       }
     }
   }
+
+  // A silent tick is still a tick: the log has to show notify ran and found
+  // nothing, or a broken schedule and a quiet funnel look the same.
+  if (!result.emails && !result.errors) await log('skipped', { reason: 'nothing to notify' })
 
   return result
 }

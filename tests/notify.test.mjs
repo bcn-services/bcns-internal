@@ -51,6 +51,7 @@ function biz(over = {}) {
 function harness({ rows = [], allowed = ALLOWED, dryRun = false, send = null } = {}) {
   const events = []
   const sent = []
+  const threads = []
   const store = rows.map((r) => ({ ...r }))
 
   const deps = {
@@ -69,6 +70,13 @@ function harness({ rows = [], allowed = ALLOWED, dryRun = false, send = null } =
         events.push({ job, kind, detail })
         return Promise.resolve([])
       },
+      // Recorded only when `send` returns a messageId — the default fake below
+      // returns nothing, so this stays empty unless a test injects a `send`
+      // that mimics the real notifier's return shape.
+      recordThread: (_s, t) => {
+        threads.push(t)
+        return Promise.resolve([])
+      },
       // Notify reads stages; it never writes one. A stage write must explode.
       updateBusiness: () => {
         throw new Error('notify must never write a business row')
@@ -82,7 +90,7 @@ function harness({ rows = [], allowed = ALLOWED, dryRun = false, send = null } =
     dryRun,
     now: NOW,
   }
-  return { deps, events, sent, store }
+  return { deps, events, sent, threads, store }
 }
 
 const kinds = (events) => events.map((e) => e.kind)
@@ -134,6 +142,32 @@ test('a dry run marks would_notify, which never consumes the real notification',
 
   assert.equal(kinds(h.events).filter((k) => k === 'notified').length, 0)
   assert.equal(kinds(h.events).filter((k) => k === 'would_notify').length, 2)
+})
+
+test('a real send registers the thread, so a reply to the task email routes back to the row', async () => {
+  let n = 0
+  const h = harness({
+    rows: [biz()],
+    send: async () => ({ messageId: `<task-${++n}@bcn-services.com>` }),
+  })
+
+  await notify(h.deps)
+
+  assert.equal(h.threads.length, 2, 'one thread per internal recipient sent')
+  for (const t of h.threads) {
+    assert.equal(t.businessId, 'b1')
+    assert.equal(t.direction, 'outbound')
+    assert.equal(t.mailbox, 'bot@bcn-services.com')
+    assert.match(t.subject, /call Acme Roofing/)
+  }
+})
+
+test('a dry run registers no thread — send never returns a messageId', async () => {
+  const h = harness({ rows: [biz()], dryRun: true })
+
+  await notify(h.deps)
+
+  assert.deepEqual(h.threads, [])
 })
 
 // --- the allow-list gate ----------------------------------------------------
@@ -255,6 +289,8 @@ test('the three templates render row fields and no prospect address is ever a re
   const meeting = body(/replied — book the meeting/)
   assert.match(meeting, /Thread: a question about Acme Roofing/)
   assert.match(meeting, /<msg-r1@send\.bcn-services\.com>/)
+  // The meeting mail carries the same folder: pitch runs on replied rows too.
+  assert.match(meeting, /Pitch folder: clients\/acme-roofing-danbury\/pitch\//)
 
   const quote = body(/quote Acme Roofing/)
   assert.match(quote, /wants a portal for his crews/)
@@ -272,6 +308,7 @@ test('the templates hold up on a row with nothing in research', () => {
     assert.ok(!/undefined|null|\[object/.test(mail.text), mail.text)
   }
   assert.match(callTaskEmail(bare).text, /Pitch folder: none yet/)
+  assert.match(meetingEmail(bare, null).text, /Pitch folder: none yet/)
   assert.match(quoteEmail(bare).text, /left no notes/)
 })
 
@@ -298,6 +335,7 @@ test('a drafted row is not notified about at all: no mail, no event, no read', a
     'a drafted row still wrote a notification event'
   )
   assert.ok(!stagesRead.includes('drafted'), 'notify still queries the drafted stage')
+  assert.deepEqual(kinds(h.events).filter((k) => k === 'skipped'), ['skipped'], 'a quiet tick must still write one skipped event')
 })
 
 test('a dry run over a drafted row is silent too', async () => {

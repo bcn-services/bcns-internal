@@ -83,6 +83,9 @@ export async function run({
       place_id: r.place_id,
       source_query: query,
       stage: 'sourced',
+      // The pitch skill's facts contract names these two; qualify merges
+      // its own keys in on top rather than replacing the blob.
+      research: JSON.stringify({ rating: r.rating ?? null, review_count: r.review_count ?? null }),
     }))
 
   const inserted = rows.length ? await db.insertBusinesses(sql, rows) : []

@@ -186,6 +186,9 @@ function makeSql({ now }) {
     if (q.includes('from businesses')) throw new Error(`read bypassed the view: ${q}`)
 
     // --- mailboxes ---
+    if (q.startsWith('select address from mailboxes')) {
+      return store.mailboxes.map(({ address }) => ({ address }))
+    }
     if (q.startsWith('select *, case when sent_on') && q.includes('from mailboxes')) {
       return store.mailboxes
         .filter((m) => m.status === 'active')
@@ -381,8 +384,8 @@ function claudeFor(state) {
           reason: 'runs a crew, tracks jobs on paper',
         })
       }
-      if (prompt.includes('ONE sentence for a cold email')) {
-        return 'Most roofing owners we talk to end up rebuilding the same estimate by hand every week'
+      if (prompt.includes('a short compliment for a cold email')) {
+        return `FACT: ${FACTS[0]}\nREACTION: that is a long run in this trade`
       }
       if (prompt.includes('Classify this reply')) return state.classification
       throw new Error(`unexpected prompt: ${prompt.slice(0, 60)}`)
@@ -538,7 +541,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
   row = p.row('Acme Roofing')
   assert.equal(row.stage, 'drafted')
   assert.match(row.research.draft, /^Subject: a question about Acme Roofing\n\n/)
-  assert.match(row.research.draft, /rebuilding the same estimate by hand every week and I'd love/)
+  assert.match(row.research.draft.replace(/\n/g, ' '), /I noticed Acme Roofing is family run since 1998, and that is a long run in this trade\./)
   // personalize merges into `research`; it must not clobber qualify's keys.
   assert.equal(row.research.facts.length, 3)
   assert.equal(row.research.fit, 'good')
@@ -563,7 +566,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
   assert.equal(p.sent[0].to, 'hello@acmeroofing.example')
   assert.equal(p.sent[0].from, OUTREACH)
   // The bytes on the wire are the draft personalize wrote, not a re-render.
-  assert.match(bodyOf(p.sent[0].raw), /rebuilding the same estimate by hand every week/)
+  assert.match(bodyOf(p.sent[0].raw), /I noticed Acme Roofing is family run since 1998/)
 
   const [thread] = p.store.email_threads
   assert.equal(thread.business_id, row.id)

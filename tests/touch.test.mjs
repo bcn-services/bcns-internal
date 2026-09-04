@@ -10,6 +10,8 @@ import {
   splitDraft,
   assertAllowed,
   BUMP_BODY,
+  BUMP_BODY_2,
+  bumpBody,
   MAX_TOUCHES,
 } from '../jobs/touch.mjs'
 import { render } from '../lib/template.mjs'
@@ -163,10 +165,16 @@ test('jitter stays inside the hour and the subject line is split off the draft',
   assert.ok(!body.includes('Subject:'))
 })
 
-test('the bump copy is under forty words and makes no new argument', () => {
-  const words = BUMP_BODY.trim().split(/\s+/)
-  assert.ok(words.length < 40, `bump is ${words.length} words`)
-  assert.ok(!/free|price|\$|demo is ready|http/i.test(BUMP_BODY))
+test('both bump copies are under forty words, differ, and make no new argument', () => {
+  for (const copy of [BUMP_BODY, BUMP_BODY_2]) {
+    const words = copy.trim().split(/\s+/)
+    assert.ok(words.length < 40, `bump is ${words.length} words`)
+    assert.ok(!/free|price|\$|demo is ready|http/i.test(copy))
+  }
+  assert.notEqual(BUMP_BODY, BUMP_BODY_2)
+  assert.ok(bumpBody(1, 'Dana').startsWith('Hi Dana,'))
+  assert.ok(bumpBody(2, null).startsWith('Hi,'))
+  assert.ok(bumpBody(2, 'Dana').includes('Last note'))
 })
 
 test('the allow-list refuses an unlisted address and an empty list allows nobody', () => {
@@ -391,6 +399,23 @@ test('a suppressed or replied row is never sent to, and sends jitter over the ho
   assert.ok(Number(slept.slice(6)) > 0 && Number(slept.slice(6)) < 60 * 60 * 1000)
 })
 
+// The window is the budget for the run. Per-row jitter made a queue of N rows
+// take up to N x 55min, and made a refused recipient cost 55min of nothing.
+test('the whole run fits inside one jitter window and refusals sleep not at all', async () => {
+  const rows = ['a', 'b', 'c', 'd', 'e'].map((id) => biz({ id }))
+  const h = harness({ rows, dryRun: false })
+  await touch(h.deps)
+  const slept = h.trace.filter((t) => t.startsWith('sleep:')).map((t) => Number(t.slice(6)))
+  assert.equal(slept.length, rows.length)
+  assert.ok(slept.every((ms) => ms > 0))
+  assert.ok(slept.reduce((a, b) => a + b, 0) < 60 * 60 * 1000)
+
+  const refused = harness({ rows, dryRun: false, allowed: ['nobody@example.com'] })
+  const res = await touch(refused.deps)
+  assert.equal(res.refused, rows.length)
+  assert.deepEqual(refused.trace.filter((t) => t.startsWith('sleep:')), [])
+})
+
 test('no rows and no transport each write their own skipped event', async () => {
   const empty = harness({ rows: [] })
   await touch(empty.deps)
@@ -401,6 +426,47 @@ test('no rows and no transport each write their own skipped event', async () => 
   const res = await touch(noTransport.deps)
   assert.equal(res.sent, 0)
   assert.match(noTransport.events.at(-1).detail.reason, /missing deps: transport/)
+})
+
+// Item 22 — the SMTP transport, per mailbox.
+test('a mailbox with no SMTP credentials is skipped, never sent through another mailbox\'s transport', async () => {
+  const A = mailbox({ address: 'a@x.test', domain: 'x.test' })
+  const B = mailbox({ address: 'b@y.test', domain: 'y.test' })
+  const h = harness({ mailboxes: [B, A], dryRun: false })
+
+  const constructedFor = []
+  const transport = async (mb) => {
+    constructedFor.push(mb.address)
+    return { sendMail: async (m) => h.sent.push(m) }
+  }
+  // Only A resolves credentials — B is exactly the "no SMTP_MAILBOX_*
+  // pair, and not the SMTP_USER/SMTP_PASS fallback address" case.
+  transport.hasCredentials = (address) => address === A.address
+  h.deps.transport = transport
+
+  const res = await touch(h.deps)
+
+  assert.equal(res.sent, 1)
+  assert.deepEqual(constructedFor, [A.address], 'transport was only ever built for the credentialed mailbox')
+  assert.equal(h.threads[0].mailbox, A.address)
+  const skip = h.events.find((e) => e.kind === 'skipped' && e.detail.mailbox === B.address)
+  assert.ok(skip, 'the uncredentialed mailbox got its own skipped event')
+  assert.match(skip.detail.reason, /credential/i)
+  // B's slot was never even claimed — the credential check runs before the claim.
+  assert.ok(!h.claims.some((c) => c.address === B.address))
+})
+
+test('no SMTP credential ever reaches a touch event, even one the transport itself holds', async () => {
+  const SECRET = 'sekrit-app-password-9f2c'
+  const h = harness({ dryRun: false })
+  h.deps.transport = async (mb) => ({
+    auth: { user: mb.address, pass: SECRET },
+    sendMail: async (m) => h.sent.push(m),
+  })
+  await touch(h.deps)
+  assert.equal(h.sent.length, 1, 'sanity: a send actually happened')
+  const blob = JSON.stringify(h.events)
+  assert.ok(!blob.includes(SECRET), 'a credential value leaked into a logged event')
 })
 
 test('buildMime omits In-Reply-To on a first send', () => {

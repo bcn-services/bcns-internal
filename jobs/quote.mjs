@@ -15,6 +15,7 @@ import { join } from 'node:path'
 
 import { parseResearch, claimSlug } from './pitch.mjs'
 import { pushOrSkip } from '../lib/osrepo.mjs'
+import { normalizeDashes } from '../lib/skills.mjs'
 
 export const notesOf = (research) => [research.notes ?? []].flat().filter(Boolean)
 
@@ -25,7 +26,8 @@ export async function run({
   commitAndPush,
   osDir,
   dryRun = true,
-  limit = 25,
+  skillLimit,
+  limit = skillLimit ?? 25,
   mkTempDir = () => mkdtemp(join(tmpdir(), 'bcns-quote-')),
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'quote', kind, detail)
@@ -58,7 +60,19 @@ export async function run({
       // only thing the headless run is told beyond the slug.
       const dir = await mkTempDir()
       const notesPath = join(dir, 'notes.md')
-      await writeFile(notesPath, `${notesOf(research).map((n) => `- ${n}`).join('\n')}\n`)
+      // The row's own facts go in first: the skill fills the quote's client
+      // table from these lines, and a quote that says "(not provided)" for a
+      // contact the pipeline already knows reads as carelessness.
+      const header = [
+        ['Business', row.name],
+        ['Contact', research.owner_name],
+        ['Email', row.email],
+        ['Phone', row.phone],
+        ['Where', [row.town, row.state].filter(Boolean).join(', ')],
+      ]
+        .filter(([, v]) => v)
+        .map(([k, v]) => `- ${k}: ${v}`)
+      await writeFile(notesPath, `${[...header, ...notesOf(research).map((n) => `- ${n}`)].join('\n')}\n`)
 
       command = `/quote ${slug} --notes ${notesPath} --yes`
 
@@ -74,7 +88,7 @@ export async function run({
         continue
       }
 
-      const { wrote } = await runSkill({ command, cwd: osDir })
+      const { wrote, text, denials } = await runSkill({ command, cwd: osDir })
       // No pathspec means `git add` is a no-op and the commit fails every tick.
       if (!wrote?.length) {
         result.errors++
@@ -83,9 +97,13 @@ export async function run({
           slug,
           command,
           error: 'skill reported no written files — nothing to commit',
+          denials,
+          said: text,
         })
         continue
       }
+
+      await normalizeDashes(wrote)
 
       const push = await pushOrSkip({
         commitAndPush,

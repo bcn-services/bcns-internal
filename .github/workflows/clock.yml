@@ -10,8 +10,10 @@ name: clock
 
 on:
   schedule:
-    - cron: '*/20 8-20 * * 1-5'   # poll
-    - cron: '0 14 * * 1-5'        # touch
+    # TEST WINDOW 2026-09-04 (trybcns.com live funnel) — restore before merge:
+    #   poll  '*/20 8-20 * * 1-5'
+    #   touch '0 14 * * 1-5'
+    - cron: '*/5 * * * *'         # poll set + touch, every landed tick (test window; GitHub's floor)
     - cron: '0 13 * * 1'          # source, then qualify
     - cron: '30 13 * * 1-5'       # personalize
   workflow_dispatch:
@@ -28,7 +30,14 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # TEST WINDOW 2026-09-04 — remove with the crons above. GitHub lands only a
+    # handful of this repo's */20 ticks a day, so every tick that does land
+    # runs both the poll set and touch instead of waiting for its own minute.
+    strategy:
+      fail-fast: false
+      matrix:
+        schedule: ${{ github.event.schedule == '*/5 * * * *' && fromJSON('["*/20 8-20 * * 1-5","0 14 * * 1-5"]') || fromJSON(format('["{0}"]', github.event.schedule)) }}
+    timeout-minutes: 30
     permissions:
       contents: write   # the source run commits the heartbeat file
       id-token: write   # OIDC exchange for the GCP workload identity provider
@@ -47,6 +56,15 @@ jobs:
       - name: Install the Claude Code CLI
         run: npm i -g @anthropic-ai/claude-code
 
+      # Prove the CLI can answer before a job spends its tick on it. Prints
+      # only the exit code and the envelope — never the token.
+      - name: Claude CLI smoke test
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          claude --version
+          claude -p 'reply with the single word ok' --model sonnet --output-format json < /dev/null || echo "claude exit $?"
+
       # ~/os, for the skills the jobs shell out to (/pitch, /quote) and the
       # voice rules personalize reads. bcns-os is private and the bcn-services
       # org disables deploy keys, so this clones over a fine-grained PAT.
@@ -60,7 +78,8 @@ jobs:
           repository: ${{ vars.OS_REPO }}
           token: ${{ secrets.OS_TOKEN }}
           path: os
-          persist-credentials: false
+          # Kept: pitch/quote/onboard push their folders back with this token.
+          persist-credentials: true
 
       # The skills the jobs shell out to only load from ~/.claude/skills, so
       # the clone is symlinked into place. The identity is set inside the
@@ -108,15 +127,42 @@ jobs:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
+          # The seat that owns the app password; SMTP_USER is a send-as alias.
+          SMTP_AUTH_USER: ${{ secrets.SMTP_AUTH_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          # Second outreach domain (migration 0025): its own Workspace org and
+          # seat, so cold mail never authenticates through the bcn-services
+          # account. Keyed per item 22 (SMTP) and item 23 (IMAP).
+          SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_USER: ${{ secrets.SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_USER }}
+          SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS: ${{ secrets.SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS }}
+          IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_USER: ${{ secrets.IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_USER }}
+          IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS: ${{ secrets.IMAP_MAILBOX_OUTREACH_TRYBCNS_COM_PASS }}
+          # Polling. Same app password as SMTP; no IMAP_PASS means poll skips.
+          IMAP_PASS: ${{ secrets.IMAP_PASS }}
+          # Onboard creates the client repo under bcn-services with `gh`.
+          GH_TOKEN: ${{ secrets.OS_TOKEN }}
+          # /new-client-repo's preflight: a classic PAT with read:packages so the
+          # new client repo's `pnpm install` can reach GitHub Packages. gh itself
+          # keeps using GH_TOKEN, which wins over GITHUB_TOKEN.
+          GITHUB_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          # Fit one run inside the job timeout: touch spreads its sends over
+          # this window, and the skill jobs take at most this many rows a tick.
+          JITTER_WINDOW_MS: '180000'
+          SKILL_JOB_LIMIT: '3'
           # Two lists, never one. SEND_ gates which PROSPECTS touch may mail;
           # NOTIFY_ gates which internal humans get forwards and whose replies
           # are obeyed as commands. Unset is nobody, so both stay empty until a
           # human sets the repo variable.
           SEND_ALLOWED_RECIPIENTS: ${{ vars.SEND_ALLOWED_RECIPIENTS }}
           NOTIFY_ALLOWED_RECIPIENTS: ${{ vars.NOTIFY_ALLOWED_RECIPIENTS }}
+          # The single human who gets the onboarded/signed handover mail.
+          # Separate from NOTIFY_ALLOWED_RECIPIENTS on purpose — see notify.mjs.
+          ONBOARD_NOTIFY_TO: ${{ vars.ONBOARD_NOTIFY_TO }}
           DRY_RUN: ${{ vars.DRY_RUN }}
-          SCHEDULE: ${{ github.event.schedule }}
+          # Test window: the matrix above maps the temporary crons back onto
+          # the canonical SCHEDULES keys in jobs/run.mjs. Restore to
+          # `SCHEDULE: ${{ github.event.schedule }}` with the crons.
+          SCHEDULE: ${{ matrix.schedule }}
           JOB: ${{ inputs.job }}
         run: pnpm job
 

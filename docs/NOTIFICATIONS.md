@@ -17,10 +17,17 @@ Workspace mailbox carries that volume — a handful of messages a day against a
 Resend still has a job, and it is a different one. **Cold outreach to leads must
 never go through the bot mailbox.** Google's terms prohibit unsolicited bulk
 mail, and a complaint spiral against `bcn-services.com` would take down the
-mailbox that carries these internal notices along with it. When outreach sending
-is built, it gets its own subdomain and its own DKIM, exactly so the two
-reputations cannot touch. `lib/mailer.ts` already has the seam for a second
-transport.
+mailbox that carries these internal notices along with it.
+
+**Correction (2026-08-30, LANE.md item 22):** outreach and internal mail do
+**not** have separate reputations. Both live on the same Google Workspace
+seat — one mailbox, two aliases (`outreach@send.bcn-services.com` for cold
+outreach, `bot@bcn-services.com` for internal notify/receive) — sharing one
+app password. The `send.` subdomain gives outreach its own DKIM selector, but
+that isolates *deliverability signals*, not the underlying sending
+reputation: a suppression spiral against either alias risks the seat both
+depend on. This is a decided tradeoff (one Workspace seat instead of two),
+not an oversight — see per-mailbox credentials below.
 
 ## What is already built
 
@@ -124,6 +131,77 @@ sign-in, and step 3 produces a credential no agent may handle.
 `SMTP_PASS` is already in the redaction list in `lib/agent/verbs/types.ts#scrub`,
 so it cannot surface in a logged error message.
 
+## Per-mailbox SMTP credentials (item 22)
+
+`jobs/run.mjs` builds one nodemailer transport per mailbox address instead of
+one global transport, so a second outreach mailbox (a future domain, or the
+placeholder row seeded by `0024_second_outreach_mailbox.sql`) can carry its
+own app password without touching every other mailbox's credentials — and a
+mailbox with no credentials configured is skipped, never silently sent
+through another mailbox's transport.
+
+Naming scheme: `SMTP_MAILBOX_<KEY>_USER` / `SMTP_MAILBOX_<KEY>_PASS`, where
+`KEY` is the mailbox's `address` upper-cased with every run of
+non-alphanumeric characters collapsed to a single `_`. For example:
+
+```
+outreach@send.bcn-services.com  ->  SMTP_MAILBOX_OUTREACH_SEND_BCN_SERVICES_COM_USER
+                                     SMTP_MAILBOX_OUTREACH_SEND_BCN_SERVICES_COM_PASS
+```
+
+`SMTP_AUTH_USER` (optional) is the account that logs in when `SMTP_USER` is a
+"send mail as" alias — an alias cannot authenticate, the seat that owns the
+app password can. It applies to both paths below.
+
+**Fallback (keeps today's single-mailbox pipeline working with zero new
+secrets):** if a mailbox has no `SMTP_MAILBOX_<KEY>_*` pair, and its address
+equals `SMTP_MAILBOX_DEFAULT` (or, absent that, `MAIL_FROM`), the existing
+top-level `SMTP_USER`/`SMTP_PASS` are used for it. Any other uncredentialed
+mailbox gets neither — it is skipped with its own `skipped` event, never
+someone else's pair.
+
+## Switching the outreach domain to trybcns.com
+
+State on 2026-09-04: `mailboxes` holds `outreach@trybcns.com` (migration
+0025) at `status = 'paused'`; the runner and `.env.local` carry
+`SMTP_MAILBOX_OUTREACH_TRYBCNS_COM_USER` / `_PASS` (the same seat and app
+password as today's mailbox); `poll` routes a reply to *any* `mailboxes`
+address, active or not, as a prospect reply, so the old address keeps working
+after the flip. `trybcns.com` already has MX at Google. What is missing is
+human-only, none of it costs money:
+
+1. **Send-as alias.** Admin console → Users → the sending seat → Alternate
+   emails: add `outreach@trybcns.com` (the domain must be a secondary or alias
+   domain on the Workspace account first: Account → Domains → Manage domains).
+   Then Gmail → Settings → Accounts → "Send mail as" → add the alias, treat as
+   alias, no SMTP server. Without this Google rewrites the From header to the
+   seat address and every cold mail goes out as `nseluga@`.
+2. **Authentication DNS at Namecheap** (trybcns.com's registrar):
+   - SPF: `TXT @ "v=spf1 include:_spf.google.com ~all"`
+   - DKIM: Admin console → Apps → Gmail → Authenticate email → select
+     trybcns.com → Generate new record → publish `TXT google._domainkey` →
+     Start authentication.
+   - DMARC: `TXT _dmarc "v=DMARC1; p=none; rua=mailto:dmarc@bcn-services.com"`
+   Verify with `dig TXT trybcns.com`, `dig TXT google._domainkey.trybcns.com`,
+   `dig TXT _dmarc.trybcns.com`, then send one mail to your own address and
+   check "show original" reads SPF PASS, DKIM PASS, DMARC PASS.
+3. **Flip.** Repo secrets `SMTP_USER` and `MAIL_FROM` → `outreach@trybcns.com`
+   (`MAIL_FROM` is also what `resolveMailboxAuth` uses as the fallback key, so
+   both must move together). Then, in one statement:
+
+   ```sql
+   update mailboxes set status = case address
+     when 'outreach@trybcns.com' then 'active'
+     when 'outreach@send.bcn-services.com' then 'paused' end
+   where address in ('outreach@trybcns.com', 'outreach@send.bcn-services.com');
+   ```
+
+   A paused row is never claimed, so the old address stops sending on the next
+   `touch` tick. Keep it paused, not burned: it still receives replies.
+4. **Warm-up restarts.** `warmed_at` is null on the new row, so the daily cap
+   ramps from the warm-up floor again. Watch Postmaster Tools for trybcns.com
+   for the first two weeks before raising `daily_cap`.
+
 ## Failure behaviour, as built
 
 | Situation | Inbox item | Email payload | `email_outbox.status` |
@@ -138,3 +216,33 @@ so it cannot surface in a logged error message.
 Nothing on that table throws at its caller. The event being reported has already
 happened by the time notification runs, and a notice must never be able to undo
 it.
+
+## Multiple mailboxes — IMAP
+
+Tonight the live pipeline reads mail through **one** IMAP account
+(`IMAP_USER`/`IMAP_PASS`, mailbox label `pipeline`) that receives both `bot@`
+and `outreach@` mail as aliases. `jobs/run.mjs`'s `buildDeps` keeps
+`deps.imap` a **single object** in that case — nothing about tonight's setup
+changes.
+
+Once an outreach mailbox gets its own real account, add its credentials as
+three environment variables, `IMAP_MAILBOX_<KEY>_USER` / `_PASS` / `_HOST`,
+where `KEY` is the mailbox's address upper-cased with every non-alphanumeric
+character turned into `_` (e.g. `outreach2@send.bcn-services.com` →
+`OUTREACH2_SEND_BCN_SERVICES_COM`). `buildDeps` enumerates whatever
+`IMAP_MAILBOX_*_USER` keys are actually present — there is no separate list
+of addresses to keep in sync — and drops a key missing its `_PASS` rather
+than throwing. `_HOST` defaults to `imap.gmail.com`; the mailbox folder read
+is always `INBOX`, since a dedicated account has no shared Gmail label to
+select.
+
+As soon as one such key is set, `deps.imap` becomes a **list** — the base
+account first, then one entry per configured mailbox — and `jobs/poll.mjs`
+connects to all of them each tick and merges their messages before routing
+runs. One account failing to connect writes an `error` event naming it and
+the rest are still read; a message whose `Message-ID` shows up on two
+connections (an alias overlap, or a message addressed to more than one
+mailbox) is handled exactly once, though every connection it appeared on
+still gets it marked seen. `NOTIFY_ALLOWED_RECIPIENTS` and
+`SEND_ALLOWED_RECIPIENTS` are unaffected by any of this — same lists, same
+meanings, regardless of how many mailboxes are being read.

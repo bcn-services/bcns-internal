@@ -28,7 +28,21 @@ that mock-up together whenever you have a spare fifteen minutes.
 
 Best,`
 
+// The second bump is the last mail of the sequence; it says so and asks for
+// nothing new. Two identical bumps a week apart read as a machine.
+export const BUMP_BODY_2 = `Hi,
+
+Last note from me on this. If a booking tool for the shop isn't worth fifteen
+minutes right now, no hard feelings, I'll leave it here.
+
+Best,`
+
 export const BUMP_TAIL = `Reply "stop" and I won't write again.`
+
+// Greet by name when the row knows one; the outreach skill's rule is to omit
+// the name, never to invent one.
+export const bumpBody = (touches, ownerName) =>
+  (touches >= 2 ? BUMP_BODY_2 : BUMP_BODY).replace(/^Hi,/, ownerName ? `Hi ${ownerName},` : 'Hi,')
 
 // Warming ramp: five sends a day in a mailbox's first week, plus five for each
 // further week, never above its own daily_cap. No warmed_at is day zero.
@@ -39,7 +53,11 @@ export function warmedCap({ dailyCap = 0, warmedAt = null, now = new Date() } = 
 
 // Sends are spread across the hour rather than fired as a burst — a block of
 // identical-timestamped messages from a cold subdomain is a filter signal.
-export function jitterMs(random = Math.random, windowMs = 55 * 60 * 1000) {
+// The window is the budget for the WHOLE run, so callers divide it by the
+// number of rows they are about to walk: N due rows must still land inside the
+// hour, not take N x 55min.
+export const JITTER_WINDOW_MS = 55 * 60 * 1000
+export function jitterMs(random = Math.random, windowMs = JITTER_WINDOW_MS) {
   return Math.floor(random() * windowMs)
 }
 
@@ -87,13 +105,20 @@ export function buildMime({ from, to, subject, text, html, messageId, date, inRe
 // The only place a transport is touched, and the only path to a send. The
 // refusal is its first statement, so an address off the list never reaches a
 // connection — and never burns a mailbox slot either, dry run or not.
-async function deliver({ transport, dryRun, allowed, to, claim, build }) {
+//
+// `transport(claimed)` — the claimed mailbox row, not a bare call — so the
+// transport that gets built is always the one for the mailbox that was
+// actually claimed. There is no other path to a mailer in this file.
+async function deliver({ transport, dryRun, allowed, to, claim, build, beforeSend = async () => {} }) {
   assertAllowed(to, allowed)
   const claimed = await claim()
   if (!claimed) return { claimed: null }
   const { raw, from, messageId } = build(claimed)
   if (dryRun) return { claimed, messageId, dryRun: true }
-  const mailer = await transport()
+  // Jitter belongs to the send, not to the row: a refused recipient, a capped
+  // mailbox and a dry run all cost nothing and must not burn the window.
+  await beforeSend()
+  const mailer = await transport(claimed)
   await mailer.sendMail({ envelope: { from, to }, raw })
   return { claimed, messageId }
 }
@@ -130,6 +155,7 @@ export async function run({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   uuid = randomUUID,
   limit = 50,
+  jitterWindowMs = JITTER_WINDOW_MS,
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'touch', kind, detail)
   const result = { sent: 0, bumped: 0, callDue: 0, refused: 0, wouldSend: 0, skipped: 0, errors: 0 }
@@ -185,7 +211,7 @@ export async function run({
       const inReplyTo = prior?.message_id ?? null
       const baseSubject = prior?.subject ?? draftSubject ?? `a question about ${row.name}`
       const subject = isBump ? `Re: ${baseSubject.replace(/^Re:\s*/i, '')}` : baseSubject
-      const text = isBump ? `${BUMP_BODY}\n${SIGNATURE}\n\n${BUMP_TAIL}\n` : body
+      const text = isBump ? `${bumpBody(touches, research.owner_name)}\n${SIGNATURE}\n\n${BUMP_TAIL}\n` : body
 
       // Claim first, send second. A mailbox that will not give up a slot is
       // out for the day and the next one is tried. In a dry run nothing is
@@ -195,6 +221,13 @@ export async function run({
           const mb = mailboxes[(rr + i) % mailboxes.length]
           const cap = warmedCap({ dailyCap: mb.daily_cap, warmedAt: mb.warmed_at, now })
           if (cap <= 0) continue
+          // A mailbox with no resolvable credentials is skipped exactly like
+          // one at cap — tried, logged, moved past — and is NEVER sent
+          // through with another mailbox's transport instead.
+          if (typeof transport?.hasCredentials === 'function' && !transport.hasCredentials(mb.address)) {
+            await log('skipped', { mailbox: mb.address, reason: 'no SMTP credentials configured for this mailbox' })
+            continue
+          }
           const [got] = dryRun ? [mb] : ((await db.claimMailboxSlot(sql, { address: mb.address, cap })) ?? [])
           if (got) {
             rr = (rr + i + 1) % mailboxes.length
@@ -224,7 +257,6 @@ export async function run({
         }
       }
 
-      await sleep(jitterMs(random))
       const { claimed } = await deliver({
         transport,
         dryRun,
@@ -232,6 +264,7 @@ export async function run({
         to: row.email,
         claim,
         build,
+        beforeSend: () => sleep(jitterMs(random, jitterWindowMs / rows.length)),
       })
 
       if (!claimed) {
