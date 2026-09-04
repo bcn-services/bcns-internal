@@ -85,3 +85,5 @@ Durgadevi email/chat case (#75114833).
 - Teammate commands (notes, signed) are mail Delivered-To bot@, so they must be replies from nseluga@bcn-services.com, which is signed out of Work Profile Chrome; human re-auth needed before the replied step.
 - 21:21Z DKIM: admin console now "Authenticating email with DKIM" (negative cache cleared early). Case #75117529 withdrawal reply sent 21:19Z from nseluga@bcn-services.com.
 - 21:22Z test window opened: repo default_branch main→e2e-live (cron fires only on default), DRY_RUN true→false. Both restore at cleanup.
+- 22:58Z no scheduled clock run since 19:08Z (main's own crons had already stopped firing before the branch switch) → GitHub scheduler lag. Pushed empty commit 415a607 to re-register; still cron-only, no dispatch.
+- 23:05Z scheduler history on main shows ~6 landed */20 ticks per day, not 39 → GitHub drops most ticks here. Test-window change: clock.yml matrix runs poll-set + touch on every landed tick (workflow-only, still cron-driven). Restore with the crons.

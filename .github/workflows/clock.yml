@@ -31,6 +31,13 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
+    # TEST WINDOW 2026-09-04 — remove with the crons above. GitHub lands only a
+    # handful of this repo's */20 ticks a day, so every tick that does land
+    # runs both the poll set and touch instead of waiting for its own minute.
+    strategy:
+      fail-fast: false
+      matrix:
+        schedule: ${{ (github.event.schedule == '*/20 * * * *' || github.event.schedule == '5,35 * * * *') && fromJSON('["*/20 8-20 * * 1-5","0 14 * * 1-5"]') || fromJSON(format('["{0}"]', github.event.schedule)) }}
     timeout-minutes: 30
     permissions:
       contents: write   # the source run commits the heartbeat file
@@ -153,9 +160,10 @@ jobs:
           # Separate from NOTIFY_ALLOWED_RECIPIENTS on purpose — see notify.mjs.
           ONBOARD_NOTIFY_TO: ${{ vars.ONBOARD_NOTIFY_TO }}
           DRY_RUN: ${{ vars.DRY_RUN }}
-          # Test window: map the temporary crons back onto the canonical
-          # SCHEDULES keys in jobs/run.mjs so no code changes for the test.
-          SCHEDULE: ${{ github.event.schedule == '*/20 * * * *' && '*/20 8-20 * * 1-5' || github.event.schedule == '5,35 * * * *' && '0 14 * * 1-5' || github.event.schedule }}
+          # Test window: the matrix above maps the temporary crons back onto
+          # the canonical SCHEDULES keys in jobs/run.mjs. Restore to
+          # `SCHEDULE: ${{ github.event.schedule }}` with the crons.
+          SCHEDULE: ${{ matrix.schedule }}
           JOB: ${{ inputs.job }}
         run: pnpm job
 
