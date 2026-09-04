@@ -44,7 +44,7 @@ test('runSkill returns the parsed WROTE paths, and only the three prefixes', asy
   // Skill tool from the model's tools and the skill silently does nothing.
   const [bin, argv, opts] = calls[0]
   assert.equal(bin, 'claude')
-  assert.deepEqual(argv, ['-p', '/quote acme', '--model', 'sonnet', '--output-format', 'json'])
+  assert.deepEqual(argv, ['-p', '/quote acme', '--model', 'sonnet', '--output-format', 'json', '--dangerously-skip-permissions'])
   assert.equal(argv.includes('--bare'), false)
   assert.equal(opts.cwd, '/w/os')
 })

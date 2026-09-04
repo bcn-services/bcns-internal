@@ -125,7 +125,7 @@ export async function run({
         continue
       }
 
-      const { wrote } = await runSkill({ command, cwd: osDir })
+      const { wrote, text, denials } = await runSkill({ command, cwd: osDir })
       // `git add` with no pathspec is a no-op and the commit that follows exits
       // non-zero every tick. A skill that wrote nothing is a real failure.
       if (!wrote?.length) {
@@ -135,6 +135,8 @@ export async function run({
           slug,
           command,
           error: 'skill reported no written files — nothing to commit',
+          denials,
+          said: text,
         })
         continue
       }
