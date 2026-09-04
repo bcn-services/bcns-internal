@@ -637,6 +637,69 @@ against a fake `runSkill` only — that is by design, not a gap.
 
 ---
 
+- task: Make the SMTP transport per-mailbox. `jobs/run.mjs:142` builds ONE
+    transport from a single `SMTP_PASS`/`SMTP_AUTH_USER`, and `jobs/touch.mjs:104`
+    calls `transport()` with no argument, so every `mailboxes` row sends through
+    the same authenticated Workspace account whatever its `address` says. Reputation
+    attaches to the authenticating account, not the `From:` header, so the
+    round-robin currently yields N apparent senders sharing one reputation and one
+    daily ceiling. Change `transport` to take the claimed mailbox —
+    `transport(claimed)` — and resolve credentials per address from the
+    environment, caching one transport per address. `deliver` already receives the
+    claimed row, so the change is the factory in `run.mjs` plus the call site in
+    `touch.mjs`. Seed a `mailboxes` row for the new outreach domain in a migration.
+    Correct `docs/NOTIFICATIONS.md`, which claims outreach and internal mail have
+    separate reputations that "cannot touch" — untrue as built, and the reason this
+    went unnoticed.
+  guardrails:
+    - Credentials live in environment variables keyed per mailbox address — never a
+      column on `mailboxes`, never in an event `detail`, never in a log line
+    - A mailbox whose credentials are missing fails closed: skip it and write a
+      `skipped` event. Never fall back to another mailbox's transport
+    - No hardcoded personal address survives as a default anywhere in `run.mjs`
+    - Do not touch the `mailboxes` schema, the round-robin cursor,
+      `claimMailboxSlot`, `warmedCap`, or the per-row `from`/`Message-ID` in
+      `build()` — the row-driven half is already correct
+    - `SEND_ALLOWED_RECIPIENTS` is not widened by this item
+  done when:
+    - A unit test asserts two mailbox rows with different addresses each send
+      through a transport built from that address's own credentials, observed via a
+      fake transport factory recording the auth user it was constructed with
+    - A unit test asserts a mailbox with no credentials in the environment is
+      skipped with a `skipped` event and issues no SMTP command, and that the run
+      does not send it through another mailbox's transport
+    - A test asserts `jobs/run.mjs` contains no literal `@bcn-services.com` address
+      as a credential default
+    - A test asserts no event `detail` written by `touch` contains the value of any
+      `SMTP_PASS*` variable
+  caution: true
+  status: not started
+
+- task: Let `poll` read every outreach mailbox, not one. Each outreach account
+    receives its own replies, so a single IMAP connection sees only one mailbox's
+    threads. `createImap` in `jobs/run.mjs:336` is already a parameterized factory;
+    make `deps.imap` a list — the internal bot account plus one per outreach
+    mailbox — and have `poll` merge the streams before its existing routing runs.
+    The `to`-header split at `jobs/poll.mjs:356` that separates outreach replies
+    from internal mail keeps working once merged; it is only the single-connection
+    assumption that breaks.
+  guardrails:
+    - One source failing to connect never silently drops the others — write an
+      `error` event naming the account that failed and process the rest
+    - Deduplication stays keyed on `message_id`, so a message visible on two
+      connections is processed exactly once
+    - `NOTIFY_ALLOWED_RECIPIENTS` and `SEND_ALLOWED_RECIPIENTS` keep their existing
+      separate meanings and neither is widened
+  done when:
+    - A unit test asserts two IMAP sources each carrying one reply produce two
+      processed replies, each recorded against the right business
+    - A unit test asserts the same `message_id` arriving from two sources is
+      processed once
+    - A unit test asserts one source throwing yields an `error` event naming it
+      while the other source's messages still process
+  caution: true
+  status: not started
+
 ## Found during the 2026-08-31 autonomous run — needs an item
 - ~~**`NOTIFY_ALLOWED_RECIPIENTS` does double duty, and going live weaponises it.**~~
   **FIXED 2026-08-31.** `SEND_ALLOWED_RECIPIENTS` now gates `touch`'s prospect
@@ -686,6 +749,28 @@ against a fake `runSkill` only — that is by design, not a gap.
   increments before the transport runs; a throw leaves the increment. Fails
   safe — it under-sends, never over-sends — so it is a lower priority than the
   reset above.
+
+- **Cold outreach authenticates as Nate's own Workspace account — blocks going
+  live.** `jobs/run.mjs:154` auths SMTP as `nseluga@bcn-services.com`;
+  `outreach@send.bcn-services.com` is only a Gmail "send mail as" alias, and an
+  alias cannot authenticate. So the reputation separation `docs/NOTIFICATIONS.md`
+  promised ("its own subdomain and its own DKIM, exactly so the two reputations
+  cannot touch") does not exist: one Workspace account carries both, Google signs
+  DKIM with the primary domain, and `send.bcn-services.com` shares the
+  organizational domain with `bcn-services.com`. Google Workspace ToS prohibits
+  generating or facilitating unsolicited bulk commercial email, and suspension can
+  be immediate and permanent. Widening `SEND_ALLOWED_RECIPIENTS` to a single
+  stranger on the current config is the moment this goes live. Verified against
+  Google's sender requirements (spam rate must stay under 0.30%) and 2026
+  deliverability guidance (30-day domain aging floor; 30-50/day/mailbox ceiling,
+  so the existing `daily_cap` of 20 and the `warmedCap` ramp are already fine —
+  volume is not the defect, the account is).
+
+  The fix is now two items above: per-mailbox SMTP transport, and per-mailbox
+  IMAP for `poll`. Both are blocked on a human first registering a separate
+  domain (not a subdomain) and creating a real Workspace user on it — a
+  30-day domain-aging floor runs before any send, so registration is the long
+  pole, not the code.
 
 ## Not yet specified
 

@@ -115,6 +115,9 @@ jobs:
           # human sets the repo variable.
           SEND_ALLOWED_RECIPIENTS: ${{ vars.SEND_ALLOWED_RECIPIENTS }}
           NOTIFY_ALLOWED_RECIPIENTS: ${{ vars.NOTIFY_ALLOWED_RECIPIENTS }}
+          # The single human who gets the onboarded/signed handover mail.
+          # Separate from NOTIFY_ALLOWED_RECIPIENTS on purpose — see notify.mjs.
+          ONBOARD_NOTIFY_TO: ${{ vars.ONBOARD_NOTIFY_TO }}
           DRY_RUN: ${{ vars.DRY_RUN }}
           SCHEDULE: ${{ github.event.schedule }}
           JOB: ${{ inputs.job }}

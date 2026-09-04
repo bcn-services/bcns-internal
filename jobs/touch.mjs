@@ -39,7 +39,11 @@ export function warmedCap({ dailyCap = 0, warmedAt = null, now = new Date() } = 
 
 // Sends are spread across the hour rather than fired as a burst — a block of
 // identical-timestamped messages from a cold subdomain is a filter signal.
-export function jitterMs(random = Math.random, windowMs = 55 * 60 * 1000) {
+// The window is the budget for the WHOLE run, so callers divide it by the
+// number of rows they are about to walk: N due rows must still land inside the
+// hour, not take N x 55min.
+export const JITTER_WINDOW_MS = 55 * 60 * 1000
+export function jitterMs(random = Math.random, windowMs = JITTER_WINDOW_MS) {
   return Math.floor(random() * windowMs)
 }
 
@@ -87,12 +91,15 @@ export function buildMime({ from, to, subject, text, html, messageId, date, inRe
 // The only place a transport is touched, and the only path to a send. The
 // refusal is its first statement, so an address off the list never reaches a
 // connection — and never burns a mailbox slot either, dry run or not.
-async function deliver({ transport, dryRun, allowed, to, claim, build }) {
+async function deliver({ transport, dryRun, allowed, to, claim, build, beforeSend = async () => {} }) {
   assertAllowed(to, allowed)
   const claimed = await claim()
   if (!claimed) return { claimed: null }
   const { raw, from, messageId } = build(claimed)
   if (dryRun) return { claimed, messageId, dryRun: true }
+  // Jitter belongs to the send, not to the row: a refused recipient, a capped
+  // mailbox and a dry run all cost nothing and must not burn the window.
+  await beforeSend()
   const mailer = await transport()
   await mailer.sendMail({ envelope: { from, to }, raw })
   return { claimed, messageId }
@@ -224,7 +231,6 @@ export async function run({
         }
       }
 
-      await sleep(jitterMs(random))
       const { claimed } = await deliver({
         transport,
         dryRun,
@@ -232,6 +238,7 @@ export async function run({
         to: row.email,
         claim,
         build,
+        beforeSend: () => sleep(jitterMs(random, JITTER_WINDOW_MS / rows.length)),
       })
 
       if (!claimed) {

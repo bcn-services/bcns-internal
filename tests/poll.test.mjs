@@ -570,6 +570,34 @@ test('an unrecognised Delivered-To is forwarded', async () => {
   assert.deepEqual(h.updates, [])
 })
 
+// A reply to bot@ sent from the account bot@ is aliased under never gets a
+// Delivered-To/X-Original-To — Gmail doesn't stamp them on same-account alias
+// mail. The typed To: line is the only signal left.
+test('an empty Delivered-To falls back to the To: line', async () => {
+  const h = harness({
+    messages: [
+      teammate({ deliveredTo: '', toAddresses: [BOT], text: 'won 2400' }),
+    ],
+    rows: [biz({ stage: 'call_due' })],
+  })
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.commands, 1)
+  assert.equal(result.forwarded, 0)
+})
+
+test('an empty Delivered-To with no matching To: still forwards', async () => {
+  const h = harness({
+    messages: [msg({ deliveredTo: '', toAddresses: ['someoneelse@bcn-services.com'] })],
+  })
+
+  const result = await poll(h.deps)
+
+  assert.equal(result.forwarded, 1)
+  assert.deepEqual(h.updates, [])
+})
+
 test('readCategory only ever returns a known category', () => {
   assert.equal(readCategory('opt_out'), 'opt_out')
   assert.equal(readCategory('{"category":"out_of_office"}'), 'out_of_office')

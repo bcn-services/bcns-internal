@@ -41,6 +41,27 @@ test('an html-only message with no text field still yields a readable body', () 
   assert.equal(m.from, 'dana@acmeroofing.example')
 })
 
+test('delivered-to parsed as a structured address header still yields the plain address', () => {
+  const m = toMessage(
+    parsed({ headers: new Map([['delivered-to', { value: [{ address: 'outreach@send.bcn-services.com' }] }]]) }),
+    7
+  )
+  assert.equal(m.deliveredTo, 'outreach@send.bcn-services.com')
+})
+
+test('toAddresses reads the To: line for messages with no Delivered-To', () => {
+  const m = toMessage(
+    parsed({ headers: new Map(), to: { value: [{ address: 'bot@bcn-services.com' }] } }),
+    7
+  )
+  assert.equal(m.deliveredTo, '')
+  assert.deepEqual(m.toAddresses, ['bot@bcn-services.com'])
+})
+
+test('toAddresses is empty, not throwing, when parsed.to is absent', () => {
+  assert.deepEqual(toMessage(parsed({ headers: new Map() }), 7).toAddresses, [])
+})
+
 test('a text/plain part still wins over the html', () => {
   assert.equal(toMessage(parsed({ text: 'not interested' }), 7).text, 'not interested')
 })

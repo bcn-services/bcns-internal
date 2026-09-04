@@ -391,6 +391,23 @@ test('a suppressed or replied row is never sent to, and sends jitter over the ho
   assert.ok(Number(slept.slice(6)) > 0 && Number(slept.slice(6)) < 60 * 60 * 1000)
 })
 
+// The window is the budget for the run. Per-row jitter made a queue of N rows
+// take up to N x 55min, and made a refused recipient cost 55min of nothing.
+test('the whole run fits inside one jitter window and refusals sleep not at all', async () => {
+  const rows = ['a', 'b', 'c', 'd', 'e'].map((id) => biz({ id }))
+  const h = harness({ rows, dryRun: false })
+  await touch(h.deps)
+  const slept = h.trace.filter((t) => t.startsWith('sleep:')).map((t) => Number(t.slice(6)))
+  assert.equal(slept.length, rows.length)
+  assert.ok(slept.every((ms) => ms > 0))
+  assert.ok(slept.reduce((a, b) => a + b, 0) < 60 * 60 * 1000)
+
+  const refused = harness({ rows, dryRun: false, allowed: ['nobody@example.com'] })
+  const res = await touch(refused.deps)
+  assert.equal(res.refused, rows.length)
+  assert.deepEqual(refused.trace.filter((t) => t.startsWith('sleep:')), [])
+})
+
 test('no rows and no transport each write their own skipped event', async () => {
   const empty = harness({ rows: [] })
   await touch(empty.deps)

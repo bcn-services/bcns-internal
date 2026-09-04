@@ -219,6 +219,23 @@ test('the send list and the internal list are two independent variables', async 
   assert.deepEqual(bare.internalRecipients, [])
 })
 
+// A Gmail alias cannot authenticate. Wiring the auth user to SMTP_USER made
+// every live send die on 535-5.7.8 while the dry run looked perfect.
+test('SMTP authenticates as the account, not as the outreach alias', async () => {
+  const deps = await buildDeps({ SMTP_PASS: 'x'.repeat(16) })
+  const mailer = await deps.transport()
+  assert.equal(mailer.options.auth.user, 'nseluga@bcn-services.com')
+  assert.equal(deps.outreachAddress, 'outreach@send.bcn-services.com')
+
+  const overridden = await buildDeps({
+    SMTP_PASS: 'x'.repeat(16),
+    SMTP_AUTH_USER: 'other@bcn-services.com',
+    SMTP_USER: 'hello@send.bcn-services.com',
+  })
+  assert.equal((await overridden.transport()).options.auth.user, 'other@bcn-services.com')
+  assert.equal(overridden.outreachAddress, 'hello@send.bcn-services.com')
+})
+
 test('no API key ever reaches the Claude client', () => {
   const src = readFileSync(new URL('../lib/claude.mjs', import.meta.url), 'utf8')
   assert.ok(!/ANTHROPIC_API_KEY|api[_-]?key/i.test(src.replace(/^\s*\/\/.*$/gm, '')))

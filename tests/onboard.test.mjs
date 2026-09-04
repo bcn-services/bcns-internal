@@ -385,6 +385,7 @@ function notifyHarness({
       notifiedKeys: async () => [],
       firstOutbound: async () => [],
       logEvent: (_s, job, kind, detail) => (events.push({ job, kind, detail }), Promise.resolve([])),
+      recordThread: async () => [],
       updateBusiness: () => {
         throw new Error('notify must never write a business row')
       },

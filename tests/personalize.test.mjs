@@ -1,10 +1,20 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { TEMPLATE, SIGNATURE, render, isRoleAddress } from '../lib/template.mjs'
-import { run as personalize, BANNED } from '../jobs/personalize.mjs'
+import {
+  run as personalize,
+  BANNED,
+  parseFactReaction,
+  composeCompliment,
+} from '../jobs/personalize.mjs'
 import { assertSelectable, draftedCount } from '../lib/db.mjs'
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 const FACTS = ['Family run since 1998', 'Serves Milford and Stratford', 'GAF certified']
+const REACTION = 'that is a long time to keep a family business going'
+const ANSWER = `FACT: ${FACTS[0]}\nREACTION: ${REACTION}`
+const SENTENCE = composeCompliment('Acme Roofing 1', FACTS[0], REACTION)
 
 function biz(i, over = {}) {
   return {
@@ -20,9 +30,7 @@ function biz(i, over = {}) {
   }
 }
 
-const SENTENCE = 'Most roofing owners we talk to end up tracking jobs on paper'
-
-function harness({ rows, drafted = 0, answer = SENTENCE, voice = null } = {}) {
+function harness({ rows, drafted = 0, answer = ANSWER, voice = null } = {}) {
   const events = []
   const updates = []
   const prompts = []
@@ -48,7 +56,7 @@ test('render fills every slot and leaves the fixed blocks byte-identical', () =>
   const out = render({ name: 'Acme Roofing', ownerName: 'Dana', email: 'dana@acme.test', sentence: SENTENCE })
   assert.ok(out.startsWith('Subject: a question about Acme Roofing\n'))
   assert.match(out, /Hi Dana,/)
-  assert.match(out, new RegExp(`sell you anything\\. ${SENTENCE} and I'd love`))
+  assert.ok(out.includes(`doing well. ${SENTENCE}`))
   assert.ok(out.includes(SIGNATURE))
   assert.ok(out.endsWith('Reply "stop" and I won\'t write again.\n'))
   for (const slot of ['BUSINESS_NAME', 'OWNER_NAME', 'NATE_SIGNATURE', '>>> GENERATED <<<']) {
@@ -114,12 +122,13 @@ test('a business with fewer than three facts is skipped, not drafted thin', asyn
   assert.match(skip.detail.reason, /fewer than three/)
 })
 
-for (const [label, bad] of [
-  ['http', 'Most roofing owners end up at http://example.test for scheduling'],
-  ['$', 'Most roofing owners end up quoting $500 jobs by hand'],
-  ['demo is ready', 'Most roofing owners we talk to book by phone and your demo is ready'],
+for (const [label, reaction] of [
+  ['http', 'http://example.test has the details'],
+  ['$', 'it runs about $500 either way'],
+  ['demo is ready', 'your demo is ready to see'],
 ]) {
   test(`a draft containing ${label} is rejected and an error event written`, async () => {
+    const bad = `FACT: ${FACTS[0]}\nREACTION: ${reaction}`
     const h = harness({ rows: [biz(1)], answer: bad })
     const res = await personalize(h.deps)
     assert.equal(res.drafted, 0)
@@ -171,12 +180,37 @@ test('missing voice rules log a skipped reason and the run continues', async () 
   assert.match(withVoice.prompts[0], /VOICE RULES:\nWrite like Nate\./)
 })
 
-test('a multi-sentence answer is cut to one clause with no terminal period', async () => {
-  const h = harness({ rows: [biz(1)], answer: `${SENTENCE}. We can help with that.` })
-  await personalize(h.deps)
-  const draft = JSON.parse(h.updates[0].patch.research).draft
-  assert.ok(draft.includes(`sell you anything. ${SENTENCE} and I'd love`), draft)
-  assert.ok(!draft.includes('We can help'))
+test('a FACT that is not verbatim from research is rejected as an error, not fixed up', async () => {
+  const h = harness({
+    rows: [biz(1)],
+    answer: `FACT: Fairfield's go-to shop for color correction\nREACTION: that took real work to earn`,
+  })
+  const res = await personalize(h.deps)
+  assert.equal(res.drafted, 0)
+  assert.equal(res.errors, 1)
+  assert.equal(h.updates.length, 0)
+  assert.match(h.events.find((e) => e.kind === 'error').detail.reason, /compliment failed verification/)
+})
+
+test('parseFactReaction pulls the two labeled lines and strips dashes', () => {
+  const out = parseFactReaction('FACT: GAF certified\nREACTION: that told me you take the work seriously.')
+  assert.deepEqual(out, { fact: 'GAF certified', reaction: 'that told me you take the work seriously' })
+  assert.deepEqual(parseFactReaction('no labels here'), { fact: '', reaction: '' })
+})
+
+test('composeCompliment inserts the right copula for verb, number, and adjective leads', () => {
+  assert.equal(
+    composeCompliment('Acme', 'Offers comprehensive maintenance plans', 'that takes real effort'),
+    'I noticed Acme offers comprehensive maintenance plans, and that takes real effort.'
+  )
+  assert.equal(
+    composeCompliment('Acme', '25+ years in business', 'that is a long run'),
+    'I noticed Acme has 25+ years in business, and that is a long run.'
+  )
+  assert.equal(
+    composeCompliment('Acme', 'Family run since 1998', 'that takes commitment'),
+    'I noticed Acme is family run since 1998, and that takes commitment.'
+  )
 })
 
 test('a Claude failure is an error event and leaves the row at qualified', async () => {
@@ -192,4 +226,22 @@ test('an empty qualified backlog writes a skipped event', async () => {
   const res = await personalize(h.deps)
   assert.equal(res.drafted, 0)
   assert.match(h.events.at(-1).detail.reason, /no businesses at stage qualified/)
+})
+
+// lib/template.mjs is a byte-copy of the fenced block under "## The template"
+// in ~/os/skills/outreach/SKILL.md, and the comment there says never to edit
+// one side alone. Nothing enforced that until this test. It needs the ~/os
+// clone, which CI does not always have, so it skips rather than fails when
+// OS_DIR is unset or the skill is absent.
+test('lib/template.mjs still matches the /outreach skill template block', (t) => {
+  const skill = process.env.OS_DIR && join(process.env.OS_DIR, 'skills/outreach/SKILL.md')
+  if (!skill || !existsSync(skill)) return t.skip('no ~/os clone: set OS_DIR to run this check')
+
+  const block = /## The template[\s\S]*?```\n([\s\S]*?)```/.exec(readFileSync(skill, 'utf8'))
+  assert.ok(block, 'no fenced template block found under "## The template" in the outreach skill')
+  assert.equal(
+    block[1],
+    TEMPLATE,
+    'lib/template.mjs and the /outreach skill template have drifted — edit the skill, then re-copy'
+  )
 })

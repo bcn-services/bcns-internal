@@ -343,7 +343,16 @@ export async function run({
     for (const message of messages) {
       try {
         result.read++
-        const to = addr(message.deliveredTo)
+        // Delivered-To is empty for a reply sent to bot@ from the very
+        // account bot@ is aliased under (no real SMTP delivery happens, so
+        // Gmail never stamps it) — fall back to the typed To: line, still
+        // matched as a full address, never a bare local-part.
+        const toCandidates = message.deliveredTo
+          ? [message.deliveredTo]
+          : message.toAddresses ?? []
+        const to =
+          toCandidates.map(addr).find((a) => a === addr(botAddress) || a === addr(outreachAddress)) ??
+          addr(message.deliveredTo)
         const ids = threadIds(message)
         const [thread] = ids.length ? ((await db.threadByMessageIds(sql, ids)) ?? []) : []
         const businessId = thread?.business_id ?? null
@@ -421,9 +430,7 @@ export async function run({
       result.suppressed++
       if (!dryRun) await db.suppress(sql, businessId, 'reply opt-out')
       await log(dryRun ? 'would_suppress' : 'suppressed', { business: businessId, by: 'keyword' })
-      return forward(message, 'opt-out — suppressed, do not mail this business again', {
-        business: businessId,
-      })
+      return
     }
 
     if (isAutoReply(message)) {
@@ -460,9 +467,7 @@ export async function run({
       result.suppressed++
       if (!dryRun) await db.suppress(sql, businessId, 'classified opt-out')
       await log(dryRun ? 'would_suppress' : 'suppressed', { business: businessId, by: 'classifier' })
-      return forward(message, 'opt-out — suppressed, do not mail this business again', {
-        business: businessId,
-      })
+      return
     }
     if (category === 'out_of_office') {
       result.auto++
@@ -481,7 +486,13 @@ export async function run({
     }
 
     result.replied++
-    if (!dryRun) await db.updateBusiness(sql, businessId, { stage: 'replied', next_touch_at: null })
+    if (!dryRun) {
+      await db.updateBusiness(sql, businessId, {
+        stage: 'replied',
+        next_touch_at: null,
+        research: JSON.stringify({ ...parseResearch(row.research), last_reply: body }),
+      })
+    }
     await log(dryRun ? 'would_reply' : 'replied', { business: businessId, category })
   }
 

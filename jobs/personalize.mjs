@@ -1,7 +1,7 @@
 // Personalization: one Claude call per business, producing the single
-// generated sentence the template has a hole for. Never a second pass — a
-// generation call plus a humanizer pass is two calls and the humanizer is an
-// authoring tool, not a runtime one.
+// generated compliment sentence the template has a hole for. Never a second
+// pass — a generation call plus a humanizer pass is two calls and the
+// humanizer is an authoring tool, not a runtime one.
 //
 // Everything else in the email is fixed text from `lib/template.mjs`, so the
 // only thing that can go wrong is that one sentence. It is validated after
@@ -18,19 +18,29 @@ export const BANNED = ['http', '$', 'demo is ready']
 export const MIN_FACTS = 3
 export const BUFFER_CAP = 25
 
-export const PROMPT = `You are writing ONE sentence for a cold email to the owner of a local trade business.
+// Fact-first-word shapes seen in real qualify.mjs output. Covers every shape
+// observed so far; an unseen shape falls to the "is" branch, which is not
+// guaranteed grammatical — spot-check drafts after a trade this hasn't run
+// against before.
+const VERB_LEAD = /^(offers|provides|serves|specializes|services)\b/i
+const NUMBER_LEAD = /^\d/
 
-Return ONLY that sentence as plain text. No quotes, no preamble, no JSON.
+export const PROMPT = `You are writing a short compliment for a cold email to the owner of a local trade business.
 
-The sentence describes a PATTERN across other businesses in the same trade and
-ends in a way that invites the owner to talk about how they handle it. Shape:
-"Most TRADE owners we talk to end up DOING_SOMETHING_BY_HAND."
+Return EXACTLY two lines, plain text, no preamble:
+FACT: one fact copied VERBATIM from the RESEARCH FACTS below, character for character
+REACTION: a short reaction clause, four to ten words, reacting to that fact like a person genuinely would
 
 Hard rules:
-- One sentence, and end it WITHOUT a period: the email continues "and I'd love
-  to learn more about how you handle that at ...", so your text is a clause.
-- Never diagnose THIS business. Never state a pain, a number about them, a
-  price, a named competitor, a URL, or a claim that a demo already exists.
+- REACTION must be an OPINION about the fact, not a new fact. Never add a
+  noun, number, name, or claim that isn't already in the FACT line.
+- Never use "impressive", "notable", "significant", or "stands out" in REACTION.
+- Lean warm, not flat. Skip lukewarm one-word verdicts like "solid", "good", or
+  "nice" — react the way someone genuinely struck by the fact would put it, in
+  their own words. "hard to keep that rating with hundreds of reviews" and
+  "33 years in one shop is rare these days" are the right register: specific,
+  a little admiring, still plain speech.
+- Never diagnose THIS business. Never state a pain, a price, or a named competitor.
 - Every claim must trace to one of the RESEARCH FACTS below.
 - No em dashes and no en dashes.
 
@@ -99,7 +109,20 @@ export async function run({
       }
 
       const answer = await claude.ask(buildPrompt(b, facts, voice))
-      const sentence = oneSentence(typeof answer === 'string' ? answer : String(answer?.text ?? answer))
+      const { fact, reaction } = parseFactReaction(typeof answer === 'string' ? answer : String(answer?.text ?? answer))
+
+      // The model was told to copy a fact verbatim; check it, rather than
+      // trust it. A fact that isn't an exact match to something in `facts` is
+      // a paraphrase or an invention, and this is the one place that can be
+      // caught in code instead of by rereading every draft by hand.
+      const verbatim = facts.some((f) => f.trim().toLowerCase() === fact.trim().toLowerCase())
+      if (!fact || !reaction || !verbatim) {
+        errors++
+        await log('error', { business: b.id, reason: 'compliment failed verification', fact, reaction })
+        continue
+      }
+
+      const sentence = composeCompliment(b.name, fact, reaction)
 
       const draft = render({
         name: b.name,
@@ -156,11 +179,32 @@ function buildPrompt(b, facts, voice) {
   )
 }
 
-// The model is asked for one sentence; this is what happens when it sends two.
-// Dashes are normalised rather than rejected because rejecting would spend the
-// call and produce nothing.
-function oneSentence(text) {
-  const clean = String(text).replace(/[—–]/g, ',').replace(/\s+/g, ' ').trim()
-  const end = clean.indexOf('. ')
-  return (end === -1 ? clean : clean.slice(0, end)).replace(/[.!?]+$/, '').trim()
+// Pulls the FACT: and REACTION: lines out of the model's answer. Dashes are
+// normalised rather than rejected because rejecting would spend the call and
+// produce nothing; a missing line comes back empty and fails verification
+// in run(), not here.
+export function parseFactReaction(text) {
+  const lines = String(text)
+    .replace(/[—–]/g, ',')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const factLine = lines.find((l) => /^FACT:/i.test(l))
+  const reactionLine = lines.find((l) => /^REACTION:/i.test(l))
+  return {
+    fact: factLine ? factLine.replace(/^FACT:\s*/i, '').trim() : '',
+    reaction: reactionLine
+      ? reactionLine.replace(/^REACTION:\s*/i, '').trim().replace(/[.!?]+$/, '')
+      : '',
+  }
+}
+
+// "I noticed BUSINESS_NAME <clause>, and REACTION." The clause needs a copula
+// ("is"/"has") inserted, or none, depending on whether the fact already
+// starts with a third-person verb, a number, or an adjective/participle. See
+// the VERB_LEAD/NUMBER_LEAD comment above for the coverage and its ceiling.
+export function composeCompliment(name, fact, reaction) {
+  const lower = fact.charAt(0).toLowerCase() + fact.slice(1)
+  const clause = VERB_LEAD.test(fact) ? lower : NUMBER_LEAD.test(fact) ? `has ${lower}` : `is ${lower}`
+  return `I noticed ${name} ${clause}, and ${reaction}.`
 }

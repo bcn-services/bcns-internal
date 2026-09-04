@@ -146,7 +146,12 @@ export async function buildDeps(env = process.env, exists = existsSync) {
         port,
         secure: port === 465,
         auth: {
-          user: env.SMTP_USER || 'outreach@send.bcn-services.com',
+          // Not SMTP_USER. `outreach@send.bcn-services.com` is a Gmail
+          // "send mail as" alias, and an alias cannot authenticate: the app
+          // password belongs to the Workspace account that owns the alias, so
+          // Google answers 535-5.7.8 BadCredentials for the alias every time.
+          // The visible From is the mailbox row's own address, set per send.
+          user: env.SMTP_AUTH_USER || 'nseluga@bcn-services.com',
           pass: env.SMTP_PASS,
         },
       }))
@@ -281,10 +286,22 @@ export function toMessage(parsed, uid, header) {
     const v = parsed.headers?.get?.(name)
     return Array.isArray(v) ? v[0] : v
   })
+  // mailparser parses delivered-to/x-original-to as structured address
+  // headers ({value:[{address}], ...}), not plain strings.
+  const addrHeader = (name) => {
+    const v = get(name)
+    return v?.value?.[0]?.address ?? (typeof v === 'string' ? v : '')
+  }
   return {
     uid,
     from: parsed.from?.value?.[0]?.address ?? '',
-    deliveredTo: String(get('delivered-to') ?? get('x-original-to') ?? ''),
+    deliveredTo: addrHeader('delivered-to') || addrHeader('x-original-to'),
+    // Gmail only stamps Delivered-To/X-Original-To on mail that actually
+    // transits SMTP delivery. A reply sent to an alias FROM the very account
+    // that alias belongs to (bot@ is a send-as alias of the poller's own
+    // inbox) never does — it lands with both headers empty. The literal To:
+    // line the sender typed is the fallback the router uses in that case.
+    toAddresses: (parsed.to?.value ?? []).map((v) => v?.address).filter(Boolean),
     subject: parsed.subject ?? '',
     text: parsed.text || htmlToText(parsed.html),
     messageId: parsed.messageId ?? '',
