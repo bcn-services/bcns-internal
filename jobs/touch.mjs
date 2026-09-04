@@ -28,7 +28,21 @@ that mock-up together whenever you have a spare fifteen minutes.
 
 Best,`
 
+// The second bump is the last mail of the sequence; it says so and asks for
+// nothing new. Two identical bumps a week apart read as a machine.
+export const BUMP_BODY_2 = `Hi,
+
+Last note from me on this. If a booking tool for the shop isn't worth fifteen
+minutes right now, no hard feelings, I'll leave it here.
+
+Best,`
+
 export const BUMP_TAIL = `Reply "stop" and I won't write again.`
+
+// Greet by name when the row knows one; the outreach skill's rule is to omit
+// the name, never to invent one.
+export const bumpBody = (touches, ownerName) =>
+  (touches >= 2 ? BUMP_BODY_2 : BUMP_BODY).replace(/^Hi,/, ownerName ? `Hi ${ownerName},` : 'Hi,')
 
 // Warming ramp: five sends a day in a mailbox's first week, plus five for each
 // further week, never above its own daily_cap. No warmed_at is day zero.
@@ -193,7 +207,7 @@ export async function run({
       const inReplyTo = prior?.message_id ?? null
       const baseSubject = prior?.subject ?? draftSubject ?? `a question about ${row.name}`
       const subject = isBump ? `Re: ${baseSubject.replace(/^Re:\s*/i, '')}` : baseSubject
-      const text = isBump ? `${BUMP_BODY}\n${SIGNATURE}\n\n${BUMP_TAIL}\n` : body
+      const text = isBump ? `${bumpBody(touches, research.owner_name)}\n${SIGNATURE}\n\n${BUMP_TAIL}\n` : body
 
       // Claim first, send second. A mailbox that will not give up a slot is
       // out for the day and the next one is tried. In a dry run nothing is

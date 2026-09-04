@@ -10,6 +10,8 @@ import {
   splitDraft,
   assertAllowed,
   BUMP_BODY,
+  BUMP_BODY_2,
+  bumpBody,
   MAX_TOUCHES,
 } from '../jobs/touch.mjs'
 import { render } from '../lib/template.mjs'
@@ -163,10 +165,16 @@ test('jitter stays inside the hour and the subject line is split off the draft',
   assert.ok(!body.includes('Subject:'))
 })
 
-test('the bump copy is under forty words and makes no new argument', () => {
-  const words = BUMP_BODY.trim().split(/\s+/)
-  assert.ok(words.length < 40, `bump is ${words.length} words`)
-  assert.ok(!/free|price|\$|demo is ready|http/i.test(BUMP_BODY))
+test('both bump copies are under forty words, differ, and make no new argument', () => {
+  for (const copy of [BUMP_BODY, BUMP_BODY_2]) {
+    const words = copy.trim().split(/\s+/)
+    assert.ok(words.length < 40, `bump is ${words.length} words`)
+    assert.ok(!/free|price|\$|demo is ready|http/i.test(copy))
+  }
+  assert.notEqual(BUMP_BODY, BUMP_BODY_2)
+  assert.ok(bumpBody(1, 'Dana').startsWith('Hi Dana,'))
+  assert.ok(bumpBody(2, null).startsWith('Hi,'))
+  assert.ok(bumpBody(2, 'Dana').includes('Last note'))
 })
 
 test('the allow-list refuses an unlisted address and an empty list allows nobody', () => {
