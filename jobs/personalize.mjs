@@ -18,12 +18,14 @@ export const BANNED = ['http', '$', 'demo is ready']
 export const MIN_FACTS = 3
 export const BUFFER_CAP = 25
 
-// Fact-first-word shapes seen in real qualify.mjs output. Covers every shape
-// observed so far; an unseen shape falls to the "is" branch, which is not
-// guaranteed grammatical — spot-check drafts after a trade this hasn't run
-// against before.
-const VERB_LEAD = /^(offers|provides|serves|specializes|services)\b/i
-const NUMBER_LEAD = /^\d/
+// qualify asks for facts shaped as a predicate starting with a verb, so most
+// splice straight after the name. Older rows and a model that ignored the
+// ask fall through: a leading number gets "has", anything else gets "is",
+// which is not guaranteed grammatical — spot-check drafts after a trade this
+// hasn't run against before.
+const VERB_LEAD =
+  /^(offers|provides|serves|specializes|services|has|have|is|are|was|does|runs|holds|installs|installed|employs|operates|uses|carries|handles|covers|maintains|repairs|builds|works|trains|earned|won|opened|started|founded|owns)\b/i
+const NUMBER_LEAD = /^(over|more than|nearly|almost|about)?\s*\d/i
 
 export const PROMPT = `You are writing a short compliment for a cold email to the owner of a local trade business.
 

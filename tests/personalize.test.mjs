@@ -213,6 +213,16 @@ test('composeCompliment inserts the right copula for verb, number, and adjective
     composeCompliment('Acme', 'Family run since 1998', 'that takes commitment'),
     'I noticed Acme is family run since 1998, and that takes commitment.'
   )
+  // The shapes the runner actually produced on 2026-09-04, which the old
+  // copula rule turned into "is has" and "is over 30,000 roofs".
+  assert.equal(
+    composeCompliment('Acme', 'has customer testimonials from Sean B.', 'real customers vouching means more than any ad'),
+    'I noticed Acme has customer testimonials from Sean B., and real customers vouching means more than any ad.'
+  )
+  assert.equal(
+    composeCompliment('Acme', 'over 30,000 roofs installed', 'that is a lot of roofs'),
+    'I noticed Acme has over 30,000 roofs installed, and that is a lot of roofs.'
+  )
 })
 
 test('a Claude failure is an error event and leaves the row at qualified', async () => {

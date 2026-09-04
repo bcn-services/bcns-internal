@@ -21,7 +21,10 @@ Rules:
   address appears, return null. Never construct one from the domain.
 - "facts" is three to five specific, checkable things about THIS business drawn
   from the page — services, years in business, towns served, named staff,
-  certifications. No generic filler.
+  certifications. No generic filler. Phrase each fact as a predicate that
+  completes the sentence "<business name> ..." and starts with a verb, e.g.
+  "has served Milford since 1998", "is GAF Master Elite certified",
+  "offers 24-hour emergency repairs". Never start a fact with the business name.
 - "fit" judges whether this business would benefit from a new website or an
   internal tool.
 
