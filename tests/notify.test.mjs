@@ -332,6 +332,7 @@ test('a drafted row is not notified about at all: no mail, no event, no read', a
     'a drafted row still wrote a notification event'
   )
   assert.ok(!stagesRead.includes('drafted'), 'notify still queries the drafted stage')
+  assert.deepEqual(kinds(h.events).filter((k) => k === 'skipped'), ['skipped'], 'a quiet tick must still write one skipped event')
 })
 
 test('a dry run over a drafted row is silent too', async () => {

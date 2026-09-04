@@ -301,5 +301,9 @@ export async function run({
     }
   }
 
+  // A silent tick is still a tick: the log has to show notify ran and found
+  // nothing, or a broken schedule and a quiet funnel look the same.
+  if (!result.emails && !result.errors) await log('skipped', { reason: 'nothing to notify' })
+
   return result
 }
