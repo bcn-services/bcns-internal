@@ -23,7 +23,7 @@ import { assertAllowed, buildMime, RecipientRefused } from './touch.mjs'
 import { SIGNATURE, toHtml } from '../lib/template.mjs'
 import { pushOrSkip } from '../lib/osrepo.mjs'
 import { claimSlug } from './pitch.mjs'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
@@ -46,6 +46,20 @@ export const MAX_ATTEMPTS = 3
 export const MAX_CONTRACT_BYTES = 10 * 1024 * 1024
 
 export const CONTRACT_MIME = 'application/pdf'
+
+// Draft PRs opened per day, across every fingerprint. Read from `events`
+// (see `db.triageOpenedToday`), so there is no counter to reset at midnight.
+export const TRIAGE_DAILY_CAP = 3
+
+// Normalized subject + first body line, hashed. Loose on purpose: two alerts
+// that read the same to a human should collapse to one PR, not two — a
+// fingerprint keyed on raw bytes would miss the retried copy an alerting tool
+// sends seconds later with a different message id.
+export function alertFingerprint(message = {}) {
+  const subject = String(message.subject ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+  const firstLine = stripQuoted(message.text).split('\n')[0]?.trim().toLowerCase().replace(/\s+/g, ' ') ?? ''
+  return createHash('sha256').update(`${subject}\n${firstLine}`).digest('hex')
+}
 
 // --- quoted regions --------------------------------------------------------
 // Truncate at the first quote marker, then drop any surviving `>` lines. Kept
@@ -278,6 +292,8 @@ export async function run({
   notifyFrom = 'bot@bcn-services.com',
   outreachAddress = 'outreach@send.bcn-services.com',
   botAddress = 'bot@bcn-services.com',
+  alertsAddress = 'alerts@bcn-services.com',
+  github = null,
   osDir = null,
   commitAndPush = null,
   dryRun = true,
@@ -285,7 +301,10 @@ export async function run({
   uuid = randomUUID,
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'poll', kind, detail)
-  const result = { read: 0, suppressed: 0, replied: 0, commands: 0, forwarded: 0, auto: 0, errors: 0 }
+  const result = { read: 0, suppressed: 0, replied: 0, commands: 0, forwarded: 0, auto: 0, errors: 0, triaged: 0 }
+  // Alert events log under job 'triage', not 'poll' — the daily cap and the
+  // dedupe-hit trail are this job's own record, independent of the poller's.
+  const logTriage = (kind, detail) => db.logEvent(sql, 'triage', kind, detail)
 
   if (!imap) {
     await log('skipped', { reason: 'missing deps: imap' })
@@ -355,6 +374,8 @@ export async function run({
           await handleTeammate({ message, businessId })
         } else if (to === addr(outreachAddress)) {
           await handleProspect({ message, businessId })
+        } else if (to === addr(alertsAddress)) {
+          await handleAlert({ message })
         } else {
           await forward(message, 'unrecognised Delivered-To', { delivered_to: to })
         }
@@ -534,6 +555,52 @@ export async function run({
       command: cmd.command,
       ...(cmd.amount === undefined ? {} : { amount: cmd.amount }),
     })
+  }
+
+  // --- alert triage ---------------------------------------------------------
+  // Fed from the same IMAP stream poll already drains — a separate job would
+  // need its own connection and would reimplement the fetch/seen/dead-letter
+  // loop above for no reason. The cap is checked BEFORE anything is written:
+  // a fourth alert on a cap-full day touches neither `alerts` nor `github`.
+  async function handleAlert({ message }) {
+    const [row] = (await db.triageOpenedToday(sql)) ?? []
+    if (Number(row?.count ?? 0) >= TRIAGE_DAILY_CAP) {
+      await logTriage('skipped', {
+        reason: `triage daily cap of ${TRIAGE_DAILY_CAP} reached`,
+        subject: message.subject,
+      })
+      return
+    }
+
+    if (dryRun) {
+      await logTriage('would_triage', { subject: message.subject })
+      return
+    }
+
+    const fingerprint = alertFingerprint(message)
+    const [alert] = await db.upsertAlert(sql, { fingerprint, repo: null, source: 'alerts@' })
+    result.triaged++
+
+    // Already seen before today's count was checked, or on a prior day — either
+    // way an open PR for this fingerprint already exists, so `hits` alone
+    // decides, not the cap.
+    if (Number(alert?.hits ?? 1) > 1) {
+      await logTriage('duplicate', { fingerprint, hits: alert.hits })
+      return
+    }
+
+    if (!github) {
+      await logTriage('error', { reason: 'missing deps: github', fingerprint })
+      return
+    }
+
+    const pr = await github({
+      title: `alert: ${message.subject ?? '(no subject)'}`,
+      body: stripQuoted(message.text),
+      branch: `alert/${fingerprint.slice(0, 12)}`,
+    })
+    await db.setAlertPr(sql, fingerprint, pr?.url ?? null)
+    await logTriage('opened', { fingerprint, pr_url: pr?.url ?? null })
   }
 
   // --- signed contract ------------------------------------------------------
