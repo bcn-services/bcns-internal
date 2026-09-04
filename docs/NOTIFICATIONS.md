@@ -170,3 +170,33 @@ someone else's pair.
 Nothing on that table throws at its caller. The event being reported has already
 happened by the time notification runs, and a notice must never be able to undo
 it.
+
+## Multiple mailboxes — IMAP
+
+Tonight the live pipeline reads mail through **one** IMAP account
+(`IMAP_USER`/`IMAP_PASS`, mailbox label `pipeline`) that receives both `bot@`
+and `outreach@` mail as aliases. `jobs/run.mjs`'s `buildDeps` keeps
+`deps.imap` a **single object** in that case — nothing about tonight's setup
+changes.
+
+Once an outreach mailbox gets its own real account, add its credentials as
+three environment variables, `IMAP_MAILBOX_<KEY>_USER` / `_PASS` / `_HOST`,
+where `KEY` is the mailbox's address upper-cased with every non-alphanumeric
+character turned into `_` (e.g. `outreach2@send.bcn-services.com` →
+`OUTREACH2_SEND_BCN_SERVICES_COM`). `buildDeps` enumerates whatever
+`IMAP_MAILBOX_*_USER` keys are actually present — there is no separate list
+of addresses to keep in sync — and drops a key missing its `_PASS` rather
+than throwing. `_HOST` defaults to `imap.gmail.com`; the mailbox folder read
+is always `INBOX`, since a dedicated account has no shared Gmail label to
+select.
+
+As soon as one such key is set, `deps.imap` becomes a **list** — the base
+account first, then one entry per configured mailbox — and `jobs/poll.mjs`
+connects to all of them each tick and merges their messages before routing
+runs. One account failing to connect writes an `error` event naming it and
+the rest are still read; a message whose `Message-ID` shows up on two
+connections (an alias overlap, or a message addressed to more than one
+mailbox) is handled exactly once, though every connection it appeared on
+still gets it marked seen. `NOTIFY_ALLOWED_RECIPIENTS` and
+`SEND_ALLOWED_RECIPIENTS` are unaffected by any of this — same lists, same
+meanings, regardless of how many mailboxes are being read.

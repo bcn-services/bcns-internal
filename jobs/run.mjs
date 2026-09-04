@@ -239,16 +239,51 @@ export async function buildDeps(env = process.env, exists = existsSync) {
     deps.transport = createMailboxTransport(env)
   }
 
-  // IMAP is the poller's only input. Same app password as SMTP, one label.
-  // No password means poll writes a skipped event rather than a half-read inbox.
+  // IMAP is the poller's only input. Tonight there is one account
+  // (IMAP_USER/IMAP_PASS) that receives bot@ and outreach@ as aliases, so
+  // `deps.imap` stays a single object — poll.mjs normalises with
+  // `[].concat(deps.imap)` — and nothing below changes that. Each outreach
+  // mailbox that later gets its own real account is read over its own
+  // connection instead: the scheme parallels the SMTP one (item 22),
+  // `IMAP_MAILBOX_<KEY>_USER/_PASS/_HOST`, keys enumerated from whatever is
+  // actually set in the environment, never a hardcoded address list. A key
+  // missing its PASS is dropped here, not thrown — same "capability not
+  // granted" shape as the rest of this file.
   if (env.IMAP_PASS) {
-    deps.imap = createImap({
+    const base = createImap({
       host: env.IMAP_HOST || 'imap.gmail.com',
       port: Number(env.IMAP_PORT) || 993,
       user: env.IMAP_USER || 'nseluga@bcn-services.com',
       pass: env.IMAP_PASS,
       mailbox: env.IMAP_MAILBOX || 'pipeline',
     })
+    base.account = env.IMAP_USER || 'nseluga@bcn-services.com'
+
+    const extraKeys = [
+      ...new Set(
+        Object.keys(env)
+          .map((k) => /^IMAP_MAILBOX_(.+)_USER$/.exec(k)?.[1])
+          .filter(Boolean)
+      ),
+    ]
+    const extras = extraKeys
+      .map((key) => {
+        const user = env[`IMAP_MAILBOX_${key}_USER`]
+        const pass = env[`IMAP_MAILBOX_${key}_PASS`]
+        if (!user || !pass) return null
+        const source = createImap({
+          host: env[`IMAP_MAILBOX_${key}_HOST`] || 'imap.gmail.com',
+          port: 993,
+          user,
+          pass,
+          mailbox: 'INBOX',
+        })
+        source.account = user
+        return source
+      })
+      .filter(Boolean)
+
+    deps.imap = extras.length ? [base, ...extras] : base
   }
   deps.notifyFrom = env.NOTIFY_FROM || 'bot@bcn-services.com'
   deps.outreachAddress = env.SMTP_USER || 'outreach@send.bcn-services.com'

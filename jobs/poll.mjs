@@ -306,7 +306,11 @@ export async function run({
   // dedupe-hit trail are this job's own record, independent of the poller's.
   const logTriage = (kind, detail) => db.logEvent(sql, 'triage', kind, detail)
 
-  if (!imap) {
+  // Tonight `imap` is a single factory (one account, bot@/outreach@ as
+  // aliases); once outreach mailboxes get their own accounts it is a list —
+  // `[].concat` treats either shape the same way.
+  const sources = [].concat(imap).filter(Boolean)
+  if (!sources.length) {
     await log('skipped', { reason: 'missing deps: imap' })
     return result
   }
@@ -350,16 +354,65 @@ export async function run({
     if (delivered) result.forwarded++
   }
 
-  const client = await imap()
-  let messages = []
+  // Connect every source and pool its messages before any routing runs. One
+  // source failing to connect (or to list its messages) never drops the
+  // others — it is an `error` event naming the account, and the loop moves on.
+  // A message_id seen twice (two mailboxes, one thread) keeps only the first
+  // sighting to handle; the rest are recorded so their own connection still
+  // gets its `markSeen` once the first sighting is done with it.
+  const clients = []
+  const inbox = new Map() // messageKey -> { message, client, account, duplicates }
+  for (const source of sources) {
+    const account = source?.account ?? 'unknown'
+    let client
+    try {
+      client = await source()
+    } catch (err) {
+      result.errors++
+      await log('error', { stage: 'connect', account, error: String(err?.message ?? err) })
+      continue
+    }
+    clients.push(client)
+    try {
+      const messages = (await client.messages()) ?? []
+      for (const message of messages) {
+        const key = messageKey(message)
+        const existing = inbox.get(key)
+        if (existing) existing.duplicates.push({ client, uid: message.uid })
+        else inbox.set(key, { message, client, account, duplicates: [] })
+      }
+    } catch (err) {
+      result.errors++
+      await log('error', { stage: 'fetch', account, error: String(err?.message ?? err) })
+    }
+  }
+
   try {
-    messages = (await client.messages()) ?? []
-    if (!messages.length) {
-      await log('skipped', { reason: 'no unread messages on the pipeline label' })
+    if (!inbox.size) {
+      await log('skipped', { reason: 'no unread messages on any mailbox' })
       return result
     }
 
-    for (const message of messages) {
+    // Seen only AFTER the handler returns. A crash mid-handle leaves the
+    // message unseen so the next tick retries it: a duplicated forward is
+    // visible and cheap, a silently dropped opt-out is neither. Re-applying
+    // a retried message is safe — stage moves and `suppress` are idempotent,
+    // and the `notes` append dedupes on the note itself. A duplicate sighting
+    // is marked seen on its own connection right alongside the original, so
+    // it is never re-read (and re-deduped) forever.
+    const markSeen = async (client, uid, duplicates) => {
+      if (dryRun) return
+      await client.markSeen?.(uid)
+      for (const dup of duplicates) {
+        try {
+          await dup.client.markSeen?.(dup.uid)
+        } catch {
+          // best effort — a stuck duplicate just gets re-deduped next tick
+        }
+      }
+    }
+
+    for (const { message, client, duplicates } of inbox.values()) {
       try {
         result.read++
         // Delivered-To is empty for a reply sent to bot@ from the very
@@ -389,12 +442,7 @@ export async function run({
           await forward(message, 'unrecognised Delivered-To', { delivered_to: to })
         }
 
-        // Seen only AFTER the handler returns. A crash mid-handle leaves the
-        // message unseen so the next tick retries it: a duplicated forward is
-        // visible and cheap, a silently dropped opt-out is neither. Re-applying
-        // a retried message is safe — stage moves and `suppress` are
-        // idempotent, and the `notes` append dedupes on the note itself.
-        if (!dryRun) await client.markSeen?.(message.uid)
+        await markSeen(client, message.uid, duplicates)
       } catch (err) {
         result.errors++
         // Bookkeeping for one bad message must never take the rest of the
@@ -428,7 +476,7 @@ export async function run({
               forwarded: forwardError === null,
               ...(forwardError === null ? {} : { forward_error: forwardError }),
             })
-            if (!dryRun) await client.markSeen?.(message?.uid)
+            await markSeen(client, message?.uid, duplicates)
           }
         } catch {
           // nothing left to do but keep going
@@ -436,7 +484,13 @@ export async function run({
       }
     }
   } finally {
-    await client.close?.()
+    for (const client of clients) {
+      try {
+        await client.close?.()
+      } catch {
+        // best effort — a close failure must not mask the tick's real result
+      }
+    }
   }
 
   return result
