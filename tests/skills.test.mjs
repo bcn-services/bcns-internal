@@ -202,3 +202,19 @@ test('normalizeDashes rewrites em and en dashes in written markdown, skips html 
   assert.equal(readFileSync(md, 'utf8'), 'Hi Nate, quotes for Acme, phone only.\n')
   assert.equal(readFileSync(html, 'utf8'), '<title>Acme — Mock</title>')
 })
+
+test('runSkill carries the stdout envelope result into a non-zero exit error', async () => {
+  await assert.rejects(
+    runSkill({
+      command: '/new-client-repo acme --yes',
+      cwd: '/w/os',
+      run: async () => {
+        throw Object.assign(new Error('Command failed: claude -p'), {
+          stdout: JSON.stringify({ is_error: true, result: 'gh repo create: HTTP 403' }),
+          stderr: '',
+        })
+      },
+    }),
+    /skill run failed for "\/new-client-repo acme --yes": Command failed: claude -p; said: gh repo create: HTTP 403/
+  )
+})
