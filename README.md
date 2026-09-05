@@ -123,7 +123,7 @@ writes its own `skipped` event — never a crash.
 |---|---|
 | `DATABASE_URL` | `sql`, `db`, `logEvent`, the grid readers |
 | `GCP_PROJECT` + a minted OIDC token | `places`, `readBudget` |
-| `CLAUDE_CODE_OAUTH_TOKEN` | `claude` (the CLI, billed to the subscription — there is no API-key path) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `claude` (the CLI, billed to the subscription — there is no API-key path). Mint it with `claude setup-token`, never by copying the local keychain token: that one is revoked the next time the Mac's own `claude` refreshes its session, which killed the runner twice on 2026-09-05 |
 | `MAIL_FROM` | the address-verification probe |
 | `SMTP_PASS` | the outbound transport |
 | `IMAP_PASS` | the inbox reader |

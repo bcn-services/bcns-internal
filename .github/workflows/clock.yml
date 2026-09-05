@@ -4,39 +4,41 @@ name: clock
 # all funnelled through jobs/run.mjs, which maps the incoming cron string (or
 # the dispatch input) to a job module.
 #
+# GitHub's own `schedule` event is best-effort and on this repo it drops most
+# ticks (six landed of thirty-nine on 2026-09-04). The crons below stay as a
+# backup; the reliable trigger is Cloud Scheduler in the GCP project posting a
+# workflow_dispatch with `schedule` set to the same cron string, so the
+# SCHEDULES map in jobs/run.mjs stays the single source of truth for what runs.
+# See docs/SCHEDULER.md.
+#
 # Concurrency is keyed on the schedule, not on the workflow, so a slow poll
 # tick can never overlap the next poll tick while still letting source and
 # touch run alongside it.
 
 on:
   schedule:
-    # TEST WINDOW 2026-09-04 (trybcns.com live funnel) — restore before merge:
-    #   poll  '*/20 8-20 * * 1-5'
-    #   touch '0 14 * * 1-5'
-    - cron: '*/5 * * * *'         # poll set + touch, every landed tick (test window; GitHub's floor)
+    - cron: '*/20 8-20 * * 1-5'   # poll
+    - cron: '0 14 * * 1-5'        # touch
     - cron: '0 13 * * 1'          # source, then qualify
     - cron: '30 13 * * 1-5'       # personalize
   workflow_dispatch:
     inputs:
+      schedule:
+        description: Cron string from SCHEDULES to run as a tick (what Cloud Scheduler sends)
+        required: false
+        type: string
       job:
-        description: Job to run by name
-        required: true
+        description: Job to run by name (manual; overrides schedule)
+        required: false
         type: string
 
 concurrency:
-  group: clock-${{ github.event.schedule || inputs.job }}
+  group: clock-${{ github.event.schedule || inputs.schedule || inputs.job }}
   cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    # TEST WINDOW 2026-09-04 — remove with the crons above. GitHub lands only a
-    # handful of this repo's */20 ticks a day, so every tick that does land
-    # runs both the poll set and touch instead of waiting for its own minute.
-    strategy:
-      fail-fast: false
-      matrix:
-        schedule: ${{ github.event.schedule == '*/5 * * * *' && fromJSON('["*/20 8-20 * * 1-5","0 14 * * 1-5"]') || fromJSON(format('["{0}"]', github.event.schedule)) }}
     timeout-minutes: 30
     permissions:
       contents: write   # the source run commits the heartbeat file
@@ -159,17 +161,16 @@ jobs:
           # Separate from NOTIFY_ALLOWED_RECIPIENTS on purpose — see notify.mjs.
           ONBOARD_NOTIFY_TO: ${{ vars.ONBOARD_NOTIFY_TO }}
           DRY_RUN: ${{ vars.DRY_RUN }}
-          # Test window: the matrix above maps the temporary crons back onto
-          # the canonical SCHEDULES keys in jobs/run.mjs. Restore to
-          # `SCHEDULE: ${{ github.event.schedule }}` with the crons.
-          SCHEDULE: ${{ matrix.schedule }}
+          # A Cloud Scheduler dispatch carries the cron string as an input;
+          # GitHub's own cron carries it on the event. Same key either way.
+          SCHEDULE: ${{ github.event.schedule || inputs.schedule }}
           JOB: ${{ inputs.job }}
         run: pnpm job
 
       # GitHub disables schedules on a repo with sixty days of no activity.
       # The weekly source run commits a dated file so that clock never expires.
       - name: Commit heartbeat
-        if: github.event.schedule == '0 13 * * 1'
+        if: (github.event.schedule || inputs.schedule) == '0 13 * * 1'
         run: |
           git config user.name 'bcns-clock'
           git config user.email 'bcns-clock@users.noreply.github.com'

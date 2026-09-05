@@ -31,6 +31,8 @@ test('every cron in clock.yml has a job, and every job in SCHEDULES has a cron',
 test('clock.yml has a workflow_dispatch trigger and a concurrency block', () => {
   assert.ok('workflow_dispatch' in triggers)
   assert.ok(triggers.workflow_dispatch.inputs.job)
+  // Cloud Scheduler drives ticks through this input (docs/SCHEDULER.md).
+  assert.ok(triggers.workflow_dispatch.inputs.schedule)
   assert.ok(clock.concurrency?.group)
   assert.equal(clock.concurrency['cancel-in-progress'], false)
 })
