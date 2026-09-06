@@ -79,7 +79,9 @@ not a bug you notice; it is a bug a stranger notices, weeks later.
   *internal humans* get forwards, and is the only set whose one-word replies
   (`no`, `stop`, `won 2400`) are obeyed as commands. Merging them would deliver
   internal mail to a prospect and let that prospect drive the pipeline. Both
-  fail closed: unset means nobody, never everybody.
+  fail closed: unset means nobody, never everybody. The one deliberate opening
+  is `SEND_ALLOWED_RECIPIENTS=*`, which lets `touch` mail any prospect; `*` in
+  `NOTIFY_ALLOWED_RECIPIENTS` is ignored.
 - **Opt-out detection is weighted for recall and commits before the
   classifier.** A false positive is visible and recoverable; a false negative is
   invisible forever.

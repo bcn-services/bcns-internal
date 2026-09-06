@@ -185,6 +185,12 @@ test('the allow-list refuses an unlisted address and an empty list allows nobody
   assert.throws(() => assertAllowed('owner@stranger.test', ALLOWED), /SEND_ALLOWED_RECIPIENTS/)
   assert.throws(() => assertAllowed('nseluga@bcn-services.com', []), /SEND_ALLOWED_RECIPIENTS/)
   assert.throws(() => assertAllowed('nseluga@bcn-services.com', undefined), /SEND_ALLOWED_RECIPIENTS/)
+  // `*` opens the prospect list only; the internal list never opens.
+  assert.doesNotThrow(() => assertAllowed('owner@stranger.test', ['*']))
+  assert.throws(
+    () => assertAllowed('owner@stranger.test', ['*'], 'NOTIFY_ALLOWED_RECIPIENTS'),
+    /NOTIFY_ALLOWED_RECIPIENTS/
+  )
   // The internal caller names its own list.
   assert.throws(
     () => assertAllowed('owner@stranger.test', ALLOWED, 'NOTIFY_ALLOWED_RECIPIENTS'),

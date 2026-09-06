@@ -71,6 +71,10 @@ export class RecipientRefused extends Error {}
 // to — and a refusal naming the wrong one sends the fix to the wrong file.
 export function assertAllowed(to, allowed, listName = 'SEND_ALLOWED_RECIPIENTS') {
   const list = (allowed ?? []).map((a) => String(a).trim().toLowerCase()).filter(Boolean)
+  // `*` opens the PROSPECT list to everyone — the "set it free" switch. It is
+  // deliberately meaningless for NOTIFY_ALLOWED_RECIPIENTS: that list decides
+  // whose one-word replies are obeyed as commands, and it never opens.
+  if (listName === 'SEND_ALLOWED_RECIPIENTS' && list.includes('*')) return
   if (!list.includes(String(to ?? '').trim().toLowerCase())) {
     throw new RecipientRefused(
       `recipient ${to} is not in ${listName} — refused before any connection`
