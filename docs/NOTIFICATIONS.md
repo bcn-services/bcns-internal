@@ -237,12 +237,14 @@ or `ALERT_REPO_MAP` the triage capability is not built at all. The clone,
 push and PR use `GH_TOKEN` (`OS_TOKEN`), so that PAT needs contents:write and
 pull-requests:write on every mapped repo.
 
-**GitHub noise gate.** A CI pipeline being built fails on purpose. A GitHub
-run-failed mail reaches the fixer only when it is on `main`/`master` and that
-workflow has passed there at least once before (`gh run list --status success`);
-`PR run failed` mail and feature-branch reds (including the fixer's own
-`alert/*` branches) log a `skipped` event and write nothing. A `gh` error fails
-open. Sentry and UptimeRobot alerts are not gated.
+**Build-out gate.** A site being built alerts on purpose, and CI history
+cannot tell "shipped" from "not yet" (green early, red for weeks after). The
+signal is the client README's `status:` in `~/os/clients/<name>/README.md`: an
+alert mapped through a README reaches the fixer only when status is `complete`,
+`active` or `dormant`. Repos named in `ALERT_REPO` / `ALERT_REPO_MAP` are an
+opt-in and always proceed. GitHub run-failed mail additionally needs the branch
+to be `main`/`master`; `PR run failed` and feature-branch reds (the fixer's own
+`alert/*` branches included) log a `skipped` event and write nothing.
 
 **Fixer context.** The headless Claude gets a "where you are" block in its
 prompt (repo, branch, that a caller commits and opens a draft PR) and, when the

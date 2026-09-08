@@ -211,11 +211,11 @@ test('a gate skip is logged before anything is written: no alert row, no fixer, 
   const { deps, events, alerts, prCalls } = harness({
     messages: [alertMsg({ uid: 1, ...GH_FAIL })],
     fixer: async (args) => { fixCalls.push(args); return {} },
-    alertGate: async (parsed, repo) => (parsed.source === 'github' && repo ? 'github: clock has never passed on main' : null),
+    alertGate: (parsed, repo) => (parsed.source === 'github' && repo ? 'client x is in-progress in its README, not live' : null),
   })
   await poll(deps)
   assert.deepEqual(kinds(events), ['skipped'])
-  assert.match(events[0].detail.reason, /never passed/)
+  assert.match(events[0].detail.reason, /not live/)
   assert.equal(alerts.size, 0)
   assert.equal(fixCalls.length, 0)
   assert.equal(prCalls.length, 0)

@@ -4,8 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { clientFor, parseAlert, resolveRepo, loadClientMap } from '../lib/alerts.mjs'
-import { createGithubGate } from '../lib/github.mjs'
+import { clientFor, parseAlert, resolveRepo, loadClientMap, createAlertGate } from '../lib/alerts.mjs'
 
 test('github: run-failed mail on a branch', () => {
   const from = 'notifications@github.com'
@@ -203,27 +202,29 @@ test('resolveRepo: a README github: given as bare org/repo resolves like a URL',
   assert.equal(resolveRepo({ repo: 'nseluga/bcns-client-coventry', refs: {} }, { clients }), 'nseluga/bcns-client-coventry')
 })
 
-test('github gate: only a default-branch workflow that has passed before gets a fixer', async () => {
-  const runs = []
-  const exec = async (cmd, args) => { runs.push([cmd, ...args]); return { stdout: exec.green ? '[{"databaseId":1}]' : '[]' } }
-  const gate = createGithubGate({ exec })
-  const gh = (branch) => ({ source: 'github', refs: { workflow: 'clock', ...(branch ? { branch } : {}) } })
+test('alert gate: README status decides live vs being built; explicit repos and main-branch reds pass', () => {
+  const clients = [
+    { name: 'shipped', github: 'https://github.com/o/shipped', status: 'complete' },
+    { name: 'building', github: 'https://github.com/o/building', status: 'in-progress' },
+    { name: 'unset', github: 'o/unset' },
+  ]
+  const gate = createAlertGate({ clients, map: { x: 'o/mapped', b: 'o/building' }, fallback: 'o/fallback' })
+  const gh = (branch, repo) => gate({ source: 'github', refs: { workflow: 'ci', ...(branch ? { branch } : {}) } }, repo)
 
-  assert.equal(await gate({ source: 'sentry' }, 'a/b'), null, 'non-github alerts pass through')
-  assert.match(await gate(gh(null), 'a/b'), /no branch/, 'PR run failed has no branch → skip')
-  assert.match(await gate(gh('feature/x'), 'a/b'), /not the default branch/)
-  assert.equal(runs.length, 0, 'branch checks cost no gh call')
+  assert.match(gh(null, 'o/shipped'), /no branch/, 'PR run failed has no branch → skip')
+  assert.match(gh('feature/x', 'o/shipped'), /not the default branch/)
+  assert.match(gh('alert/abc123def456', 'o/mapped'), /not the default branch/, 'the fixer cannot chain on itself')
+  assert.equal(gh('main', 'o/shipped'), null)
+  assert.equal(gh('main', 'o/building'), null, 'a README-not-live repo listed in ALERT_REPO_MAP is opted in')
+  assert.match(gh('main', 'o/unset'), /unset/)
+  assert.equal(gh('main', 'o/mapped'), null, 'ALERT_REPO_MAP is an opt-in')
+  assert.equal(gh('main', 'o/fallback'), null, 'ALERT_REPO is an opt-in')
+  assert.equal(gh('main', 'o/unknown'), null, 'a repo no README claims is left to resolveRepo')
 
-  exec.green = false
-  assert.match(await gate(gh('main'), 'a/b'), /never passed on main/)
-  assert.deepEqual(runs[0].slice(0, 4), ['gh', 'run', 'list', '--repo'])
-  assert.ok(runs[0].includes('--status') && runs[0].includes('success') && runs[0].includes('clock'))
-
-  exec.green = true
-  assert.equal(await gate(gh('main'), 'a/b'), null, 'green before, red now = regression → proceed')
-
-  const broken = createGithubGate({ exec: async () => { throw new Error('gh down') } })
-  assert.equal(await broken(gh('main'), 'a/b'), null, 'gh failure fails open')
+  const noMap = createAlertGate({ clients })
+  assert.match(noMap({ source: 'github', refs: { branch: 'main' } }, 'o/building'), /in-progress.*not live/)
+  assert.match(noMap({ source: 'sentry' }, 'o/building'), /not live/, 'sentry on a half-built site is the same noise')
+  assert.equal(gate({ source: 'uptimerobot' }, 'o/shipped'), null)
 })
 
 test('clientFor: matches a client README by repo, case-insensitive, url or bare', () => {

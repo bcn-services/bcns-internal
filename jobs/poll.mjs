@@ -669,8 +669,8 @@ export async function run({
 
     const repo = resolveRepo(parsed, alertRepos) ?? alertRepos.fallback ?? null
 
-    // Build-out noise (a CI workflow that has never been green, a red on a
-    // feature branch) is skipped before anything is written, same as the cap.
+    // Build-out noise (a client README not marked live, a red on a feature
+    // branch) is skipped before anything is written, same as the cap.
     const skip = alertGate ? await alertGate(parsed, repo) : null
     if (skip) {
       await logTriage('skipped', { reason: skip, subject: message.subject, source: parsed.source, repo })

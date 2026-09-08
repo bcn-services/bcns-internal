@@ -321,7 +321,7 @@ export async function buildDeps(env = process.env, exists = existsSync) {
   // `handleAlert` already logs a missing opener as an `error` event. The
   // fixer needs the CLI (same token as qualify) and `gh` on PATH.
   if (env.ALERT_REPO || env.ALERT_REPO_MAP) {
-    const [{ createGithubPr, createGithubGate }, { createFixer }, { loadClientMap }, { run: exec }] = await Promise.all([
+    const [{ createGithubPr }, { createFixer }, { loadClientMap, createAlertGate }, { run: exec }] = await Promise.all([
       import('../lib/github.mjs'),
       import('../lib/fixer.mjs'),
       import('../lib/alerts.mjs'),
@@ -333,7 +333,7 @@ export async function buildDeps(env = process.env, exists = existsSync) {
       map: parseRepoMap(env.ALERT_REPO_MAP),
       clients: osDir ? loadClientMap(osDir) : [],
     }
-    deps.alertGate = createGithubGate({ exec })
+    deps.alertGate = createAlertGate(deps.alertRepos)
     if (env.CLAUDE_CODE_OAUTH_TOKEN) {
       deps.fixer = createFixer({
         exec,
