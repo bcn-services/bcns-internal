@@ -15,7 +15,9 @@ export const SCHEDULES = {
   '0 14 * * 1-5': 'touch',
   // The Monday tick is a chain: source finds businesses, qualify reads the
   // ones it just wrote. Order is the contract, so it lives in this list.
-  '0 13 * * 1': ['source', 'qualify'],
+  // heartbeat runs last: it writes the dated file clock.yml commits so GitHub
+  // never disables the schedules, and a source failure still fails the tick.
+  '0 13 * * 1': ['source', 'qualify', 'heartbeat'],
   // Half an hour after Monday's source+qualify and thirty minutes before the
   // 14:00 touch, so a row qualified this morning is drafted before touch looks
   // for something to send. Weekdays, not Mondays only: a retry of a draft that
