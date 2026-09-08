@@ -1506,9 +1506,9 @@ test('a signed pdf on a quoted thread is filed, pushed and won', async () => {
 
   const written = join(osDir, 'clients/acme-roofing/contract/2026-09-02-signed.pdf')
   assert.equal(await readFile(written, 'utf8'), '%PDF-1.7 countersigned')
-  assert.deepEqual(pushes, [
-    { paths: ['clients/acme-roofing/contract/2026-09-02-signed.pdf'], message: 'contract: acme-roofing' },
-  ])
+  // Absolute, like every other pushOrSkip caller; the clients row below still
+  // stores the repo-relative path.
+  assert.deepEqual(pushes, [{ paths: [written], message: 'contract: acme-roofing' }])
   assert.equal(h.store.get('b1').stage, 'won')
   assert.deepEqual(h.clients, [
     {

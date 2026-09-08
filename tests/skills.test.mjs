@@ -64,10 +64,17 @@ test('runSkill throws, naming the command, when the CLI exits non-zero', async (
   )
 })
 
+// `git diff --cached --quiet` exits non-zero when something is staged, so a
+// stub that throws on it is the "the skill changed a file" case.
+const stagedExec = (calls) => async (bin, args, opts) => {
+  calls.push([bin, args, opts])
+  if (args[0] === 'diff') throw Object.assign(new Error('changes staged'), { code: 1 })
+}
+
 test('commitAndPush runs add, commit, pull --rebase, push, in that order', async () => {
   const calls = []
   const out = await commitAndPush({
-    exec: async (bin, args, opts) => calls.push([bin, args, opts]),
+    exec: stagedExec(calls),
     dir: '/w/os',
     paths: ['outputs/acme-quote.html'],
     message: 'chore: acme quote',
@@ -78,6 +85,7 @@ test('commitAndPush runs add, commit, pull --rebase, push, in that order', async
     calls.map((c) => c[1]),
     [
       ['add', 'outputs/acme-quote.html'],
+      ['diff', '--cached', '--quiet'],
       ['commit', '-m', 'chore: acme quote'],
       ['pull', '--rebase'],
       ['push'],
@@ -95,6 +103,7 @@ test('a throw from push propagates, with no further exec calls', async () => {
     commitAndPush({
       exec: async (_bin, args) => {
         calls.push(args[0])
+        if (args[0] === 'diff') throw Object.assign(new Error('changes staged'), { code: 1 })
         if (args[0] === 'push') throw new Error('rejected: non-fast-forward')
       },
       dir: '/w/os',
@@ -104,7 +113,26 @@ test('a throw from push propagates, with no further exec calls', async () => {
     }),
     /non-fast-forward/
   )
-  assert.deepEqual(calls, ['add', 'commit', 'pull', 'push'])
+  assert.deepEqual(calls, ['add', 'diff', 'commit', 'pull', 'push'])
+})
+
+test('nothing staged skips the commit and still pushes', async () => {
+  const calls = []
+  // Nothing throws: `diff --cached --quiet` exiting 0 means the index is clean,
+  // which is what a skill regenerating byte-identical output produces.
+  const out = await commitAndPush({
+    exec: async (_bin, args) => calls.push(args[0]),
+    dir: '/w/os',
+    paths: ['outputs/acme-quote.html'],
+    message: 'chore: acme quote',
+    dryRun: false,
+  })
+
+  assert.deepEqual(calls, ['add', 'diff', 'pull', 'push'])
+  assert.equal(calls.includes('commit'), false)
+  // It resolves rather than throwing, so the caller marks the row done and the
+  // job stops retrying the same row every tick.
+  assert.equal(out.dryRun, false)
 })
 
 test('commitAndPush under dry run makes zero exec calls and returns the commands', async () => {
@@ -151,6 +179,8 @@ test('buildDeps injects runSkill, commitAndPush and osDir only with OS_DIR', asy
 
   const live = await buildDeps({ OS_DIR: '/w/os', DRY_RUN: 'false' }, yes)
   await live.commitAndPush({ exec: async () => called++, paths: ['a'], message: 'm' })
+  // add, diff, pull, push — the stub never throws, so the index reads clean and
+  // the commit is skipped. Four calls, but not the same four as a real change.
   assert.equal(called, 4)
 
   // The injected cwd is the clone, so the CLI finds the skills.
