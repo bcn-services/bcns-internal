@@ -435,7 +435,7 @@ export async function run({
           ? [message.deliveredTo]
           : message.toAddresses ?? []
         const to =
-          toCandidates.map(addr).find((a) => a === addr(botAddress) || outreach.has(a)) ??
+          toCandidates.map(addr).find((a) => a === addr(botAddress) || a === addr(alertsAddress) || outreach.has(a)) ??
           addr(message.deliveredTo)
         const ids = threadIds(message)
         const [thread] = ids.length ? ((await db.threadByMessageIds(sql, ids)) ?? []) : []

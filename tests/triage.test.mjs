@@ -195,3 +195,12 @@ test('the same incident under two subjects is one fingerprint, and a monitor UP 
   assert.equal(prCalls.length, 1)
   assert.equal(prCalls[0].repo, 'acme/l2')
 })
+
+test('mail typed To: alerts@ with no Delivered-To (forwarded from the same seat) still reaches triage', async () => {
+  const { deps, events, prCalls } = harness({
+    messages: [alertMsg({ deliveredTo: null, toAddresses: [ALERTS] })],
+  })
+  await poll(deps)
+  assert.deepEqual(kinds(events), ['opened'])
+  assert.equal(prCalls.length, 1)
+})

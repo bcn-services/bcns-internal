@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createFixer, buildPrompt, TRIAGE_FILE } from '../lib/fixer.mjs'
+import { childEnv, createFixer, buildPrompt, TRIAGE_FILE } from '../lib/fixer.mjs'
 
 const ALERT = {
   source: 'github',
@@ -92,4 +92,12 @@ test('dry run executes nothing; a non-github alert fetches no run log', async ()
   await fixer({ repo: 'a/b', branch: 'alert/x', alert: { source: 'sentry', title: 'TypeError', refs: {} } })
   assert.ok(!calls.some((c) => c[0] === 'gh' && c[1] === 'run'))
   assert.match(buildPrompt({ alert: { source: 'sentry', title: 'TypeError', refs: {} }, log: '' }), /ALERT \(sentry\): TypeError/)
+})
+
+test('the claude child sees no DB, mail or GitHub secrets — only its own token', () => {
+  const env = childEnv({
+    PATH: '/bin', HOME: '/h', CLAUDE_CODE_OAUTH_TOKEN: 'keep', GH_TOKEN: 'x', GITHUB_TOKEN: 'x',
+    DATABASE_URL: 'x', SMTP_PASS: 'x', IMAP_PASS: 'x', SUPABASE_SERVICE_KEY: 'x', OS_SECRET: 'x',
+  })
+  assert.deepEqual(env, { PATH: '/bin', HOME: '/h', CLAUDE_CODE_OAUTH_TOKEN: 'keep' })
 })

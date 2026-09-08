@@ -107,13 +107,33 @@ test('unknown: anything else passes through as source unknown', () => {
   assert.equal(parsed.summary.length, 600)
 })
 
-test('resolveRepo: parsed.repo (github source) wins over map and clients', () => {
+test('resolveRepo: a repo named by the mail is only used when it is a known repo', () => {
   const parsed = { repo: 'bcn-services/bcns-internal', refs: { project: 'other' } }
-  const repo = resolveRepo(parsed, {
+  const known = {
+    fallback: 'bcn-services/bcns-internal',
     map: { other: 'wrong/repo' },
     clients: [{ name: 'other', github: 'https://github.com/wrong/repo2' }],
+  }
+  assert.equal(resolveRepo(parsed, known), 'bcn-services/bcns-internal')
+  // Forged subject naming a repo nobody configured: falls through to the map,
+  // never to the attacker's repo.
+  assert.equal(resolveRepo({ repo: 'evil/repo', refs: { project: 'other' } }, known), 'wrong/repo')
+  assert.equal(resolveRepo({ repo: 'evil/repo', refs: {} }, { fallback: 'bcn-services/bcns-internal' }), null)
+  // Known via map value or client README, any case.
+  assert.equal(resolveRepo({ repo: 'Wrong/Repo2', refs: {} }, known), 'Wrong/Repo2')
+})
+
+test('parseAlert: a forwarded GitHub failure is recognised by subject alone', () => {
+  const parsed = parseAlert({
+    from: 'Nate <nseluga@bcn-services.com>',
+    subject: 'Fwd: [bcn-services/bcns-internal] Run failed: clock - main (45e294b)',
+    text: 'forwarded\nhttps://github.com/bcn-services/bcns-internal/actions/runs/34190000000',
   })
-  assert.equal(repo, 'bcn-services/bcns-internal')
+  assert.equal(parsed.source, 'github')
+  assert.equal(parsed.repo, 'bcn-services/bcns-internal')
+  assert.equal(parsed.refs.runId, '34190000000')
+  assert.equal(parsed.fingerprintSeed, 'github:bcn-services/bcns-internal:clock:main')
+  assert.equal(parsed.title, 'Run failed: clock - main (45e294b)')
 })
 
 test('resolveRepo: map hit is case-insensitive against refs.project/monitorName/host', () => {
