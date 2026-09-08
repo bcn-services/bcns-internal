@@ -791,7 +791,9 @@ export async function run({
 
     const push = await pushOrSkip({
       commitAndPush,
-      paths: [contractPath],
+      // Absolute, like every other pushOrSkip caller — `contractPath` stays
+      // repo-relative because that is what the clients row stores.
+      paths: [absolute],
       message: `contract: ${slug}`,
       log,
       detail: { business: businessId, slug },
