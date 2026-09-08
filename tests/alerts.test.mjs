@@ -195,3 +195,9 @@ test('loadClientMap: reads github: and repo:-only frontmatter, and returns [] fo
     await rm(osDir, { recursive: true, force: true })
   }
 })
+
+test('resolveRepo: a README github: given as bare org/repo resolves like a URL', () => {
+  const clients = [{ name: 'coventry', github: 'nseluga/bcns-client-coventry' }]
+  assert.equal(resolveRepo({ repo: null, refs: { project: 'Coventry' } }, { clients }), 'nseluga/bcns-client-coventry')
+  assert.equal(resolveRepo({ repo: 'nseluga/bcns-client-coventry', refs: {} }, { clients }), 'nseluga/bcns-client-coventry')
+})
