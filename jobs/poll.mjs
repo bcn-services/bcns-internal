@@ -667,6 +667,17 @@ export async function run({
       return
     }
 
+    // A monitoring vendor's account mail — the signup welcome, a plan or
+    // billing notice — reaches alerts@ because that is the address the
+    // monitors were registered under. Nothing is down and there is nothing to
+    // fix, so it is dropped here, before the alerts row: a PR against the
+    // fallback repo for a welcome mail wastes a fixer run and one of the
+    // three PRs the day is allowed.
+    if (parsed.notice) {
+      await logTriage('skipped', { reason: parsed.notice, subject: message.subject, source: parsed.source })
+      return
+    }
+
     const repo = resolveRepo(parsed, alertRepos) ?? alertRepos.fallback ?? null
 
     // Build-out noise (a client README not marked live, a red on a feature

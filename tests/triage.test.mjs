@@ -197,6 +197,30 @@ test('the same incident under two subjects is one fingerprint, and a monitor UP 
   assert.equal(prCalls[0].repo, 'acme/l2')
 })
 
+test("UptimeRobot's signup welcome mail is account mail, not an incident: no row, no fixer, no PR", async () => {
+  const { deps, events, alerts, prCalls } = harness({
+    messages: [
+      alertMsg({
+        uid: 1,
+        from: 'UptimeRobot <noreply@uptimerobot.com>',
+        subject: 'Welcome to UptimeRobot!',
+        text: 'GETTING STARTED\n\nWelcome to the world\u2019s leading uptime monitoring service.\nHi Nate,\nYou\u2019re all set.',
+      }),
+    ],
+    fixer: async () => {
+      throw new Error('the fixer must never run on vendor account mail')
+    },
+  })
+
+  await poll(deps)
+
+  assert.deepEqual(kinds(events), ['skipped'])
+  assert.match(events[0].detail.reason, /account mail/i)
+  assert.equal(events[0].detail.source, 'uptimerobot', 'the vendor is recognised, not passed through as unknown')
+  assert.equal(alerts.size, 0)
+  assert.equal(prCalls.length, 0)
+})
+
 test('mail typed To: alerts@ with no Delivered-To (forwarded from the same seat) still reaches triage', async () => {
   const { deps, events, prCalls } = harness({
     messages: [alertMsg({ deliveredTo: null, toAddresses: [ALERTS] })],
