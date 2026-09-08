@@ -167,7 +167,7 @@ test('an unrelated import error is never mistaken for an unbuilt job', async () 
 })
 
 test('the Monday cron runs source then qualify, in that order', () => {
-  assert.deepEqual(jobNames({ schedule: '0 13 * * 1' }), ['source', 'qualify'])
+  assert.deepEqual(jobNames({ schedule: '0 13 * * 1' }), ['source', 'qualify', 'heartbeat'])
   // 13:30 is between qualify (13:00 Monday) and touch (14:00), so a row
   // qualified this morning is drafted before touch goes looking for it.
   assert.deepEqual(jobNames({ schedule: '30 13 * * 1-5' }), ['personalize'])
@@ -182,9 +182,9 @@ test('main runs every job of a tick in order, on one deps object', async () => {
   const out = await main({ SCHEDULE: '0 13 * * 1' }, async (name) => ({
     run: async (deps) => { ran.push([name, deps]); return name },
   }))
-  assert.deepEqual(ran.map((r) => r[0]), ['source', 'qualify'])
+  assert.deepEqual(ran.map((r) => r[0]), ['source', 'qualify', 'heartbeat'])
   assert.equal(ran[0][1], ran[1][1], 'the two jobs got different deps objects')
-  assert.deepEqual(out, ['source', 'qualify'])
+  assert.deepEqual(out, ['source', 'qualify', 'heartbeat'])
 })
 
 test('buildDeps hands qualify fetchPage always and claude only on the OAuth token', async () => {

@@ -170,10 +170,13 @@ jobs:
       # GitHub disables schedules on a repo with sixty days of no activity.
       # The weekly source run commits a dated file so that clock never expires.
       - name: Commit heartbeat
-        if: (github.event.schedule || inputs.schedule) == '0 13 * * 1'
+        if: (github.event.schedule || inputs.schedule) == '0 13 * * 1' || inputs.job == 'heartbeat'
         run: |
           git config user.name 'bcns-clock'
           git config user.email 'bcns-clock@users.noreply.github.com'
+          # The dir only exists once the heartbeat job wrote it; a tick that
+          # skipped the job must not go red here.
+          [ -d outputs/heartbeat ] || { echo 'no heartbeat file to commit'; exit 0; }
           git add outputs/heartbeat
           git diff --cached --quiet || git commit -m 'chore: heartbeat'
           git push
