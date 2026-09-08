@@ -237,6 +237,19 @@ or `ALERT_REPO_MAP` the triage capability is not built at all. The clone,
 push and PR use `GH_TOKEN` (`OS_TOKEN`), so that PAT needs contents:write and
 pull-requests:write on every mapped repo.
 
+**GitHub noise gate.** A CI pipeline being built fails on purpose. A GitHub
+run-failed mail reaches the fixer only when it is on `main`/`master` and that
+workflow has passed there at least once before (`gh run list --status success`);
+`PR run failed` mail and feature-branch reds (including the fixer's own
+`alert/*` branches) log a `skipped` event and write nothing. A `gh` error fails
+open. Sentry and UptimeRobot alerts are not gated.
+
+**Fixer context.** The headless Claude gets a "where you are" block in its
+prompt (repo, branch, that a caller commits and opens a draft PR) and, when the
+repo matches a `~/os/clients/*/README.md`, the path of that one README. No
+`--add-dir`: `--dangerously-skip-permissions` already reads anything, so the
+pointer is what saves turns.
+
 **Never merges.** There is no merge call in `lib/fixer.mjs`, `lib/github.mjs`
 or `jobs/poll.mjs`; the PR is a draft for a human. A fixer failure leaves the
 alert row at one hit with no PR — clear the row to retry.

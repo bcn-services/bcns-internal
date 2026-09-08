@@ -4,7 +4,8 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { parseAlert, resolveRepo, loadClientMap } from '../lib/alerts.mjs'
+import { clientFor, parseAlert, resolveRepo, loadClientMap } from '../lib/alerts.mjs'
+import { createGithubGate } from '../lib/github.mjs'
 
 test('github: run-failed mail on a branch', () => {
   const from = 'notifications@github.com'
@@ -200,4 +201,34 @@ test('resolveRepo: a README github: given as bare org/repo resolves like a URL',
   const clients = [{ name: 'coventry', github: 'nseluga/bcns-client-coventry' }]
   assert.equal(resolveRepo({ repo: null, refs: { project: 'Coventry' } }, { clients }), 'nseluga/bcns-client-coventry')
   assert.equal(resolveRepo({ repo: 'nseluga/bcns-client-coventry', refs: {} }, { clients }), 'nseluga/bcns-client-coventry')
+})
+
+test('github gate: only a default-branch workflow that has passed before gets a fixer', async () => {
+  const runs = []
+  const exec = async (cmd, args) => { runs.push([cmd, ...args]); return { stdout: exec.green ? '[{"databaseId":1}]' : '[]' } }
+  const gate = createGithubGate({ exec })
+  const gh = (branch) => ({ source: 'github', refs: { workflow: 'clock', ...(branch ? { branch } : {}) } })
+
+  assert.equal(await gate({ source: 'sentry' }, 'a/b'), null, 'non-github alerts pass through')
+  assert.match(await gate(gh(null), 'a/b'), /no branch/, 'PR run failed has no branch → skip')
+  assert.match(await gate(gh('feature/x'), 'a/b'), /not the default branch/)
+  assert.equal(runs.length, 0, 'branch checks cost no gh call')
+
+  exec.green = false
+  assert.match(await gate(gh('main'), 'a/b'), /never passed on main/)
+  assert.deepEqual(runs[0].slice(0, 4), ['gh', 'run', 'list', '--repo'])
+  assert.ok(runs[0].includes('--status') && runs[0].includes('success') && runs[0].includes('clock'))
+
+  exec.green = true
+  assert.equal(await gate(gh('main'), 'a/b'), null, 'green before, red now = regression → proceed')
+
+  const broken = createGithubGate({ exec: async () => { throw new Error('gh down') } })
+  assert.equal(await broken(gh('main'), 'a/b'), null, 'gh failure fails open')
+})
+
+test('clientFor: matches a client README by repo, case-insensitive, url or bare', () => {
+  const clients = [{ name: 'l2', github: 'https://github.com/BCN-Services/bcns-client-l2detailz', readme: '/os/clients/l2/README.md' }, { name: 'x', github: 'a/b' }]
+  assert.equal(clientFor('bcn-services/bcns-client-l2detailz', clients)?.readme, '/os/clients/l2/README.md')
+  assert.equal(clientFor('A/B', clients)?.name, 'x')
+  assert.equal(clientFor('nobody/here', clients), null)
 })

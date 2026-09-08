@@ -23,7 +23,7 @@ function alertMsg(over = {}) {
 // `alerts` is an in-memory stand-in for the real `alerts` table's upsert
 // semantics (0018_pipeline.sql): keyed on fingerprint, `hits` increments on
 // conflict, `pr_url` is written separately, once.
-function harness({ messages, priorOpens = 0, fixer } = {}) {
+function harness({ messages, priorOpens = 0, fixer, alertGate } = {}) {
   const events = Array.from({ length: priorOpens }, () => ({
     job: 'triage',
     kind: 'opened',
@@ -71,6 +71,7 @@ function harness({ messages, priorOpens = 0, fixer } = {}) {
       return { url: `https://github.example/pull/${prCalls.length}` }
     },
     fixer: fixer === undefined ? null : fixer,
+    alertGate: alertGate ?? null,
     alertRepos: { fallback: FALLBACK, map: { 'ops-example': 'acme/ops' }, clients: [] },
     internalRecipients: [],
     dryRun: false,
@@ -203,4 +204,19 @@ test('mail typed To: alerts@ with no Delivered-To (forwarded from the same seat)
   await poll(deps)
   assert.deepEqual(kinds(events), ['opened'])
   assert.equal(prCalls.length, 1)
+})
+
+test('a gate skip is logged before anything is written: no alert row, no fixer, no PR', async () => {
+  const fixCalls = []
+  const { deps, events, alerts, prCalls } = harness({
+    messages: [alertMsg({ uid: 1, ...GH_FAIL })],
+    fixer: async (args) => { fixCalls.push(args); return {} },
+    alertGate: async (parsed, repo) => (parsed.source === 'github' && repo ? 'github: clock has never passed on main' : null),
+  })
+  await poll(deps)
+  assert.deepEqual(kinds(events), ['skipped'])
+  assert.match(events[0].detail.reason, /never passed/)
+  assert.equal(alerts.size, 0)
+  assert.equal(fixCalls.length, 0)
+  assert.equal(prCalls.length, 0)
 })

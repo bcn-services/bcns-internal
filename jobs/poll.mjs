@@ -296,6 +296,7 @@ export async function run({
   alertsAddress = 'alerts@bcn-services.com',
   github = null,
   fixer = null,
+  alertGate = null,
   // { clients, map, fallback }: who owns which repo, and where an unmapped
   // alert lands. Built once in run.mjs so poll never reads ~/os or env.
   alertRepos = {},
@@ -666,13 +667,22 @@ export async function run({
       return
     }
 
+    const repo = resolveRepo(parsed, alertRepos) ?? alertRepos.fallback ?? null
+
+    // Build-out noise (a CI workflow that has never been green, a red on a
+    // feature branch) is skipped before anything is written, same as the cap.
+    const skip = alertGate ? await alertGate(parsed, repo) : null
+    if (skip) {
+      await logTriage('skipped', { reason: skip, subject: message.subject, source: parsed.source, repo })
+      return
+    }
+
     // Parser seed first (issue id, workflow+branch, monitor host) so the same
     // incident under a slightly different subject still counts as one; the
     // subject+first-line hash is the fallback for mail nothing recognises.
     const fingerprint = parsed.fingerprintSeed
       ? createHash('sha256').update(parsed.fingerprintSeed).digest('hex')
       : alertFingerprint(message)
-    const repo = resolveRepo(parsed, alertRepos) ?? alertRepos.fallback ?? null
     const [alert] = await db.upsertAlert(sql, { fingerprint, repo, source: parsed.source })
     result.triaged++
 

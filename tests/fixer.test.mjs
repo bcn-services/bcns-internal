@@ -101,3 +101,14 @@ test('the claude child sees no DB, mail or GitHub secrets — only its own token
   })
   assert.deepEqual(env, { PATH: '/bin', HOME: '/h', CLAUDE_CODE_OAUTH_TOKEN: 'keep' })
 })
+
+test('the prompt tells claude where it is and which client README to read, and nothing more of ~/os', async () => {
+  const { fixer, calls } = harness()
+  const clients = [{ name: 'l2detailz', github: 'https://github.com/bcn-services/bcns-client-l2detailz', readme: '/os/clients/l2detailz/README.md' }]
+  await fixer({ repo: 'bcn-services/bcns-client-l2detailz', branch: 'alert/abc123def456', alert: ALERT, client: clients[0] })
+  const prompt = calls.find((c) => c[0] === 'claude')[2]
+  assert.match(prompt, /clone of bcn-services\/bcns-client-l2detailz on branch alert\/abc123def456/)
+  assert.match(prompt, /client "l2detailz"; its index is \/os\/clients\/l2detailz\/README.md/)
+  assert.match(prompt, /caller commits/)
+  assert.ok(!calls.find((c) => c[0] === 'claude').includes('--add-dir'), 'context is a pointer in the prompt, not a mounted directory')
+})
