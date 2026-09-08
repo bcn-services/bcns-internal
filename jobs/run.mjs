@@ -317,16 +317,35 @@ export async function buildDeps(env = process.env, exists = existsSync) {
 
   deps.dryRun = env.DRY_RUN !== 'false'
 
-  // Alert triage's PR opener. No repo variable, no `github` on deps at all —
-  // poll.mjs's `handleAlert` already treats a missing opener as an `error`
-  // event, same shape as every other missing capability in this file.
-  if (env.ALERT_REPO) {
-    const [{ createGithubPr }, { run: exec }] = await Promise.all([
+  // Alert triage. ALERT_REPO is the fallback repo for an alert nothing maps;
+  // ALERT_REPO_MAP (`name=org/repo,...`) and ~/os client READMEs map the rest.
+  // No fallback and no map means no `github` on deps at all — poll.mjs's
+  // `handleAlert` already logs a missing opener as an `error` event. The
+  // fixer needs the CLI (same token as qualify) and `gh` on PATH.
+  if (env.ALERT_REPO || env.ALERT_REPO_MAP) {
+    const [{ createGithubPr }, { createFixer }, { loadClientMap, createAlertGate }, { run: exec }] = await Promise.all([
       import('../lib/github.mjs'),
+      import('../lib/fixer.mjs'),
+      import('../lib/alerts.mjs'),
       import('../lib/claude.mjs'),
     ])
-    deps.github = createGithubPr({ exec, repo: env.ALERT_REPO, dryRun: deps.dryRun })
+    deps.github = createGithubPr({ exec, repo: env.ALERT_REPO || null, dryRun: deps.dryRun })
+    deps.alertRepos = {
+      fallback: env.ALERT_REPO || null,
+      map: parseRepoMap(env.ALERT_REPO_MAP),
+      clients: osDir ? loadClientMap(osDir) : [],
+    }
+    deps.alertGate = createAlertGate(deps.alertRepos)
+    if (env.CLAUDE_CODE_OAUTH_TOKEN) {
+      deps.fixer = createFixer({
+        exec,
+        dryRun: deps.dryRun,
+        setupGit: Boolean(env.GITHUB_ACTIONS),
+        clients: deps.alertRepos.clients,
+      })
+    }
   }
+  if (env.ALERTS_ADDRESS) deps.alertsAddress = env.ALERTS_ADDRESS
 
   // The skill runner and the ~/os push helper. Both only make sense against
   // the clone, so both appear only when OS_DIR does — same rule as the voice
@@ -347,6 +366,16 @@ export async function buildDeps(env = process.env, exists = existsSync) {
   }
 
   return deps
+}
+
+// `l2detailz=bcn-services/bcns-client-l2detailz,l2details.com=bcn-services/...`
+export function parseRepoMap(raw = '') {
+  return Object.fromEntries(
+    String(raw ?? '')
+      .split(',')
+      .map((pair) => pair.split('=').map((s) => s.trim()))
+      .filter(([k, v]) => k && v)
+  )
 }
 
 // The default options every ~/os push is made with. Exported so the wiring can
@@ -438,6 +467,8 @@ export function toMessage(parsed, uid, header) {
     toAddresses: (parsed.to?.value ?? []).map((v) => v?.address).filter(Boolean),
     subject: parsed.subject ?? '',
     text: parsed.text || htmlToText(parsed.html),
+    // Kept raw for the alert parsers: a GitHub run link lives in the html only.
+    html: parsed.html || '',
     messageId: parsed.messageId ?? '',
     inReplyTo: parsed.inReplyTo ?? '',
     references: [parsed.references ?? []].flat().join(' '),

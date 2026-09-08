@@ -202,6 +202,60 @@ human-only, none of it costs money:
    ramps from the warm-up floor again. Watch Postmaster Tools for trybcns.com
    for the first two weeks before raising `daily_cap`.
 
+## alerts@ — automatic bug fixing from alert mail (items 21, 24-26)
+
+`alerts@bcn-services.com` is an alias on Nate's seat, and the Gmail
+`pipeline` filter (Skip Inbox, label `pipeline`, never spam) matches
+`to:(outreach@send… OR bot@… OR alerts@…)`, so the poll tick sees alert mail
+on the same IMAP connection as replies. Point GitHub Actions notifications,
+Sentry issue alerts and UptimeRobot contacts at that address; nothing else
+needs to change on the sender side.
+
+What happens to one mail (`jobs/poll.mjs` `handleAlert`):
+
+1. Daily cap — three `opened` events a day, checked before anything is written.
+2. `DRY_RUN` on → `would_triage` event and stop. The runner stays here until
+   the repo variable is flipped.
+3. `lib/alerts.mjs` parses the mail: GitHub `[org/repo] Run failed: …`
+   (repo from the subject, run id from the link), Sentry (issue id), UptimeRobot
+   `Monitor is DOWN: name (url)` (host), anything else as `unknown`. A monitor
+   `UP` mail logs `resolved` and stops.
+4. Fingerprint = parser seed when there is one (same incident, different
+   subject, one PR), else subject + first body line. Second sighting → `duplicate`.
+5. Repo = `ALERT_REPO_MAP` (`name=org/repo,host=org/repo,…`) → `github:` in
+   `~/os/clients/*/README.md` → `ALERT_REPO` fallback. No repo at all → `error`,
+   never a PR on a guess.
+6. `lib/fixer.mjs`: `gh repo clone` to a temp dir, branch `alert/<fp12>`,
+   failed-step log via `gh run view --log-failed`, Claude (opus, 40 turns,
+   15 min) reproduces and fixes; a clean tree afterwards commits `TRIAGE.md`
+   with its report instead. Push the branch, then `gh pr create --draft`.
+
+Repo variables on bcns-internal: `ALERT_REPO` (fallback, e.g.
+`bcn-services/bcns-internal`), `ALERT_REPO_MAP` (optional overrides),
+`ALERTS_ADDRESS` (defaults to alerts@bcn-services.com). Without `ALERT_REPO`
+or `ALERT_REPO_MAP` the triage capability is not built at all. The clone,
+push and PR use `GH_TOKEN` (`OS_TOKEN`), so that PAT needs contents:write and
+pull-requests:write on every mapped repo.
+
+**Build-out gate.** A site being built alerts on purpose, and CI history
+cannot tell "shipped" from "not yet" (green early, red for weeks after). The
+signal is the client README's `status:` in `~/os/clients/<name>/README.md`: an
+alert mapped through a README reaches the fixer only when status is `complete`,
+`active` or `dormant`. Repos named in `ALERT_REPO` / `ALERT_REPO_MAP` are an
+opt-in and always proceed. GitHub run-failed mail additionally needs the branch
+to be `main`/`master`; `PR run failed` and feature-branch reds (the fixer's own
+`alert/*` branches included) log a `skipped` event and write nothing.
+
+**Fixer context.** The headless Claude gets a "where you are" block in its
+prompt (repo, branch, that a caller commits and opens a draft PR) and, when the
+repo matches a `~/os/clients/*/README.md`, the path of that one README. No
+`--add-dir`: `--dangerously-skip-permissions` already reads anything, so the
+pointer is what saves turns.
+
+**Never merges.** There is no merge call in `lib/fixer.mjs`, `lib/github.mjs`
+or `jobs/poll.mjs`; the PR is a draft for a human. A fixer failure leaves the
+alert row at one hit with no PR — clear the row to retry.
+
 ## Failure behaviour, as built
 
 | Situation | Inbox item | Email payload | `email_outbox.status` |
