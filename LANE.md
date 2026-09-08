@@ -635,7 +635,7 @@ against a fake `runSkill` only — that is by design, not a gap.
       opens nothing
     - A unit test asserts the same `fingerprint` twice increments `hits` and opens
       one PR, not two
-  status: not started
+  status: done
 
 - task: Make the SMTP transport per-mailbox. `jobs/run.mjs` built one global
     nodemailer transport from `SMTP_USER`/`SMTP_PASS` and `jobs/touch.mjs`'s
@@ -698,6 +698,74 @@ against a fake `runSkill` only — that is by design, not a gap.
       while the other source's messages still process
   caution: true
   status: not started
+
+- task: Parse `alerts@` mail into one shape — `lib/alerts.mjs`, pure functions
+    over `{from, subject, text, html}` returning `{source, repo, title, summary,
+    fingerprintSeed, refs}` for GitHub Actions run-failed mail (repo from the
+    `[org/repo]` subject prefix, run id from the body link), Sentry issue alerts
+    (issue id from the link), UptimeRobot `Monitor is DOWN/UP` mail (host from
+    the URL), and a passthrough for anything else. `resolveRepo` maps a parsed
+    alert to `org/repo` via an explicit `ALERT_REPO_MAP` first, then the
+    `github:` frontmatter of `~/os/clients/*/README.md`; unmapped returns null so
+    the caller can fall back to `ALERT_REPO`.
+  guardrails:
+    - No network and no filesystem reads except the client READMEs under `OS_DIR`
+    - An unrecognised sender is never dropped — it parses as `source: unknown`
+    - No new dependency; frontmatter is hand-parsed
+  done when:
+    - A unit test per format on a captured fixture asserts source, repo/refs and
+      fingerprint seed; the unknown case asserts `source: unknown` and a null seed
+    - A unit test asserts the explicit map beats the README clients and an
+      unmapped alert resolves to null
+    - Existing passing tests remain passing
+  status: done
+
+- task: Fix the alert, not just file it — `lib/fixer.mjs`. Clone the resolved
+    repo to a temp dir, branch `alert/<fp12>`, pull the failed-step log with
+    `gh run view --log-failed` when the alert names a run, run Claude headlessly
+    in that clone with the parsed alert and a fixed instruction (reproduce,
+    root-cause, minimal fix, one test, run the suite, do not commit), then commit
+    whatever changed. A clean working tree after Claude means no confident fix:
+    commit a `TRIAGE.md` carrying its report instead. Push the branch; the
+    existing `createGithubPr` opens the draft with the report as its body.
+  guardrails:
+    - The only push is to `alert/<fp>`; never `main`, never a merge, never a
+      `gh pr merge`
+    - `DRY_RUN` on executes nothing and returns `{ dryRun: true }`
+    - The temp clone is removed whether or not the run succeeds
+    - Turns and wall-clock are bounded so a stuck fix cannot outlive the tick
+  done when:
+    - A unit test asserts the exact `exec` sequence clone → branch → failed log →
+      claude → status → commit → push with the branch as the only push target
+    - A unit test asserts an empty working tree writes and commits `TRIAGE.md`
+      with Claude's report, and a Claude crash still produces a triage commit
+    - A unit test asserts dry run executes nothing
+    - Existing passing tests remain passing
+  status: done
+
+- task: Wire the parser and the fixer into `handleAlert` in `jobs/poll.mjs` and
+    into `jobs/run.mjs`/`clock.yml`. Fingerprint from the parser seed when there
+    is one, else the existing subject+first-line hash; repo from `resolveRepo`,
+    else `ALERT_REPO`; a monitor UP mail logs `resolved` and opens nothing; the
+    draft PR call carries the repo per call. `run.mjs` builds `github`,
+    `alertRepos` and `fixer` only when `ALERT_REPO` or `ALERT_REPO_MAP` is set,
+    and `clock.yml` passes `ALERT_REPO`, `ALERT_REPO_MAP`, `ALERTS_ADDRESS`.
+  guardrails:
+    - The daily cap and the fingerprint dedupe are unchanged and still run before
+      any write
+    - An alert with no mapped repo and no fallback writes an `error` event and
+      opens nothing — never a PR on a guessed repo
+    - A fixer failure writes an `error` event and opens nothing
+  done when:
+    - A unit test asserts a GitHub run-failed mail runs the fixer on the repo in
+      its subject and the PR opens on that repo with the fixer's report
+    - A unit test asserts an unknown alert opens on the fallback repo, and no
+      fallback yields `error` with no PR
+    - A unit test asserts two DOWN subjects for one host are one fingerprint and
+      the UP mail is `resolved`
+    - Live: one real run-failed mail forwarded to `alerts@` opens a draft PR on
+      `bcn-services/bcns-internal` carrying a fix or a `TRIAGE.md`
+  status: done
 
 ## Found during the 2026-08-31 autonomous run — needs an item
 - ~~**`NOTIFY_ALLOWED_RECIPIENTS` does double duty, and going live weaponises it.**~~
