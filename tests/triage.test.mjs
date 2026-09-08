@@ -221,6 +221,71 @@ test("UptimeRobot's signup welcome mail is account mail, not an incident: no row
   assert.equal(prCalls.length, 0)
 })
 
+test('a GitHub sudo-code mail is account mail, not an incident: no row, no fixer, no PR', async () => {
+  const { deps, events, alerts, prCalls } = harness({
+    messages: [
+      alertMsg({
+        uid: 1,
+        from: 'noreply@github.com',
+        subject: '[GitHub] Sudo email verification code',
+        text: 'Here is your GitHub sudo authentication code: 25893281\nThis code is valid for 15 minutes.',
+      }),
+    ],
+    fixer: async () => {
+      throw new Error('the fixer must never run on vendor account mail')
+    },
+  })
+
+  await poll(deps)
+
+  assert.deepEqual(kinds(events), ['skipped'])
+  assert.match(events[0].detail.reason, /account mail/i)
+  assert.equal(events[0].detail.source, 'github', 'the vendor is recognised, not passed through as unknown')
+  assert.equal(alerts.size, 0)
+  assert.equal(prCalls.length, 0)
+})
+
+test('a Sentry digest mail is account mail, not an incident: no row, no fixer, no PR', async () => {
+  const { deps, events, alerts, prCalls } = harness({
+    messages: [
+      alertMsg({
+        uid: 1,
+        from: 'noreply@sentry.io',
+        subject: 'Your Sentry weekly digest',
+        text: 'Here is what happened in your organization this week.\nNo new issues to report.',
+      }),
+    ],
+    fixer: async () => {
+      throw new Error('the fixer must never run on vendor account mail')
+    },
+  })
+
+  await poll(deps)
+
+  assert.deepEqual(kinds(events), ['skipped'])
+  assert.match(events[0].detail.reason, /account mail/i)
+  assert.equal(events[0].detail.source, 'sentry', 'the vendor is recognised, not passed through as unknown')
+  assert.equal(alerts.size, 0)
+  assert.equal(prCalls.length, 0)
+})
+
+test('a real Sentry issue alert still runs the fixer', async () => {
+  const { deps, events, prCalls } = harness({
+    messages: [
+      alertMsg({
+        uid: 1,
+        from: 'noreply@sentry.io',
+        subject: '[Sentry] [bcns-internal] TypeError: Cannot read properties of undefined',
+        text: 'https://bcn-services.sentry.io/issues/1234567890/\nTypeError: Cannot read properties of undefined',
+      }),
+    ],
+    fixer: async () => ({ triageOnly: true, report: 'could not reproduce' }),
+  })
+  await poll(deps)
+  assert.deepEqual(kinds(events), ['opened'])
+  assert.equal(prCalls.length, 1)
+})
+
 test('mail typed To: alerts@ with no Delivered-To (forwarded from the same seat) still reaches triage', async () => {
   const { deps, events, prCalls } = harness({
     messages: [alertMsg({ deliveredTo: null, toAddresses: [ALERTS] })],
