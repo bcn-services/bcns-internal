@@ -170,7 +170,7 @@ jobs:
       # GitHub disables schedules on a repo with sixty days of no activity.
       # The weekly source run commits a dated file so that clock never expires.
       - name: Commit heartbeat
-        if: (github.event.schedule || inputs.schedule) == '0 13 * * 1'
+        if: (github.event.schedule || inputs.schedule) == '0 13 * * 1' || inputs.job == 'heartbeat'
         run: |
           git config user.name 'bcns-clock'
           git config user.email 'bcns-clock@users.noreply.github.com'
