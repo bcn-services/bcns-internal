@@ -161,6 +161,13 @@ jobs:
           # Separate from NOTIFY_ALLOWED_RECIPIENTS on purpose — see notify.mjs.
           ONBOARD_NOTIFY_TO: ${{ vars.ONBOARD_NOTIFY_TO }}
           DRY_RUN: ${{ vars.DRY_RUN }}
+          # Alert triage (item 24-26): fallback repo for an unmapped alert,
+          # `name=org/repo,...` overrides, and the alias poll routes to
+          # triage (defaults to alerts@bcn-services.com when unset). The
+          # fixer clones and pushes with GH_TOKEN above.
+          ALERT_REPO: ${{ vars.ALERT_REPO }}
+          ALERT_REPO_MAP: ${{ vars.ALERT_REPO_MAP }}
+          ALERTS_ADDRESS: ${{ vars.ALERTS_ADDRESS }}
           # A Cloud Scheduler dispatch carries the cron string as an input;
           # GitHub's own cron carries it on the event. Same key either way.
           SCHEDULE: ${{ github.event.schedule || inputs.schedule }}

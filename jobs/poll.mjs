@@ -24,6 +24,7 @@ import { SIGNATURE, toHtml } from '../lib/template.mjs'
 import { pushOrSkip } from '../lib/osrepo.mjs'
 import { claimSlug } from './pitch.mjs'
 import { createHash, randomUUID } from 'node:crypto'
+import { parseAlert, resolveRepo } from '../lib/alerts.mjs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
@@ -294,6 +295,10 @@ export async function run({
   botAddress = 'bot@bcn-services.com',
   alertsAddress = 'alerts@bcn-services.com',
   github = null,
+  fixer = null,
+  // { clients, map, fallback }: who owns which repo, and where an unmapped
+  // alert lands. Built once in run.mjs so poll never reads ~/os or env.
+  alertRepos = {},
   osDir = null,
   commitAndPush = null,
   dryRun = true,
@@ -653,8 +658,22 @@ export async function run({
       return
     }
 
-    const fingerprint = alertFingerprint(message)
-    const [alert] = await db.upsertAlert(sql, { fingerprint, repo: null, source: 'alerts@' })
+    const parsed = parseAlert(message)
+    // A monitor coming back UP is the same incident as its DOWN, not a new
+    // one — nothing to fix, nothing to open.
+    if (parsed.resolved) {
+      await logTriage('resolved', { subject: message.subject, source: parsed.source })
+      return
+    }
+
+    // Parser seed first (issue id, workflow+branch, monitor host) so the same
+    // incident under a slightly different subject still counts as one; the
+    // subject+first-line hash is the fallback for mail nothing recognises.
+    const fingerprint = parsed.fingerprintSeed
+      ? createHash('sha256').update(parsed.fingerprintSeed).digest('hex')
+      : alertFingerprint(message)
+    const repo = resolveRepo(parsed, alertRepos) ?? alertRepos.fallback ?? null
+    const [alert] = await db.upsertAlert(sql, { fingerprint, repo, source: parsed.source })
     result.triaged++
 
     // Already seen before today's count was checked, or on a prior day — either
@@ -665,18 +684,36 @@ export async function run({
       return
     }
 
-    if (!github) {
-      await logTriage('error', { reason: 'missing deps: github', fingerprint })
+    if (!github || !repo) {
+      await logTriage('error', { reason: `missing deps: ${!github ? 'github' : 'repo (no ALERT_REPO fallback)'}`, fingerprint })
       return
     }
 
+    const branch = `alert/${fingerprint.slice(0, 12)}`
+    let body = stripQuoted(message.text)
+    let triageOnly = null
+    if (fixer) {
+      // ponytail: a fixer failure leaves the alert row at hits=1 with no PR,
+      // so the next sighting dedupes instead of retrying. Clear the row by
+      // hand to retry; add a retry column if this happens often.
+      try {
+        const fixed = await fixer({ repo, branch, alert: parsed })
+        triageOnly = fixed.triageOnly ?? null
+        body = `${triageOnly ? 'Triage only — no confident fix; see TRIAGE.md.' : 'Automated fix; review before merging.'}\n\n${fixed.report ?? ''}\n\n---\nAlert:\n${body}`
+      } catch (err) {
+        await logTriage('error', { reason: `fixer failed: ${err.message}`, fingerprint, repo })
+        return
+      }
+    }
+
     const pr = await github({
-      title: `alert: ${message.subject ?? '(no subject)'}`,
-      body: stripQuoted(message.text),
-      branch: `alert/${fingerprint.slice(0, 12)}`,
+      repo,
+      title: `${triageOnly ? 'triage' : 'alert'}: ${parsed.title || message.subject || '(no subject)'}`,
+      body,
+      branch,
     })
     await db.setAlertPr(sql, fingerprint, pr?.url ?? null)
-    await logTriage('opened', { fingerprint, pr_url: pr?.url ?? null })
+    await logTriage('opened', { fingerprint, repo, source: parsed.source, triage_only: triageOnly, pr_url: pr?.url ?? null })
   }
 
   // --- signed contract ------------------------------------------------------
