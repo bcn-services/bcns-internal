@@ -1,14 +1,16 @@
 name: clock
 
-# The only thing that runs this repo. Four schedules and a manual dispatch,
-# all funnelled through jobs/run.mjs, which maps the incoming cron string (or
-# the dispatch input) to a job module.
+# The only thing that runs this repo. Every tick arrives as a
+# workflow_dispatch and is funnelled through jobs/run.mjs, which maps the
+# incoming cron string (or the dispatch input) to a job module.
 #
-# GitHub's own `schedule` event is best-effort and on this repo it drops most
-# ticks (six landed of thirty-nine on 2026-09-04). The crons below stay as a
-# backup; the reliable trigger is Cloud Scheduler in the GCP project posting a
-# workflow_dispatch with `schedule` set to the same cron string, so the
-# SCHEDULES map in jobs/run.mjs stays the single source of truth for what runs.
+# Cloud Scheduler in the GCP project is the sole trigger: one job per cron
+# string in SCHEDULES, each posting a workflow_dispatch with `schedule` set to
+# that exact string. GitHub's own `schedule` event used to run alongside it as
+# a backup, but it is best-effort (six ticks landed of thirty-nine on
+# 2026-09-04) and the ticks that did land duplicated the dispatched run and
+# burned Actions minutes, so the native crons are gone. SCHEDULES in
+# jobs/run.mjs remains the single source of truth for what runs.
 # See docs/SCHEDULER.md.
 #
 # Concurrency is keyed on the schedule, not on the workflow, so a slow poll
@@ -16,11 +18,6 @@ name: clock
 # touch run alongside it.
 
 on:
-  schedule:
-    - cron: '*/20 8-20 * * 1-5'   # poll
-    - cron: '0 14 * * 1-5'        # touch
-    - cron: '0 13 * * 1'          # source, then qualify
-    - cron: '30 13 * * 1-5'       # personalize
   workflow_dispatch:
     inputs:
       schedule:
@@ -33,7 +30,7 @@ on:
         type: string
 
 concurrency:
-  group: clock-${{ github.event.schedule || inputs.schedule || inputs.job }}
+  group: clock-${{ inputs.schedule || inputs.job }}
   cancel-in-progress: false
 
 jobs:
@@ -168,16 +165,15 @@ jobs:
           ALERT_REPO: ${{ vars.ALERT_REPO }}
           ALERT_REPO_MAP: ${{ vars.ALERT_REPO_MAP }}
           ALERTS_ADDRESS: ${{ vars.ALERTS_ADDRESS }}
-          # A Cloud Scheduler dispatch carries the cron string as an input;
-          # GitHub's own cron carries it on the event. Same key either way.
-          SCHEDULE: ${{ github.event.schedule || inputs.schedule }}
+          # A Cloud Scheduler dispatch carries the cron string as an input.
+          SCHEDULE: ${{ inputs.schedule }}
           JOB: ${{ inputs.job }}
         run: pnpm job
 
-      # GitHub disables schedules on a repo with sixty days of no activity.
+      # GitHub disables workflows on a repo with sixty days of no activity.
       # The weekly source run commits a dated file so that clock never expires.
       - name: Commit heartbeat
-        if: (github.event.schedule || inputs.schedule) == '0 13 * * 1' || inputs.job == 'heartbeat'
+        if: inputs.schedule == '0 13 * * 1' || inputs.job == 'heartbeat'
         run: |
           git config user.name 'bcns-clock'
           git config user.email 'bcns-clock@users.noreply.github.com'

@@ -574,7 +574,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
   assert.equal(thread.mailbox, OUTREACH)
   assert.equal(p.store.mailboxes[0].sent_today, 1)
 
-  // --- every 20 min — poll, then notify (SCHEDULES['*/20 8-20 * * 1-5']) ---
+  // --- hourly, every day — poll, then notify (SCHEDULES['0 8-20 * * *']) ---
   // The reply threads on the Message-ID the sender actually recorded.
   p.inbox([
     inbound({

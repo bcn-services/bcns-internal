@@ -268,7 +268,7 @@ job() { # name cron
     --attempt-deadline 60s --max-retry-attempts 3 --format=none
   printf '  %s✓ %s%s %s (%s)\n' "$GREEN" "$verb" "$RESET" "$name" "$cron"
 }
-job clock-poll        '*/20 8-20 * * 1-5'
+job clock-poll        '0 8-20 * * *'
 job clock-touch       '0 14 * * 1-5'
 job clock-source      '0 13 * * 1'
 job clock-personalize '30 13 * * 1-5'
