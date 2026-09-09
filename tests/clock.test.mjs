@@ -12,20 +12,11 @@ const clock = parse(readFileSync(new URL('../.github/workflows/clock.yml', impor
 // `on:` is YAML 1.1's boolean true, which is why it parses to a `true` key.
 const triggers = clock.on ?? clock[true]
 
-// The drift test. clock.yml is the only thing that fires this repo and
-// SCHEDULES is the only thing that maps a cron to a job: a cell in one and not
-// the other is either a tick that throws or a job that never runs. `personalize`
-// having no cron for weeks is exactly that bug, so this is table-driven both
-// ways rather than a pinned list.
-test('every cron in clock.yml has a job, and every job in SCHEDULES has a cron', () => {
-  const crons = triggers.schedule.map((s) => s.cron)
-  for (const cron of crons) {
-    assert.ok(cron in SCHEDULES, `clock.yml fires ${cron} and SCHEDULES has no entry for it`)
-  }
-  for (const cron of Object.keys(SCHEDULES)) {
-    assert.ok(crons.includes(cron), `SCHEDULES maps ${cron} and no cron in clock.yml fires it`)
-  }
-  assert.equal(crons.length, new Set(crons).size, 'a cron is declared twice')
+// clock.yml no longer carries a native `schedule:` block — Cloud Scheduler is
+// the sole trigger (docs/SCHEDULER.md). A cron re-added here would duplicate
+// every dispatched tick and burn the org's Actions allowance.
+test('clock.yml declares no native cron schedule', () => {
+  assert.equal(triggers.schedule, undefined)
 })
 
 test('clock.yml has a workflow_dispatch trigger and a concurrency block', () => {
@@ -38,7 +29,7 @@ test('clock.yml has a workflow_dispatch trigger and a concurrency block', () => 
 })
 
 test('no cron is more frequent than every twenty minutes', () => {
-  for (const { cron } of triggers.schedule) {
+  for (const cron of Object.keys(SCHEDULES)) {
     const minute = cron.split(' ')[0]
     if (!minute.startsWith('*/')) continue
     assert.ok(Number(minute.slice(2)) >= 20, `${cron} fires too often`)
@@ -59,21 +50,17 @@ test('clock.yml references no secret that does not yet exist', () => {
 })
 
 test('the dispatcher maps each cron to its job', () => {
-  assert.equal(jobName({ schedule: '*/20 8-20 * * 1-5' }), 'poll')
+  assert.equal(jobName({ schedule: '0 8-20 * * *' }), 'poll')
   assert.equal(jobName({ schedule: '0 14 * * 1-5' }), 'touch')
   assert.equal(jobName({ schedule: '0 13 * * 1' }), 'source')
   assert.equal(jobName({ schedule: '30 13 * * 1-5' }), 'personalize')
   assert.equal(Object.keys(SCHEDULES).length, 4)
-  // The 20-minute tick is a chain: poll reads the inbox, pitch/quote/onboard
-  // work what it wrote, and notify reports on what they left behind — in that
+  // The poll tick is a chain: poll reads the inbox, pitch/quote/onboard work
+  // what it wrote, and notify reports on what they left behind — in that
   // order. quote and onboard need not exist yet; main() skips a missing module.
-  assert.deepEqual(jobNames({ schedule: '*/20 8-20 * * 1-5' }), [
-    'poll',
-    'pitch',
-    'quote',
-    'onboard',
-    'notify',
-  ])
+  // Every day of the week: replies land on weekends too, and this tick never sends.
+  const poll = ['poll', 'pitch', 'quote', 'onboard', 'notify']
+  assert.deepEqual(jobNames({ schedule: '0 8-20 * * *' }), poll)
 })
 
 test('a dispatch input overrides the schedule, and an unknown name throws', () => {

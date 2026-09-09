@@ -100,6 +100,15 @@ export async function run({
     if (drafted >= headroom) break
     try {
       const research = parseResearch(b.research)
+
+      // qualify already judged this business unfit for automation; drafting
+      // it anyway would queue an email to someone we've decided not to pitch.
+      if (research.fit === 'no') {
+        skipped++
+        await log('skipped', { business: b.id, reason: 'qualify marked fit: no', fitReason: research.reason })
+        continue
+      }
+
       const facts = Array.isArray(research.facts) ? research.facts.filter(Boolean) : []
 
       // Thin copy is worse than no copy: a two-fact email says nothing a

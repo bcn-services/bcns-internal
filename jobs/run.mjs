@@ -10,8 +10,9 @@ export const SCHEDULES = {
   // the end of the tick because it reports on what poll just wrote.
   // pitch/quote/onboard sit between them: each reads what poll just wrote and
   // notify reports on what they left behind. A module that is not built yet is
-  // skipped by main(), not a failed tick.
-  '*/20 8-20 * * 1-5': ['poll', 'pitch', 'quote', 'onboard', 'notify'],
+  // skipped by main(), not a failed tick. Every day, not just weekdays: replies
+  // land on weekends too, and nothing here sends outreach.
+  '0 8-20 * * *': ['poll', 'pitch', 'quote', 'onboard', 'notify'],
   '0 14 * * 1-5': 'touch',
   // The Monday tick is a chain: source finds businesses, qualify reads the
   // ones it just wrote. Order is the contract, so it lives in this list.

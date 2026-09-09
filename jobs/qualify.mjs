@@ -25,8 +25,10 @@ Rules:
   completes the sentence "<business name> ..." and starts with a verb, e.g.
   "has served Milford since 1998", "is GAF Master Elite certified",
   "offers 24-hour emergency repairs". Never start a fact with the business name.
-- "fit" judges whether this business would benefit from a new website or an
-  internal tool.
+- "fit" judges whether this business has manual, repeatable work — booking,
+  scheduling, follow-ups, intake, quoting — that AI automation could take off
+  their plate. An existing website is irrelevant to this; a business can have
+  a great site and still run its scheduling by hand.
 
 PAGE TEXT:
 `
