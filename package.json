@@ -4,7 +4,7 @@
   "private": true,
   "packageManager": "pnpm@11.15.1",
   "scripts": {
-    "test": "tsx --test tests/smoke.test.mjs tests/migrations.test.mjs tests/db.test.mjs tests/clock.test.mjs tests/source.test.mjs tests/places.test.mjs tests/qualify.test.mjs tests/verify.test.mjs tests/personalize.test.mjs tests/touch.test.mjs tests/poll.test.mjs tests/triage.test.mjs tests/notify.test.mjs tests/run-imap.test.mjs tests/pipeline.test.mjs tests/skills.test.mjs tests/pitch.test.mjs tests/quote.test.mjs tests/onboard.test.mjs tests/mailbox-transport.test.mjs tests/alerts.test.mjs tests/fixer.test.mjs",
+    "test": "tsx --test tests/smoke.test.mjs tests/migrations.test.mjs tests/db.test.mjs tests/clock.test.mjs tests/source.test.mjs tests/places.test.mjs tests/qualify.test.mjs tests/verify.test.mjs tests/verify-status.test.mjs tests/personalize.test.mjs tests/touch.test.mjs tests/poll.test.mjs tests/triage.test.mjs tests/notify.test.mjs tests/run-imap.test.mjs tests/pipeline.test.mjs tests/skills.test.mjs tests/pitch.test.mjs tests/quote.test.mjs tests/onboard.test.mjs tests/mailbox-transport.test.mjs tests/alerts.test.mjs tests/fixer.test.mjs",
     "job": "tsx jobs/run.mjs",
     "lint": "for f in jobs/*.mjs lib/*.mjs tests/*.mjs; do [ -f \"$f\" ] || continue; node --check \"$f\" || exit 1; done"
   },
