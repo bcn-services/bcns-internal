@@ -97,6 +97,45 @@ test('uptimerobot: UP mail is resolved and ignorable by title', () => {
   assert.equal(parsed.fingerprintSeed, 'uptimerobot:bcn-services.com')
 })
 
+test('uptimerobot: a subject with no URL in parens still yields a host and a repo', () => {
+  // UptimeRobot's current template sends the monitor's friendly name alone,
+  // with no `( url )` suffix. Unparsed, `refs` came back empty: the outage
+  // resolved to no repo and was filed against the ALERT_REPO fallback — a
+  // client's site alerting into the outreach pipeline's own repo.
+  const clients = [{ name: 'L2 Details', github: 'bcn-services/bcns-client-l2detailz', site: 'https://l2details.com', status: 'complete' }]
+  const alertRepos = { clients, map: {}, fallback: 'bcn-services/bcns-internal' }
+
+  const down = parseAlert({
+    from: 'UptimeRobot <alert@uptimerobot.com>',
+    subject: 'Monitor is DOWN: l2details.com/api/health',
+    text: 'L2DETAILS.COM/API/HEALTH IS DOWN.\n\nWe detected an incident on your monitor.',
+  })
+
+  assert.equal(down.resolved, false)
+  assert.equal(down.notice, null, 'from the alerting sender with a state-change subject — a real incident')
+  assert.equal(down.refs.monitorName, 'l2details.com/api/health')
+  assert.equal(down.refs.host, 'l2details.com', 'the host comes off the name when the subject carries no URL')
+  assert.equal(down.fingerprintSeed, 'uptimerobot:l2details.com')
+  assert.equal(down.title, 'DOWN: l2details.com/api/health')
+  assert.equal(resolveRepo(down, alertRepos), 'bcn-services/bcns-client-l2detailz', 'routes to the client, not the fallback')
+
+  // The recovery mail loses its `resolved` flag the same way, and a DOWN-shaped
+  // UP is a second PR for an incident that is already over.
+  const up = parseAlert({
+    from: 'UptimeRobot <alert@uptimerobot.com>',
+    subject: 'Monitor is UP: l2details.com/api/health',
+    text: 'L2DETAILS.COM/API/HEALTH IS UP.',
+  })
+  assert.equal(up.resolved, true)
+  assert.equal(up.fingerprintSeed, 'uptimerobot:l2details.com', 'same incident as its DOWN')
+
+  // A friendly name that is not a host keeps a stable seed off the name, so two
+  // mails about one outage do not hash their differing bodies into two PRs.
+  const named = parseAlert({ from: 'alert@uptimerobot.com', subject: 'Monitor is DOWN: bcns site', text: 'down' })
+  assert.equal(named.refs.host, undefined)
+  assert.equal(named.fingerprintSeed, 'uptimerobot:bcns site')
+})
+
 test('unknown: anything else passes through as source unknown', () => {
   const parsed = parseAlert({ from: 'someone@example.com', subject: 'hello', text: 'x'.repeat(1000) })
 
