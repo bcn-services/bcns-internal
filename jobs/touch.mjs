@@ -1,7 +1,10 @@
-// The sender. 14:00 on weekdays: first touches out of the `drafted` buffer,
-// then bumps for rows whose next_touch_at has passed.
+// The sender. Dispatched hourly alongside poll/pitch/quote/onboard/notify
+// (see jobs/run.mjs's SCHEDULES, 08:00-20:00 UTC), but only actually sends
+// inside its own `sendWindow` (13:00-20:00 UTC by default) on weekdays —
+// every other tick is a no-op `skipped` event. First touches out of the
+// `drafted` buffer, then bumps for rows whose next_touch_at has passed.
 //
-// Three things in here are load-bearing and none of them are conveniences:
+// Four things in here are load-bearing and none of them are conveniences:
 //
 //  1. The allow-list. Every send routes through `deliver()`, which refuses a
 //     recipient that is not on the list BEFORE a transport is constructed, and
@@ -13,6 +16,11 @@
 //     run cannot take the same last slot.
 //  3. Exactly two bumps. touches 0 -> first send, 1 and 2 -> bumps, 3 -> the
 //     row becomes `call_due` and no SMTP command is issued for it.
+//  4. The send window and per-tick quota. touch used to run once a day at a
+//     fixed hour and could spend a whole mailbox's daily cap in one burst;
+//     now it runs every hour of the window and `sendWindow` + the quota math
+//     below spread that same cap evenly across however many ticks remain
+//     today, so a mailbox never empties itself in the first hour.
 
 import { randomUUID } from 'node:crypto'
 import { SIGNATURE, toHtml } from '../lib/template.mjs'
@@ -59,6 +67,26 @@ export function warmedCap({ dailyCap = 0, warmedAt = null, now = new Date() } = 
 export const JITTER_WINDOW_MS = 55 * 60 * 1000
 export function jitterMs(random = Math.random, windowMs = JITTER_WINDOW_MS) {
   return Math.floor(random() * windowMs)
+}
+
+// A send needs real, measurable spacing between recipients whether or not
+// the jitter roll came up small — a bump of two sends landing 12ms apart is
+// as much a burst signal as a synchronized batch.
+export const MIN_GAP_MS = 5000
+export const MAX_PER_TICK = 6
+
+export const DEFAULT_SEND_WINDOW = { start: 13, end: 20 }
+
+// Fisher-Yates over an injected `random`, so ordering is deterministic under
+// test and the same knob that spreads timing also spreads which rows go
+// first — a first-touch row is never systematically ahead of a bump.
+export function shuffle(rows, random = Math.random) {
+  const out = rows.slice()
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1))
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
 }
 
 export class RecipientRefused extends Error {}
@@ -160,6 +188,7 @@ export async function run({
   uuid = randomUUID,
   limit = 50,
   jitterWindowMs = JITTER_WINDOW_MS,
+  sendWindow = DEFAULT_SEND_WINDOW,
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'touch', kind, detail)
   const result = { sent: 0, bumped: 0, callDue: 0, refused: 0, wouldSend: 0, skipped: 0, errors: 0 }
@@ -169,9 +198,13 @@ export async function run({
     return result
   }
 
-  const rows = await db.dueTouches(sql, { now, limit })
-  if (!rows.length) {
-    await log('skipped', { reason: 'no rows due for a touch' })
+  // Weekdays only (UTC 1-5 = Mon-Fri), and only inside the send window. This
+  // check runs before dueTouches is even called — a Saturday or an
+  // out-of-window tick has no business reading the due list at all.
+  const day = now.getUTCDay()
+  const hour = now.getUTCHours()
+  if (day < 1 || day > 5 || hour < sendWindow.start || hour > sendWindow.end) {
+    await log('skipped', { reason: 'outside send window', day, hour, sendWindow })
     return result
   }
 
@@ -181,12 +214,37 @@ export async function run({
     return result
   }
 
+  // Per-tick quota: spread each mailbox's remaining daily headroom evenly
+  // across the ticks left in today's window, so an hourly run never spends a
+  // whole day's cap in its first hour.
+  const remaining = mailboxes.reduce(
+    (sum, mb) =>
+      sum + Math.max(0, warmedCap({ dailyCap: mb.daily_cap, warmedAt: mb.warmed_at, now }) - Number(mb.sent_today ?? 0)),
+    0
+  )
+  const ticksLeft = Math.max(1, sendWindow.end - hour + 1)
+  // Capped, so a morning of dropped ticks can't dump the backlog on the last
+  // hour; unsent headroom is simply lost for the day.
+  const quota = Math.min(MAX_PER_TICK, Math.ceil(remaining / ticksLeft))
+  if (quota <= 0) {
+    await log('skipped', { reason: 'no quota this tick', remaining, ticksLeft })
+    return result
+  }
+  const effectiveLimit = Math.min(limit, quota)
+
+  const fetched = await db.dueTouches(sql, { now, limit: effectiveLimit })
+  if (!fetched.length) {
+    await log('skipped', { reason: 'no rows due for a touch' })
+    return result
+  }
+  const rows = shuffle(fetched, random)
+
   let rr = 0
 
   for (const row of rows) {
     try {
       // Belt to the view's braces: a replied or suppressed row is never mailed.
-      if (row.stage === 'replied' || row.suppressed_at) {
+      if (row.stage === 'replied' || row.suppressed_at || !row.email) {
         result.skipped++
         continue
       }
@@ -268,7 +326,7 @@ export async function run({
         to: row.email,
         claim,
         build,
-        beforeSend: () => sleep(jitterMs(random, jitterWindowMs / rows.length)),
+        beforeSend: () => sleep(Math.max(jitterMs(random, jitterWindowMs / rows.length), MIN_GAP_MS)),
       })
 
       if (!claimed) {

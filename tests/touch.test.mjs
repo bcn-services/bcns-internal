@@ -561,6 +561,15 @@ test('touch day simulation: Saturday sends nothing all day', async () => {
   assert.equal(total, 0)
 })
 
+test('a day whose early ticks were dropped still sends at most MAX_PER_TICK in the late ticks', async () => {
+  const { deps, dayStart } = simulateDay({ dateStr: '2026-09-01' })
+  for (const hour of [19, 20]) {
+    deps.now = new Date(dayStart.getTime() + hour * 3_600_000)
+    const res = await touch(deps)
+    assert.ok(res.sent <= 6, `hour ${hour} sent ${res.sent}; a missed morning must not become a burst`)
+  }
+})
+
 test('buildMime omits In-Reply-To on a first send', () => {
   const raw = buildMime({
     from: 'a@b.test', to: 'c@d.test', subject: 's', text: 't', html: '<p>t</p>',

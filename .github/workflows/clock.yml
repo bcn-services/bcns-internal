@@ -146,8 +146,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
           # Fit one run inside the job timeout: touch spreads its sends over
           # this window, and the skill jobs take at most this many rows a tick.
-          JITTER_WINDOW_MS: '180000'
+          JITTER_WINDOW_MS: ${{ vars.JITTER_WINDOW_MS || '45000' }}
           SKILL_JOB_LIMIT: '3'
+          # Volume knobs; unset falls back to the defaults in each job.
+          SOURCE_CELLS_PER_RUN: ${{ vars.SOURCE_CELLS_PER_RUN }}
+          CALL_TASKS_PER_DAY: ${{ vars.CALL_TASKS_PER_DAY }}
+          SEND_WINDOW_UTC: ${{ vars.SEND_WINDOW_UTC }}
+          QUALIFY_BUDGET_MS: ${{ vars.QUALIFY_BUDGET_MS }}
           # Two lists, never one. SEND_ gates which PROSPECTS touch may mail;
           # NOTIFY_ gates which internal humans get forwards and whose replies
           # are obeyed as commands. Unset is nobody, so both stay empty until a
@@ -171,9 +176,10 @@ jobs:
         run: pnpm job
 
       # GitHub disables workflows on a repo with sixty days of no activity.
-      # The weekly source run commits a dated file so that clock never expires.
+      # The daily weekday source run commits a dated file so that clock never
+      # expires.
       - name: Commit heartbeat
-        if: inputs.schedule == '0 13 * * 1' || inputs.job == 'heartbeat'
+        if: inputs.schedule == '0 11 * * 1-5' || inputs.job == 'heartbeat'
         run: |
           git config user.name 'bcns-clock'
           git config user.email 'bcns-clock@users.noreply.github.com'

@@ -22,9 +22,12 @@ import { normalizeDashes } from '../lib/skills.mjs'
 // anything else is a real database problem and belongs in the error event.
 const UNIQUE_VIOLATION = '23505'
 
-// Both stages precede a human conversation, and notify mails the folder path
-// on the same tick right after this job.
-export const PITCH_STAGES = ['call_due', 'replied']
+// `replied` precedes a human conversation, and notify mails the folder path
+// on the same tick right after this job. `call_due` used to be pitched too,
+// but qualify no longer routes fresh rows there (see `no_email`/`call_due`
+// promotion in jobs/qualify.mjs) — a call task now gets a call script from
+// notify instead of a pitch folder.
+export const PITCH_STAGES = ['replied']
 
 export function parseResearch(research) {
   if (!research) return {}

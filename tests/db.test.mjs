@@ -98,7 +98,9 @@ test('promoteNoEmail orders candidates by review_count desc then rating desc', a
   await promoteNoEmail(sql, { limit: 5 })
   const { text } = sql.calls[0]
   assert.match(text, /'review_count'\)::numeric desc nulls last/i)
-  assert.match(text, /rating desc nulls last/i)
+  assert.match(text, /'rating'\)::numeric desc nulls last/i)
+  // A fresh next_touch_at is what makes notify send the call task.
+  assert.match(text, /next_touch_at = now\(\)/i)
 })
 
 test('suppress never writes null', async () => {

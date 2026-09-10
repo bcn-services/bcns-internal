@@ -8,9 +8,11 @@ import {
   quoteEmail,
   notifyKey,
   NOTIFY_STAGES,
+  CALL_SCRIPT,
 } from '../jobs/notify.mjs'
 import { createNotifier } from '../jobs/poll.mjs'
 import { RecipientRefused } from '../jobs/touch.mjs'
+import { PITCH_STAGES } from '../jobs/pitch.mjs'
 import { assertSelectable, businessesByStage, notifiedKeys, unnotifiedByStage } from '../lib/db.mjs'
 
 const NOW = new Date('2026-09-02T09:00:00Z')
@@ -307,9 +309,25 @@ test('the templates hold up on a row with nothing in research', () => {
     assert.ok(mail.text.length > 0)
     assert.ok(!/undefined|null|\[object/.test(mail.text), mail.text)
   }
-  assert.match(callTaskEmail(bare).text, /Pitch folder: none yet/)
+  assert.match(callTaskEmail(bare).text, /Call script:/)
   assert.match(meetingEmail(bare, null).text, /Pitch folder: none yet/)
   assert.match(quoteEmail(bare).text, /left no notes/)
+})
+
+test('a call task with no pitch folder carries the call script and the rating/reviews lines', () => {
+  const row = biz({
+    stage: 'call_due',
+    research: JSON.stringify({ owner_name: 'Dana', rating: 4.7, review_count: 38 }),
+  })
+  const mail = callTaskEmail(row)
+  assert.match(mail.text, new RegExp(CALL_SCRIPT.split('\n')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  assert.doesNotMatch(mail.text, /Pitch folder/)
+  assert.match(mail.text, /Rating: 4\.7/)
+  assert.match(mail.text, /Reviews: 38/)
+})
+
+test('call_due rows are excluded from PITCH_STAGES — the call script is their only lead-in', () => {
+  assert.ok(!PITCH_STAGES.includes('call_due'))
 })
 
 // --- what notify is not allowed to do ---------------------------------------

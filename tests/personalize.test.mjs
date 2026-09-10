@@ -144,15 +144,15 @@ for (const [label, reaction] of [
   })
 }
 
-test('the buffer stops at 25 undelivered drafts', async () => {
+test('the buffer stops at 50 undelivered drafts', async () => {
   const rows = Array.from({ length: 10 }, (_, i) => biz(i))
-  const h = harness({ rows, drafted: 23 })
+  const h = harness({ rows, drafted: 48 })
   const res = await personalize(h.deps)
   assert.equal(res.drafted, 2)
   assert.equal(h.updates.length, 2)
   assert.equal(h.prompts.length, 2, 'Claude was called past the buffer cap')
 
-  const full = harness({ rows, drafted: 25 })
+  const full = harness({ rows, drafted: 50 })
   const res2 = await personalize(full.deps)
   assert.equal(res2.drafted, 0)
   assert.equal(full.prompts.length, 0)

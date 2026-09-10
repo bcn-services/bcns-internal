@@ -22,6 +22,14 @@ down from every 20 minutes on weekdays only. It never sends outreach — it
 reads the inbox and reports — so there is no reputation cost to covering
 weekends, and a reply doesn't sit unread until Monday.
 
+Touch has no cron cell of its own any more — it is folded into that same
+hourly tick's job list (`['poll', 'touch', 'pitch', 'quote', 'onboard',
+'notify']`), so `clock-touch` is retired. Touch's own weekday/send-window gate
+(`jobs/touch.mjs`, 13:00–20:00 UTC) and per-tick quota math are what keep it
+from sending on the weekend ticks or outside business hours — the cron no
+longer does that job. `source`/`qualify`/`heartbeat` run weekday mornings at
+`0 11 * * 1-5`; `personalize` runs weekday midday at `30 12 * * 1-5`.
+
 ## One-time setup
 
 1. Mint a fine-grained GitHub PAT: resource owner `bcn-services`, repository
@@ -40,26 +48,34 @@ weekends, and a reply doesn't sit unread until Monday.
      --message-body '{"ref":"main","inputs":{"schedule":"0 8-20 * * *"}}'
    ```
 
-   Same shape for `clock-touch`, `clock-source`, `clock-personalize`.
-   `ref` is the branch the workflow runs on — `main` in production.
+   Same shape for `clock-source` (`0 11 * * 1-5`) and `clock-personalize`
+   (`30 12 * * 1-5`). There is no `clock-touch` job — touch rides the
+   `clock-poll` hourly tick now. `ref` is the branch the workflow runs on —
+   `main` in production.
 
-## Switching the live clock-poll job to hourly, every day — TODO
+## Migrating the live scheduler jobs to the current SCHEDULES
 
-`SCHEDULES` (`jobs/run.mjs`) already carries only `'0 8-20 * * *'` — the old
-`*/20 8-20 * * 1-5` shim key is gone. The live `clock-poll` Cloud Scheduler job
-has not been updated to match: it still sends `*/20 8-20 * * 1-5`, which is no
-longer a key `jobNames()` recognizes, so **until this command runs, every
-`clock-poll` tick throws and the pipeline is dark for poll/pitch/quote/onboard/
-notify.** Run this once, promptly:
+`SCHEDULES` (`jobs/run.mjs`) now carries `'0 8-20 * * *'` (poll, touch, pitch,
+quote, onboard, notify), `'0 11 * * 1-5'` (source, qualify, heartbeat) and
+`'30 12 * * 1-5'` (personalize) — touch's old `clock-touch` cell is gone, and
+source/heartbeat moved off `'0 13 * * 1'` and personalize off
+`'30 13 * * 1-5'`. Every live Cloud Scheduler job must match a key in
+`SCHEDULES` exactly, or `jobNames()` throws and that tick goes dark. Run these
+once, promptly, after this change ships:
 
 ```
-gcloud scheduler jobs update http clock-poll --project bcns-leads --location us-central1 --schedule '0 8-20 * * *' --time-zone UTC --message-body '{"ref":"main","inputs":{"schedule":"0 8-20 * * *"}}' --format=none
+gcloud scheduler jobs delete clock-touch --project bcns-leads --location us-central1 --quiet
+
+gcloud scheduler jobs update http clock-source --project bcns-leads --location us-central1 --schedule '0 11 * * 1-5' --time-zone UTC --message-body '{"ref":"main","inputs":{"schedule":"0 11 * * 1-5"}}' --format=none
+
+gcloud scheduler jobs update http clock-personalize --project bcns-leads --location us-central1 --schedule '30 12 * * 1-5' --time-zone UTC --message-body '{"ref":"main","inputs":{"schedule":"30 12 * * 1-5"}}' --format=none
 ```
 
 `--format=none` matters: the default output prints the job's headers, which
 include the `Authorization` bearer PAT. The cron in `--message-body` must match
 the `--schedule` **and** an exact key in `SCHEDULES`; `jobNames()` throws on a
-miss, which would take the pipeline dark.
+miss, which would take the pipeline dark. `clock-poll` needs no update — its
+`'0 8-20 * * *'` key is unchanged, only its job list grew to include `touch`.
 
 ## Verifying a run came from the scheduler
 

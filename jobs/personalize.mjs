@@ -16,7 +16,7 @@ import { render } from '../lib/template.mjs'
 export const BANNED = ['http', '$', 'demo is ready']
 
 export const MIN_FACTS = 3
-export const BUFFER_CAP = 25
+export const BUFFER_CAP = 50
 
 // qualify asks for facts shaped as a predicate starting with a verb, so most
 // splice straight after the name. Older rows and a model that ignored the
@@ -32,7 +32,7 @@ const NUMBER_LEAD = /^(over|more than|nearly|almost|about)?\s*\d/i
 export const FRAGMENT_LEAD =
   /^(hard|rare|tough|easy|great|nice|good|solid|quite|really|so|very|pretty|impressive|amazing|always|definitely)\b/i
 
-export const PROMPT = `You are writing a short compliment for a cold email to the owner of a local trade business.
+export const PROMPT = `You are writing a short compliment for a cold email to the owner of a local small business.
 
 Return EXACTLY two lines, plain text, no preamble:
 FACT: one fact copied VERBATIM from the RESEARCH FACTS below, character for character
@@ -44,6 +44,9 @@ Picking FACT:
 - Never pick an address, a license or registration number, a phone number, a
   plain list of services, a list of towns, a directory/BBB listing that merely
   exists, or a fact naming the owner or staff.
+- Never reference patients, anyone's health, legal matters, or anyone's
+  personal situation — the category can be a dentist, chiropractor, physical
+  therapist, or lawyer, and none of that is fair game for a cold-email opener.
 
 Hard rules:
 - REACTION must be an OPINION about the fact, not a new fact. Never add a
@@ -68,7 +71,7 @@ export async function run({
   db,
   claude,
   readVoiceRules,
-  limit = 25,
+  limit = 50,
   bufferCap = BUFFER_CAP,
   minFacts = MIN_FACTS,
 } = {}) {
@@ -199,7 +202,7 @@ function buildPrompt(b, facts, voice) {
     PROMPT +
     (voice ? `VOICE RULES:\n${voice}\n\n` : '') +
     `BUSINESS: ${b.name}\n` +
-    `TRADE: ${b.trade ?? 'trade'}\n` +
+    `CATEGORY: ${b.trade ?? 'trade'}\n` +
     `LOCATION: ${where || 'unknown'}\n` +
     `RESEARCH FACTS:\n${facts.map((f) => `- ${f}`).join('\n')}\n`
   )

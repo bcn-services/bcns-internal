@@ -22,7 +22,9 @@ const biz = (over = {}) => ({
   town: 'Danbury',
   state: 'CT',
   place_id: 'ChIJabcdef123456',
-  stage: 'call_due',
+  // PITCH_STAGES is `['replied']` — call_due rows get a call script from
+  // notify instead (see jobs/notify.mjs CALL_SCRIPT).
+  stage: 'replied',
   os_slug: null,
   research: RESEARCH(),
   ...over,
@@ -152,7 +154,7 @@ test('a throwing runSkill writes an error event and leaves the row alone', async
 
     // The row keeps its stage and its research: only the slug was claimed.
     const row = h.store[0]
-    assert.equal(row.stage, 'call_due')
+    assert.equal(row.stage, 'replied')
     assert.equal(row.research, RESEARCH())
     assert.equal(JSON.parse(row.research).pitch_path, undefined)
     assert.deepEqual(h.updates.map((u) => Object.keys(u.patch)), [['os_slug']])
@@ -230,7 +232,10 @@ test('no ~/os clone is a skipped event, never a throw', async () => {
 // --- qualify stores what pitch reads back ----------------------------------
 
 test('qualify persists the page text it read, capped, alongside the facts', async () => {
-  const long = 'Acme Roofing. ' + 'x'.repeat(60_000)
+  // An email in the text so the pre-Claude EMAIL_RE scan doesn't short-circuit
+  // straight to `no_email` — this test is about page_text capping, not the
+  // no-email path (see the qualify.test.mjs no-email-text tests for that).
+  const long = 'Acme Roofing. hello@acme.example ' + 'x'.repeat(60_000)
   const updates = []
   let asked = ''
   const deps = {
@@ -239,6 +244,8 @@ test('qualify persists the page text it read, capped, alongside the facts', asyn
       logEvent: () => {},
       sourcedBacklog: async () => [{ id: 'b1', name: 'Acme', domain: 'acme.example' }],
       updateBusiness: async (_s, id, patch) => (updates.push(patch), []),
+      promotedToday: async () => [{ count: 0 }],
+      promoteNoEmail: async () => [],
     },
     fetchPage: async (url) => (url.endsWith('.example') ? `<p>${long}</p>` : ''),
     claude: {
@@ -261,18 +268,21 @@ test('qualify persists the page text it read, capped, alongside the facts', asyn
   assert.equal(research.reason, 'r')
 })
 
-test('a replied row is pitched too, so the meeting mail can name the folder', async () => {
+test('a replied row is pitched, a call_due row is not — call_due gets the call script instead', async () => {
   const h = harness({
     rows: [biz({ id: 'r1', name: 'Reply Co', stage: 'replied' }), biz({ id: 'c1', stage: 'call_due' })],
     runSkill: async () => ({ wrote: ['/w/os/clients/a/pitch/x.md'], dryrun: [] }),
   })
   try {
     const out = await pitch(h.deps)
-    assert.equal(out.pitched, 2)
-    const marked = h.updates.filter((u) => u.patch.research).map((u) => u.id).sort()
-    assert.deepEqual(marked, ['c1', 'r1'])
+    assert.equal(out.pitched, 1)
+    const marked = h.updates.filter((u) => u.patch.research).map((u) => u.id)
+    assert.deepEqual(marked, ['r1'])
     // The row keeps its stage: pitch never moves a replied row anywhere.
     assert.equal(h.store.find((r) => r.id === 'r1').stage, 'replied')
+    // call_due never entered PITCH_STAGES — untouched.
+    assert.equal(h.store.find((r) => r.id === 'c1').stage, 'call_due')
+    assert.deepEqual(h.updates.filter((u) => u.id === 'c1'), [])
   } finally {
     await rm(h.tmp(), { recursive: true, force: true })
   }
