@@ -87,6 +87,39 @@ test('a qualified row carries an email and at least three research facts', async
   assert.ok(JSON.parse(patch.research).facts.length >= 3)
 })
 
+test('owner_name from the model lands in research', async () => {
+  const h = harness({
+    rows: [acme],
+    pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+    answer: JSON.stringify({
+      email: 'hello@acme.example',
+      owner_name: 'Dave',
+      facts: ['Family run since 1998', 'Serves Milford and Stratford CT', 'GAF certified'],
+      fit: 'good', reason: 'dated site',
+    }),
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.qualified, 1)
+  const { patch } = h.updates[0]
+  assert.equal(JSON.parse(patch.research).owner_name, 'Dave')
+})
+
+test('a missing owner_name lands in research as null, never a guess', async () => {
+  const h = harness({
+    rows: [acme],
+    pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+    answer: JSON.stringify({
+      email: 'hello@acme.example',
+      facts: ['Family run since 1998', 'Serves Milford and Stratford CT', 'GAF certified'],
+      fit: 'good', reason: 'dated site',
+    }),
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.qualified, 1)
+  const { patch } = h.updates[0]
+  assert.equal(JSON.parse(patch.research).owner_name, null)
+})
+
 test('exactly one Claude call per business', async () => {
   const h = harness({
     rows: [acme, { ...acme, id: 'b2' }],

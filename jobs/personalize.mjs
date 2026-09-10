@@ -27,19 +27,34 @@ const VERB_LEAD =
   /^(offers|provides|serves|specializes|services|has|have|is|are|was|does|runs|holds|installs|installed|employs|operates|uses|carries|handles|covers|maintains|repairs|builds|works|trains|earned|won|opened|started|founded|owns)\b/i
 const NUMBER_LEAD = /^(over|more than|nearly|almost|about)?\s*\d/i
 
+// A reaction with no subject reads as a fragment after "and" ("and hard to
+// rack up that many"). Two of the first eight live sends shipped like that.
+export const FRAGMENT_LEAD =
+  /^(hard|rare|tough|easy|great|nice|good|solid|quite|really|so|very|pretty|impressive|amazing|always|definitely)\b/i
+
 export const PROMPT = `You are writing a short compliment for a cold email to the owner of a local trade business.
 
 Return EXACTLY two lines, plain text, no preamble:
 FACT: one fact copied VERBATIM from the RESEARCH FACTS below, character for character
 REACTION: a short reaction clause, four to ten words, reacting to that fact like a person genuinely would
 
+Picking FACT:
+- Pick the fact the owner is proudest of: years in business, generations in
+  the family, review count or rating, an award, a real certification.
+- Never pick an address, a license or registration number, a phone number, a
+  plain list of services, a list of towns, a directory/BBB listing that merely
+  exists, or a fact naming the owner or staff.
+
 Hard rules:
 - REACTION must be an OPINION about the fact, not a new fact. Never add a
   noun, number, name, or claim that isn't already in the FACT line.
+- REACTION must be a COMPLETE CLAUSE with its own subject — it gets glued
+  after "and" with nothing else supplying one. Never a bare adjective phrase.
+  Start it with "that's", "it's", a pronoun, or a restated subject.
 - Never use "impressive", "notable", "significant", or "stands out" in REACTION.
 - Lean warm, not flat. Skip lukewarm one-word verdicts like "solid", "good", or
   "nice" — react the way someone genuinely struck by the fact would put it, in
-  their own words. "hard to keep that rating with hundreds of reviews" and
+  their own words. "that's hard to keep with hundreds of reviews" and
   "33 years in one shop is rare these days" are the right register: specific,
   a little admiring, still plain speech.
 - Never diagnose THIS business. Never state a pain, a price, or a named competitor.
@@ -127,7 +142,7 @@ export async function run({
       // a paraphrase or an invention, and this is the one place that can be
       // caught in code instead of by rereading every draft by hand.
       const verbatim = facts.some((f) => f.trim().toLowerCase() === fact.trim().toLowerCase())
-      if (!fact || !reaction || !verbatim) {
+      if (!fact || !reaction || !verbatim || FRAGMENT_LEAD.test(reaction)) {
         errors++
         await log('error', { business: b.id, reason: 'compliment failed verification', fact, reaction })
         continue

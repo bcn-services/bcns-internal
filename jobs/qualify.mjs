@@ -14,11 +14,15 @@ const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
 export const PROMPT = `You are reading the website of a local trade business.
 
 Return ONLY minified JSON of this exact shape:
-{"email": string|null, "facts": string[], "fit": "good"|"weak"|"no", "reason": string}
+{"email": string|null, "owner_name": string|null, "facts": string[], "fit": "good"|"weak"|"no", "reason": string}
 
 Rules:
 - "email" must be an address that appears verbatim in the page text below. If no
   address appears, return null. Never construct one from the domain.
+- "owner_name" is the first name of a named owner/founder ONLY if the page text
+  states it explicitly (e.g. "owned by Dave Miller", "founder: Sarah Chen").
+  Never infer, guess, or take it from a generic staff/team list without a role
+  tying them to ownership. No name stated means null — never a guess.
 - "facts" is three to five specific, checkable things about THIS business drawn
   from the page — services, years in business, towns served, named staff,
   certifications. No generic filler. Phrase each fact as a predicate that
@@ -150,11 +154,13 @@ export async function run({
           ? claimed
           : null
 
+      const ownerName = typeof parsed.owner_name === 'string' ? parsed.owner_name.trim() : ''
       const research = JSON.stringify({
         ...parseResearch(b.research),
         facts,
         fit: parsed.fit ?? null,
         reason: parsed.reason ?? null,
+        owner_name: ownerName || null,
         page_text: text.slice(0, PAGE_TEXT_MAX),
       })
 

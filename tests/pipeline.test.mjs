@@ -177,7 +177,8 @@ function makeSql({ now }) {
       if (q.includes('where id =')) {
         return give(selectable().filter((b) => b.id === values[0]).slice(0, 1))
       }
-      if (q.includes('where stage = ? order by updated_at')) {
+      // notify's backlog read; the SQL dedupe is left to notify's own key check here.
+      if (q.includes('where stage = ? order by updated_at') || q.includes('where s.stage = ? and (s.stage')) {
         const [stage, limit] = values
         return give(selectable().filter((b) => b.stage === stage).slice(0, limit))
       }

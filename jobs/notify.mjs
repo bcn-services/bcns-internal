@@ -240,7 +240,7 @@ export async function run({
     : null
 
   for (const stage of NOTIFY_STAGES) {
-    const rows = (await db.businessesByStage(sql, stage, { limit })) ?? []
+    const rows = (await db.unnotifiedByStage(sql, stage, { limit })) ?? []
     if (!rows.length) continue
     const done = new Set(
       ((await db.notifiedKeys(sql, rows.map(notifyKey))) ?? []).map((r) => r.key)

@@ -6,6 +6,7 @@ import {
   BANNED,
   parseFactReaction,
   composeCompliment,
+  PROMPT,
 } from '../jobs/personalize.mjs'
 import { assertSelectable, draftedCount } from '../lib/db.mjs'
 import { readFileSync, existsSync } from 'node:fs'
@@ -194,10 +195,36 @@ test('a FACT that is not verbatim from research is rejected as an error, not fix
   assert.match(h.events.find((e) => e.kind === 'error').detail.reason, /compliment failed verification/)
 })
 
+test('a subject-less fragment reaction is rejected, so the row retries instead of sending', async () => {
+  for (const reaction of ['hard to rack up that many without earning it', 'rare to see a trade stay in one family']) {
+    const h = harness({ rows: [biz(1)], answer: `FACT: ${FACTS[0]}\nREACTION: ${reaction}` })
+    const res = await personalize(h.deps)
+    assert.equal(res.drafted, 0, reaction)
+    assert.equal(h.updates.length, 0, reaction)
+  }
+  for (const reaction of ["that's hard to keep going", 'over 20 years in one area is rare', 'not many shops bother with that']) {
+    const h = harness({ rows: [biz(1)], answer: `FACT: ${FACTS[0]}\nREACTION: ${reaction}` })
+    assert.equal((await personalize(h.deps)).drafted, 1, reaction)
+  }
+})
+
+test('the PROMPT steers fact choice away from license numbers, addresses, and staff names', () => {
+  assert.match(PROMPT, /license or registration number/)
+  assert.match(PROMPT, /naming the owner or staff/)
+})
+
 test('parseFactReaction pulls the two labeled lines and strips dashes', () => {
   const out = parseFactReaction('FACT: GAF certified\nREACTION: that told me you take the work seriously.')
   assert.deepEqual(out, { fact: 'GAF certified', reaction: 'that told me you take the work seriously' })
   assert.deepEqual(parseFactReaction('no labels here'), { fact: '', reaction: '' })
+})
+
+test('the PROMPT example reaction is a full clause, not a bare fragment glued after "and"', () => {
+  // Regression guard: a fragment example here (no subject/copula) taught the
+  // model to write "...and hard to X" instead of "...and that's hard to X"
+  // for every reaction, since composeCompliment always prefixes "and ".
+  assert.doesNotMatch(PROMPT, /"hard to keep that rating/)
+  assert.match(PROMPT, /"that's hard to keep/)
 })
 
 test('composeCompliment inserts the right copula for verb, number, and adjective leads', () => {
