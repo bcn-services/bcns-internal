@@ -42,10 +42,17 @@ test('search posts a Places (New) text search with the bearer token and field ma
   assert.ok(!/key=/.test(url))
 })
 
-test('search maps a Places response to the row shape source inserts', async () => {
-  const fetch = fakeFetch({ places: [PLACE, { id: 'ChIJ2', displayName: { text: 'Bare Co' } }] })
-  const rows = await createPlaces({ token: 't', project: 'p', fetch }).search('q')
-  assert.deepEqual(rows[0], {
+test('the field mask asks for nextPageToken, or Places never returns one', () => {
+  assert.ok(FIELD_MASK.split(',').includes('nextPageToken'))
+})
+
+test('search maps a Places response to the row shape source inserts, alongside a nextPageToken', async () => {
+  const fetch = fakeFetch({
+    places: [PLACE, { id: 'ChIJ2', displayName: { text: 'Bare Co' } }],
+    nextPageToken: 'tok-page-2',
+  })
+  const { results, nextPageToken } = await createPlaces({ token: 't', project: 'p', fetch }).search('q')
+  assert.deepEqual(results[0], {
     place_id: 'ChIJ1',
     name: 'Acme Roofing',
     phone: '(203) 555-0100',
@@ -55,10 +62,26 @@ test('search maps a Places response to the row shape source inserts', async () =
     review_count: 88,
   })
   // A place missing every optional field still maps, with nulls, not undefined.
-  assert.deepEqual(rows[1], {
+  assert.deepEqual(results[1], {
     place_id: 'ChIJ2', name: 'Bare Co', phone: null, website: null,
     address: null, rating: null, review_count: null,
   })
+  assert.equal(nextPageToken, 'tok-page-2')
+})
+
+test('search omits pageToken from the body when none is given, and returns null nextPageToken with none in the response', async () => {
+  const fetch = fakeFetch({ places: [PLACE] })
+  const { nextPageToken } = await createPlaces({ token: 't', project: 'p', fetch }).search('q')
+  assert.equal(nextPageToken, null)
+  const [{ init }] = fetch.calls
+  assert.ok(!('pageToken' in JSON.parse(init.body)))
+})
+
+test('search sends the given pageToken in the request body, for the next page of a cell', async () => {
+  const fetch = fakeFetch({ places: [] })
+  await createPlaces({ token: 't', project: 'p', fetch }).search('q', { pageToken: 'tok-page-2' })
+  const [{ init }] = fetch.calls
+  assert.equal(JSON.parse(init.body).pageToken, 'tok-page-2')
 })
 
 test('search throws on a non-ok response rather than returning no rows', async () => {

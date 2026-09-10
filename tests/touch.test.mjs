@@ -141,6 +141,16 @@ const mime = (raw) => {
   return { headers, parts }
 }
 
+test('a send never sleeps under MIN_GAP_MS even when the jitter roll is near zero', async () => {
+  const h = harness({ dryRun: false })
+  h.deps.random = () => 0
+  h.deps.jitterWindowMs = 100
+  await touch(h.deps)
+  const sleepMs = h.trace.find((t) => t.startsWith('sleep:'))
+  assert.ok(sleepMs, 'no sleep was recorded before the send')
+  assert.ok(Number(sleepMs.split(':')[1]) >= 5000, `sleep was ${sleepMs}, under the 5000ms floor`)
+})
+
 // --- pure helpers ----------------------------------------------------------
 
 test('the warming ramp yields the per-mailbox cap for a given warmed_at age', () => {
@@ -242,7 +252,10 @@ test('every mailbox at capacity sends nothing and writes a skipped event', async
   assert.equal(res.sent, 0)
   assert.equal(h.sent.length, 0)
   assert.ok(!h.trace.includes('transport:construct'))
-  assert.match(h.events.at(-1).detail.reason, /warmed cap/)
+  // A mailbox with zero headroom leaves zero quota for the tick, so the run
+  // now short-circuits before even reading the due list — the old "every
+  // mailbox is at its warmed cap" per-row skip is unreachable in this case.
+  assert.match(h.events.at(-1).detail.reason, /quota/)
 })
 
 test('a row at touches=3 with no reply lands at call_due and issues no SMTP command', async () => {
@@ -473,6 +486,88 @@ test('no SMTP credential ever reaches a touch event, even one the transport itse
   assert.equal(h.sent.length, 1, 'sanity: a send actually happened')
   const blob = JSON.stringify(h.events)
   assert.ok(!blob.includes(SECRET), 'a credential value leaked into a logged event')
+})
+
+// The whole-day simulation: one mailbox's daily cap spread across every
+// hourly tick in and out of the send window, with a real pool of due rows
+// draining as ticks send.
+function simulateDay({ dateStr, warmedDaysAgo = 400 }) {
+  const dayStart = new Date(`${dateStr}T00:00:00Z`)
+  const pool = Array.from({ length: 60 }, (_, i) => biz({ id: `row${i}`, email: `x${i}@example.com` }))
+  const mb = mailbox({
+    address: 'mb@send.bcn-services.com',
+    daily_cap: 40,
+    sent_today: 0,
+    warmed_at: new Date(dayStart.getTime() - warmedDaysAgo * 86_400_000),
+  })
+  const sleeps = []
+
+  const deps = {
+    sql: { begin: async (fn) => fn(TX) },
+    db: {
+      logEvent: async () => {},
+      dueTouches: async (_s, { limit }) => pool.splice(0, limit),
+      activeMailboxes: async () => [mb],
+      claimMailboxSlot: async (_s, { cap }) => {
+        if (mb.sent_today >= cap) return []
+        mb.sent_today++
+        return [{ ...mb }]
+      },
+      firstOutbound: async () => [],
+      recordThread: async () => [],
+      updateBusiness: async () => [],
+    },
+    transport: async () => ({ sendMail: async () => {} }),
+    allowedRecipients: ['*'],
+    dryRun: false,
+    random: () => 0.5,
+    sleep: async (ms) => sleeps.push(ms),
+    uuid: (() => {
+      let n = 0
+      return () => `id${++n}`
+    })(),
+  }
+
+  return { deps, dayStart, mb, sleeps, pool }
+}
+
+test('touch day simulation: an hourly tick from 08:00-20:00 UTC spreads one mailbox\'s daily cap across the send window', async () => {
+  const { deps, dayStart, sleeps } = simulateDay({ dateStr: '2026-09-01' })
+  const perTickSent = []
+  for (let hour = 8; hour <= 20; hour++) {
+    deps.now = new Date(dayStart.getTime() + hour * 3_600_000)
+    const res = await touch(deps)
+    perTickSent.push({ hour, sent: res.sent })
+  }
+
+  const total = perTickSent.reduce((a, t) => a + t.sent, 0)
+  assert.ok(total >= 38 && total <= 40, `total sent ${total} out of range`)
+  for (const t of perTickSent) {
+    assert.ok(t.sent <= 6, `hour ${t.hour} sent ${t.sent}, more than 6 in one tick`)
+    if (t.hour < 13 || t.hour > 20) assert.equal(t.sent, 0, `hour ${t.hour} sent outside the send window`)
+  }
+  assert.ok(sleeps.length > 0, 'no sends happened to sleep between')
+  assert.ok(sleeps.every((ms) => ms >= 5000), 'a sleep fell under the minimum gap')
+})
+
+test('touch day simulation: Saturday sends nothing all day', async () => {
+  const { deps, dayStart } = simulateDay({ dateStr: '2026-09-05' })
+  let total = 0
+  for (let hour = 8; hour <= 20; hour++) {
+    deps.now = new Date(dayStart.getTime() + hour * 3_600_000)
+    const res = await touch(deps)
+    total += res.sent
+  }
+  assert.equal(total, 0)
+})
+
+test('a day whose early ticks were dropped still sends at most MAX_PER_TICK in the late ticks', async () => {
+  const { deps, dayStart } = simulateDay({ dateStr: '2026-09-01' })
+  for (const hour of [19, 20]) {
+    deps.now = new Date(dayStart.getTime() + hour * 3_600_000)
+    const res = await touch(deps)
+    assert.ok(res.sent <= 6, `hour ${hour} sent ${res.sent}; a missed morning must not become a burst`)
+  }
 })
 
 test('buildMime omits In-Reply-To on a first send', () => {

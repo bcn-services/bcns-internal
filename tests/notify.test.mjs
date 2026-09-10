@@ -8,10 +8,12 @@ import {
   quoteEmail,
   notifyKey,
   NOTIFY_STAGES,
+  CALL_SCRIPT,
 } from '../jobs/notify.mjs'
 import { createNotifier } from '../jobs/poll.mjs'
 import { RecipientRefused } from '../jobs/touch.mjs'
-import { assertSelectable, businessesByStage, notifiedKeys } from '../lib/db.mjs'
+import { PITCH_STAGES } from '../jobs/pitch.mjs'
+import { assertSelectable, businessesByStage, notifiedKeys, unnotifiedByStage } from '../lib/db.mjs'
 
 const NOW = new Date('2026-09-02T09:00:00Z')
 // Literals, not the module's own constant: a widened allow-list has to fail here.
@@ -57,7 +59,7 @@ function harness({ rows = [], allowed = ALLOWED, dryRun = false, send = null } =
   const deps = {
     sql: {},
     db: {
-      businessesByStage: (_s, stage) => Promise.resolve(store.filter((r) => r.stage === stage)),
+      unnotifiedByStage: (_s, stage) => Promise.resolve(store.filter((r) => r.stage === stage)),
       notifiedKeys: (_s, keys) =>
         Promise.resolve(
           events
@@ -307,9 +309,25 @@ test('the templates hold up on a row with nothing in research', () => {
     assert.ok(mail.text.length > 0)
     assert.ok(!/undefined|null|\[object/.test(mail.text), mail.text)
   }
-  assert.match(callTaskEmail(bare).text, /Pitch folder: none yet/)
+  assert.match(callTaskEmail(bare).text, /Call script:/)
   assert.match(meetingEmail(bare, null).text, /Pitch folder: none yet/)
   assert.match(quoteEmail(bare).text, /left no notes/)
+})
+
+test('a call task with no pitch folder carries the call script and the rating/reviews lines', () => {
+  const row = biz({
+    stage: 'call_due',
+    research: JSON.stringify({ owner_name: 'Dana', rating: 4.7, review_count: 38 }),
+  })
+  const mail = callTaskEmail(row)
+  assert.match(mail.text, new RegExp(CALL_SCRIPT.split('\n')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  assert.doesNotMatch(mail.text, /Pitch folder/)
+  assert.match(mail.text, /Rating: 4\.7/)
+  assert.match(mail.text, /Reviews: 38/)
+})
+
+test('call_due rows are excluded from PITCH_STAGES — the call script is their only lead-in', () => {
+  assert.ok(!PITCH_STAGES.includes('call_due'))
 })
 
 // --- what notify is not allowed to do ---------------------------------------
@@ -318,8 +336,8 @@ test('a drafted row is not notified about at all: no mail, no event, no read', a
   // The real entry point, with a drafted row as the only thing in the store.
   const h = harness({ rows: [biz({ id: 'd1', stage: 'drafted', next_touch_at: null })] })
   const stagesRead = []
-  const byStage = h.deps.db.businessesByStage
-  h.deps.db.businessesByStage = (s, stage, opts) => {
+  const byStage = h.deps.db.unnotifiedByStage
+  h.deps.db.unnotifiedByStage = (s, stage, opts) => {
     stagesRead.push(stage)
     return byStage(s, stage, opts)
   }
@@ -373,4 +391,19 @@ test('the notify reads go through the view and stay parameterised', () => {
   notifiedKeys(sql, ['b1:call_due:x'])
   assert.match(seen[1].text, /job = 'notify' and kind = 'notified'/)
   assert.deepEqual(seen[1].values, [['b1:call_due:x']])
+})
+
+test('the notify backlog read dedupes in SQL, before the limit', () => {
+  const seen = []
+  const sql = (strings, ...values) => {
+    seen.push({ text: strings.join('?'), values })
+    return Promise.resolve([])
+  }
+  unnotifiedByStage(sql, 'call_due', { limit: 50 })
+  const text = seen[0].text
+  assert.match(text, /from selectable_businesses/)
+  assert.match(text, /not exists/)
+  assert.ok(text.indexOf('not exists') < text.indexOf('limit'), 'dedupe must run before the limit')
+  assert.match(text, /next_touch_at <= now\(\)/, 'a "no answer" call must wait out its two days')
+  assert.deepEqual(seen[0].values, ['call_due', 50])
 })

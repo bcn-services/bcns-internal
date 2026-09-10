@@ -199,3 +199,44 @@ test('0022 adds no RLS policy — businesses and clients stay deny-all', () => {
   assert.ok(!/create policy/i.test(pipeline), '0018 grew a policy')
   assert.ok(!/create policy/i.test(clients), '0020 grew a policy')
 })
+
+// --- 0026 --------------------------------------------------------------
+
+const noEmailPool = readFileSync(new URL('0026_no_email_pool.sql', dir), 'utf8')
+
+test('0026 adds no_email to the stage vocabulary, copying 0022s full list', () => {
+  const check = noEmailPool.match(
+    /add constraint businesses_stage_check check \(stage in \(([\s\S]*?)\)\s*\)/i
+  )
+  assert.ok(check, '0026 re-adds no stage check')
+  const listed = [...check[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1])
+  assert.equal(listed.length, 14)
+  assert.deepEqual(listed.sort(), [...STAGES, 'quoting', 'onboarded', 'no_email'].sort())
+  assert.ok(listed.includes('no_email'))
+})
+
+test('0026 backfills only untouched call_due rows with no email', () => {
+  assert.match(
+    noEmailPool,
+    /update businesses\s+set stage = 'no_email'\s+where stage = 'call_due' and email is null and coalesce\(touches,\s*0\) = 0/i
+  )
+})
+
+test('0026 parses as balanced SQL with one begin and one commit', () => {
+  const stripped = noEmailPool.replace(/--[^\n]*/g, '').replace(/'[^']*'/g, "''")
+  let depth = 0
+  for (const ch of stripped) {
+    if (ch === '(') depth++
+    else if (ch === ')') depth--
+    assert.ok(depth >= 0, '0026: unbalanced parenthesis')
+  }
+  assert.equal(depth, 0, '0026: unbalanced parenthesis')
+  assert.equal((stripped.match(/\bbegin\b/gi) || []).length, 1, '0026: expected one begin')
+  assert.equal((stripped.match(/\bcommit\b/gi) || []).length, 1, '0026: expected one commit')
+  assert.ok(stripped.trim().endsWith(';'), '0026: does not end in a statement terminator')
+})
+
+test('0026 edits no applied migration', () => {
+  assert.ok(!/no_email/i.test(pipeline), '0018 was edited — it is applied')
+  assert.ok(!/no_email/i.test(pipelineV2), '0022 was edited — it is applied')
+})

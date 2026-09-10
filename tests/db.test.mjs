@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   assertSelectable, dueBusinesses, businessByEmail, businessByPlaceId,
   qualifiedBacklog, sourcedBacklog, suppress, logEvent, recordThread,
-  activeMailboxes, claimMailboxSlot,
+  activeMailboxes, claimMailboxSlot, promoteNoEmail,
 } from '../lib/db.mjs'
 
 // A postgres.js-shaped tagged-template fake. Records the static text of every
@@ -89,6 +89,18 @@ test('suppress twice leaves the original timestamp unchanged', async () => {
   const second = await suppress(sql, 'b1')
   assert.equal(row.suppressed_at, first, 'a second suppress rewrote the timestamp')
   assert.deepEqual(second, [], 'a second suppress should update no row')
+})
+
+// Best leads (most reviews, then highest rating) must be promoted first —
+// an ascending sort would call the worst-rated no_email rows first.
+test('promoteNoEmail orders candidates by review_count desc then rating desc', async () => {
+  const sql = fakeClient()
+  await promoteNoEmail(sql, { limit: 5 })
+  const { text } = sql.calls[0]
+  assert.match(text, /'review_count'\)::numeric desc nulls last/i)
+  assert.match(text, /'rating'\)::numeric desc nulls last/i)
+  // A fresh next_touch_at is what makes notify send the call task.
+  assert.match(text, /next_touch_at = now\(\)/i)
 })
 
 test('suppress never writes null', async () => {

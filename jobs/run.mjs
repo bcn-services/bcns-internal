@@ -8,22 +8,28 @@ import { existsSync } from 'node:fs'
 export const SCHEDULES = {
   // Read the inbox, then tell the humans what it left behind. Notify runs at
   // the end of the tick because it reports on what poll just wrote.
-  // pitch/quote/onboard sit between them: each reads what poll just wrote and
-  // notify reports on what they left behind. A module that is not built yet is
-  // skipped by main(), not a failed tick. Every day, not just weekdays: replies
-  // land on weekends too, and nothing here sends outreach.
-  '0 8-20 * * *': ['poll', 'pitch', 'quote', 'onboard', 'notify'],
-  '0 14 * * 1-5': 'touch',
-  // The Monday tick is a chain: source finds businesses, qualify reads the
-  // ones it just wrote. Order is the contract, so it lives in this list.
-  // heartbeat runs last: it writes the dated file clock.yml commits so GitHub
-  // never disables the schedules, and a source failure still fails the tick.
-  '0 13 * * 1': ['source', 'qualify', 'heartbeat'],
-  // Half an hour after Monday's source+qualify and thirty minutes before the
-  // 14:00 touch, so a row qualified this morning is drafted before touch looks
-  // for something to send. Weekdays, not Mondays only: a retry of a draft that
-  // failed validation needs a tick of its own.
-  '30 13 * * 1-5': 'personalize',
+  // touch/pitch/quote/onboard sit between them: each reads what poll just
+  // wrote and notify reports on what they left behind. touch used to have its
+  // own 14:00 schedule; it is folded in here now because its own send-window
+  // gate (jobs/touch.mjs's `sendWindow`) already decides per-tick whether
+  // there is anything to send, so an hourly tick is enough. A module that is
+  // not built yet is skipped by main(), not a failed tick. Every day, not
+  // just weekdays: replies land on weekends too, and touch's own weekday
+  // check keeps it from sending outreach on a Saturday tick.
+  '0 8-20 * * *': ['poll', 'touch', 'pitch', 'quote', 'onboard', 'notify'],
+  // Weekdays at 11:00: source finds businesses, qualify reads the ones it
+  // just wrote (and promotes the day's call list from the no_email pool).
+  // Order is the contract, so it lives in this list. heartbeat runs last: it
+  // writes the dated file clock.yml commits so GitHub never disables the
+  // schedules, and a source failure still fails the tick. Daily on weekdays
+  // now, not a Monday-only tick — the daily source/qualify volume needs more
+  // than one run a week to keep up with the call-task quota.
+  '0 11 * * 1-5': ['source', 'qualify', 'heartbeat'],
+  // An hour and a half after source+qualify, so a row qualified that morning
+  // is drafted well before the hourly touch ticks look for something to send.
+  // Weekdays, not Mondays only: a retry of a draft that failed validation
+  // needs a tick of its own.
+  '30 12 * * 1-5': 'personalize',
 }
 
 export function jobNames({ schedule = '', job = '' } = {}) {
@@ -198,6 +204,9 @@ export async function buildDeps(env = process.env, exists = existsSync) {
         connect: (host) =>
           new Promise((resolve, reject) => {
             const socket = net.connect(25, host)
+            // Runners that block port 25 hang rather than refuse; don't let
+            // one row eat minutes of qualify's time budget.
+            socket.setTimeout(10000, () => socket.destroy(new Error('smtp connect timeout')))
             socket.once('error', reject)
             socket.once('connect', () => resolve(smtpSession(socket)))
           }),
@@ -232,6 +241,16 @@ export async function buildDeps(env = process.env, exists = existsSync) {
   // for per tick, each being a multi-minute claude call.
   if (env.JITTER_WINDOW_MS) deps.jitterWindowMs = Number(env.JITTER_WINDOW_MS)
   if (env.SKILL_JOB_LIMIT) deps.skillLimit = Number(env.SKILL_JOB_LIMIT)
+  // How many grid cells source works per tick, how many call tasks qualify's
+  // no_email promotion feeds the funnel per day, and the UTC hour window
+  // touch is allowed to send in ('13-20' -> {start:13, end:20}).
+  if (env.SOURCE_CELLS_PER_RUN) deps.cellsPerRun = Number(env.SOURCE_CELLS_PER_RUN)
+  if (env.CALL_TASKS_PER_DAY) deps.callTasksPerDay = Number(env.CALL_TASKS_PER_DAY)
+  if (env.QUALIFY_BUDGET_MS) deps.budgetMs = Number(env.QUALIFY_BUDGET_MS)
+  if (env.SEND_WINDOW_UTC) {
+    const [start, end] = env.SEND_WINDOW_UTC.split('-').map(Number)
+    if (Number.isFinite(start) && Number.isFinite(end)) deps.sendWindow = { start, end }
+  }
 
   // SMTP is a capability like any other: no credentials, no transport, and
   // touch writes a skipped event instead of half-sending. The transport is a

@@ -51,6 +51,19 @@ const line = (label, value) => (value ? `${label}: ${value}` : null)
 const where = (row) => [row.town, row.state].filter(Boolean).join(', ')
 const facts = (research) => (research.facts ?? []).map((f) => `  - ${f}`)
 
+// Read on a call task that has no pitch folder — call_due rows never get
+// pitched (jobs/pitch.mjs's PITCH_STAGES is `['replied']` only), so the human
+// making the call needs something to open with instead of a folder path.
+// No prices: this is a discovery call, not a sales pitch.
+export const CALL_SCRIPT = `Hi, this is Nate/Brandon with BCNS, a small software shop here in Connecticut.
+We build custom tools for local businesses — things like online booking/scheduling and
+automated customer follow-up, so nothing falls through the cracks.
+
+Quick question: how do you currently handle scheduling and following up with customers?
+
+If that sounds useful, I'd love 15 minutes to show you a quick mock-up we put together
+for a business like yours — no obligation, no prices, just want your take on it.`
+
 // --- the four templates ---------------------------------------------------
 // Each returns `{ subject, text }`. None of them chooses a recipient: the
 // caller pairs the body with an allow-listed address, so no prospect address
@@ -68,14 +81,18 @@ export function callTaskEmail(row) {
       line('Where', where(row) || row.address),
       line('Site', row.domain),
       line('Email', row.email),
+      line('Rating', research.rating),
+      line('Reviews', research.review_count),
     ].filter(Boolean),
     ...(research.facts?.length ? ['', 'What we know:', ...facts(research)] : []),
     '',
-    // The pitch job builds this folder on the poll tick before notify runs, so
-    // a call task normally names a folder that already exists in ~/os.
+    // call_due rows are never pitched (pitch.mjs only pitches `replied`), so
+    // there is no folder to name here — give the caller the call script
+    // instead. A `replied` row that later re-enters call_due keeps whatever
+    // pitch_path it already earned.
     research.pitch_path
       ? `Pitch folder: ${research.pitch_path}`
-      : 'Pitch folder: none yet — the pitch job has not reached this row.',
+      : `Call script:\n${CALL_SCRIPT}`,
     '',
     'Reply "no answer" to push the call two days, or "stop" to drop them.',
   ].join('\n')
@@ -240,7 +257,7 @@ export async function run({
     : null
 
   for (const stage of NOTIFY_STAGES) {
-    const rows = (await db.businessesByStage(sql, stage, { limit })) ?? []
+    const rows = (await db.unnotifiedByStage(sql, stage, { limit })) ?? []
     if (!rows.length) continue
     const done = new Set(
       ((await db.notifiedKeys(sql, rows.map(notifyKey))) ?? []).map((r) => r.key)

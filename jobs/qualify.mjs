@@ -11,14 +11,18 @@ export const CONTACT_PATHS = ['/contact', '/contact-us', '/about']
 
 const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
 
-export const PROMPT = `You are reading the website of a local trade business.
+export const PROMPT = `You are reading the website of a local small business.
 
 Return ONLY minified JSON of this exact shape:
-{"email": string|null, "facts": string[], "fit": "good"|"weak"|"no", "reason": string}
+{"email": string|null, "owner_name": string|null, "facts": string[], "fit": "good"|"weak"|"no", "reason": string}
 
 Rules:
 - "email" must be an address that appears verbatim in the page text below. If no
   address appears, return null. Never construct one from the domain.
+- "owner_name" is the first name of a named owner/founder ONLY if the page text
+  states it explicitly (e.g. "owned by Dave Miller", "founder: Sarah Chen").
+  Never infer, guess, or take it from a generic staff/team list without a role
+  tying them to ownership. No name stated means null — never a guess.
 - "facts" is three to five specific, checkable things about THIS business drawn
   from the page — services, years in business, towns served, named staff,
   certifications. No generic filler. Phrase each fact as a predicate that
@@ -74,45 +78,57 @@ function parseResearch(research) {
   return research
 }
 
+export const DEFAULT_BUDGET_MS = 20 * 60 * 1000
+
 export async function run({
   sql,
   db,
   fetchPage,
   claude,
   verify,
-  limit = 25,
+  limit = 100,
   contactPaths = CONTACT_PATHS,
+  budgetMs = DEFAULT_BUDGET_MS,
+  clock = () => Date.now(),
+  callTasksPerDay = 20,
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'qualify', kind, detail)
 
   // A missing capability is a skipped event, never a throw: the clock runs this
-  // job every Monday whether or not the runner has a Claude CLI token.
+  // job every weekday whether or not the runner has a Claude CLI token.
   const missing = [!fetchPage && 'fetchPage', !claude && 'claude'].filter(Boolean)
   if (missing.length) {
     await log('skipped', { reason: `missing deps: ${missing.join(', ')}` })
-    return { qualified: 0, callDue: 0, errors: 0, skipped: missing }
+    return { qualified: 0, callDue: 0, errors: 0, skipped: missing, promoted: 0, timedOut: false }
   }
 
   const businesses = await db.sourcedBacklog(sql, { limit })
-
-  if (!businesses.length) {
-    await log('skipped', { reason: 'no businesses at stage sourced' })
-    return { qualified: 0, callDue: 0, errors: 0 }
-  }
 
   let qualified = 0
   let callDue = 0
   let skipped = 0
   let errors = 0
+  let timedOut = false
+
+  if (!businesses.length) {
+    await log('skipped', { reason: 'no businesses at stage sourced' })
+  }
+
+  const startedAt = clock()
 
   for (const b of businesses) {
+    if (clock() - startedAt > budgetMs) {
+      timedOut = true
+      break
+    }
     try {
       // No website means nothing to read and no address to find. Per LANE that
-      // is a calling lead, not an error to retry every Monday forever.
+      // is a calling lead, not an error to retry every day forever — it goes
+      // to the no_email pool and promoteNoEmail below decides when it's a
+      // call task.
       if (!b.domain) {
-        await db.updateBusiness(sql, b.id, { stage: 'call_due' })
-        callDue++
-        await log('call_due', { business: b.id, reason: 'no domain' })
+        await db.updateBusiness(sql, b.id, { stage: 'no_email' })
+        await log('no_email', { business: b.id, reason: 'no domain' })
         continue
       }
       const home = await fetchPage(homepage(b))
@@ -138,6 +154,15 @@ export async function run({
         continue
       }
 
+      // Nothing email-shaped anywhere in the fetched text means the Claude
+      // call would spend a call only to confirm there's nothing to find —
+      // skip it and go straight to the no_email pool.
+      if (!EMAIL_RE.test(text)) {
+        await db.updateBusiness(sql, b.id, { stage: 'no_email' })
+        await log('no_email', { business: b.id, reason: 'no email-shaped text on page' })
+        continue
+      }
+
       const answer = await claude.ask(PROMPT + text)
       const parsed = parseAnswer(answer)
 
@@ -150,11 +175,13 @@ export async function run({
           ? claimed
           : null
 
+      const ownerName = typeof parsed.owner_name === 'string' ? parsed.owner_name.trim() : ''
       const research = JSON.stringify({
         ...parseResearch(b.research),
         facts,
         fit: parsed.fit ?? null,
         reason: parsed.reason ?? null,
+        owner_name: ownerName || null,
         page_text: text.slice(0, PAGE_TEXT_MAX),
       })
 
@@ -175,11 +202,10 @@ export async function run({
         // phone stays as sourced; the unusable address is cleared.
         await db.updateBusiness(sql, b.id, {
           email: null,
-          stage: 'call_due',
+          stage: 'no_email',
           research,
         })
-        callDue++
-        await log('call_due', { business: b.id, reason: 'email failed verification', status: verdict.status })
+        await log('no_email', { business: b.id, reason: 'email failed verification', status: verdict.status })
       } else if (email) {
         await db.updateBusiness(sql, b.id, {
           email,
@@ -191,11 +217,10 @@ export async function run({
       } else {
         // phone is deliberately not written — it stays exactly as sourced.
         await db.updateBusiness(sql, b.id, {
-          stage: 'call_due',
+          stage: 'no_email',
           research,
         })
-        callDue++
-        await log('call_due', { business: b.id, reason: 'no discoverable email' })
+        await log('no_email', { business: b.id, reason: 'no discoverable email' })
       }
     } catch (err) {
       errors++
@@ -204,7 +229,26 @@ export async function run({
     }
   }
 
-  return { qualified, callDue, skipped, errors }
+  if (timedOut) {
+    await log('skipped', { reason: 'time guard — budgetMs exceeded, remaining rows stay at sourced' })
+  }
+
+  // Promotion runs every tick regardless of whether there was a sourced
+  // backlog above — the no_email pool fills from many past runs, and the
+  // call list has to keep getting fed even on a day with nothing fresh to
+  // qualify.
+  const [{ count: promotedSoFar = 0 } = {}] = (await db.promotedToday(sql)) ?? []
+  const room = callTasksPerDay - promotedSoFar
+  let promoted = 0
+  if (room > 0) {
+    const rows = (await db.promoteNoEmail(sql, { limit: room })) ?? []
+    for (const row of rows) {
+      promoted++
+      await log('promoted', { business: row.id })
+    }
+  }
+
+  return { qualified, callDue, skipped, errors, promoted, timedOut }
 }
 
 function homepage(b) {

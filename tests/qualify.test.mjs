@@ -42,7 +42,7 @@ test('trim does not fuse words across block tags', () => {
 const PAGE = (extra = '') => `<html><body><p>Acme Roofing, family run since 1998,
   serves Milford and Stratford CT. GAF certified.</p>${extra}</body></html>`
 
-function harness({ rows, pages = {}, answer, fetchThrows = false } = {}) {
+function harness({ rows, pages = {}, answer, fetchThrows = false, promotedToday = 0, promoteNoEmail } = {}) {
   const events = []
   const updates = []
   let asks = 0
@@ -54,6 +54,11 @@ function harness({ rows, pages = {}, answer, fetchThrows = false } = {}) {
         logEvent: (_s, job, kind, detail) => events.push({ job, kind, detail }),
         sourcedBacklog: async () => rows,
         updateBusiness: async (_s, id, patch) => { updates.push({ id, patch }); return [] },
+        // The promotion step runs at the end of every qualify tick regardless
+        // of the sourced backlog; default to "nothing to promote" so existing
+        // tests aimed at the main loop don't have to know about it.
+        promotedToday: async () => [{ count: promotedToday }],
+        promoteNoEmail: promoteNoEmail ?? (async () => []),
       },
       fetchPage: async (url) => {
         if (fetchThrows) throw new Error('ECONNREFUSED')
@@ -87,6 +92,39 @@ test('a qualified row carries an email and at least three research facts', async
   assert.ok(JSON.parse(patch.research).facts.length >= 3)
 })
 
+test('owner_name from the model lands in research', async () => {
+  const h = harness({
+    rows: [acme],
+    pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+    answer: JSON.stringify({
+      email: 'hello@acme.example',
+      owner_name: 'Dave',
+      facts: ['Family run since 1998', 'Serves Milford and Stratford CT', 'GAF certified'],
+      fit: 'good', reason: 'dated site',
+    }),
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.qualified, 1)
+  const { patch } = h.updates[0]
+  assert.equal(JSON.parse(patch.research).owner_name, 'Dave')
+})
+
+test('a missing owner_name lands in research as null, never a guess', async () => {
+  const h = harness({
+    rows: [acme],
+    pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+    answer: JSON.stringify({
+      email: 'hello@acme.example',
+      facts: ['Family run since 1998', 'Serves Milford and Stratford CT', 'GAF certified'],
+      fit: 'good', reason: 'dated site',
+    }),
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.qualified, 1)
+  const { patch } = h.updates[0]
+  assert.equal(JSON.parse(patch.research).owner_name, null)
+})
+
 test('exactly one Claude call per business', async () => {
   const h = harness({
     rows: [acme, { ...acme, id: 'b2' }],
@@ -97,29 +135,31 @@ test('exactly one Claude call per business', async () => {
   assert.equal(h.asks, 2)
 })
 
-test('no discoverable email lands at call_due with phone untouched and email still null', async () => {
+test('no discoverable email lands at no_email with phone untouched and email still null', async () => {
   const h = harness({
     rows: [acme],
     answer: JSON.stringify({ email: null, facts: ['a', 'b', 'c'], fit: 'weak' }),
   })
   const out = await qualify(h.deps)
-  assert.equal(out.callDue, 1)
+  assert.equal(out.qualified, 0)
   const { patch } = h.updates[0]
-  assert.equal(patch.stage, 'call_due')
-  assert.ok(!('email' in patch), 'call_due wrote an email field')
-  assert.ok(!('phone' in patch), 'call_due touched the phone number')
+  assert.equal(patch.stage, 'no_email')
+  assert.ok(!('email' in patch), 'no_email wrote an email field')
+  assert.ok(!('phone' in patch), 'no_email touched the phone number')
 })
 
 test('an email not present in the page text is refused, never written', async () => {
   const h = harness({
     rows: [acme],
-    // Well-formed, plausible, and nowhere on the page: a constructed guess.
+    // Some email-shaped text is present (so the pre-Claude scan doesn't
+    // short-circuit to no_email before the model is even asked), but not the
+    // one the model claims: well-formed, plausible, and a constructed guess.
+    pages: { home: PAGE('<p>HR only: worker@acme.example</p>') },
     answer: JSON.stringify({ email: 'info@acme.example', facts: ['a', 'b', 'c'], fit: 'good' }),
   })
   const out = await qualify(h.deps)
   assert.equal(out.qualified, 0)
-  assert.equal(out.callDue, 1)
-  assert.equal(h.updates[0].patch.stage, 'call_due')
+  assert.equal(h.updates[0].patch.stage, 'no_email')
 })
 
 test('a fetch that throws leaves the row at sourced and writes one error event', async () => {
@@ -136,16 +176,19 @@ test('a fetch that throws leaves the row at sourced and writes one error event',
 test('a business with no domain is a calling lead, not an error retried forever', async () => {
   const h = harness({ rows: [{ ...acme, domain: null }] })
   const out = await qualify(h.deps)
-  assert.equal(out.callDue, 1)
   assert.equal(out.errors, 0)
   assert.equal(h.updates.length, 1)
-  assert.equal(h.updates[0].patch.stage, 'call_due')
+  assert.equal(h.updates[0].patch.stage, 'no_email')
   assert.ok(!('phone' in h.updates[0].patch), 'phone must stay as sourced')
-  assert.equal(h.events.find((e) => e.kind === 'call_due').detail.reason, 'no domain')
+  assert.equal(h.events.find((e) => e.kind === 'no_email').detail.reason, 'no domain')
 })
 
 test('an unparseable Claude answer is an error, not a half-written row', async () => {
-  const h = harness({ rows: [acme], answer: 'sorry, I cannot do that' })
+  const h = harness({
+    rows: [acme],
+    pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+    answer: 'sorry, I cannot do that',
+  })
   const out = await qualify(h.deps)
   assert.equal(out.errors, 1)
   assert.equal(h.updates.length, 0)
@@ -192,14 +235,13 @@ const verifiable = {
   answer: JSON.stringify({ email: 'hello@acme.example', facts: ['a', 'b', 'c'], fit: 'good' }),
 }
 
-test('an address the probe calls invalid lands at call_due with email cleared and phone intact', async () => {
+test('an address the probe calls invalid lands at no_email with email cleared and phone intact', async () => {
   const h = harness(verifiable)
   h.deps.verify = async (address) => ({ ok: false, status: 'invalid', address })
   const out = await qualify(h.deps)
   assert.equal(out.qualified, 0)
-  assert.equal(out.callDue, 1)
   const { patch } = h.updates[0]
-  assert.equal(patch.stage, 'call_due')
+  assert.equal(patch.stage, 'no_email')
   assert.equal(patch.email, null)
   assert.ok(!('phone' in patch), 'verification failure touched the phone number')
 })
@@ -233,6 +275,64 @@ test('an empty page is skipped without spending a Claude call', async () => {
   assert.equal(h.asks, 0, 'the model was asked to read an empty page')
   assert.equal(h.updates.length, 0, 'the row moved off sourced and will not be retried')
   assert.match(h.events.at(-1).detail.reason, /no text/)
+})
+
+test('page text with no email-shaped string skips the Claude call and lands at no_email', async () => {
+  const h = harness({ rows: [acme] }) // default PAGE() has no @ anywhere
+  const out = await qualify(h.deps)
+  assert.equal(h.asks, 0, 'Claude was called despite no email-shaped text')
+  assert.equal(out.qualified, 0)
+  assert.equal(h.updates[0].patch.stage, 'no_email')
+  assert.equal(h.events.find((e) => e.kind === 'no_email').detail.reason, 'no email-shaped text on page')
+})
+
+test('the time guard stops the loop and leaves untouched rows at sourced', async () => {
+  const rows = [acme, { ...acme, id: 'b2' }, { ...acme, id: 'b3' }]
+  const h = harness({
+    rows,
+    pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+    answer: JSON.stringify({ email: 'hello@acme.example', facts: ['a', 'b', 'c'], fit: 'good' }),
+  })
+  // Elapsed time exceeds budgetMs right after the first row is processed.
+  let calls = 0
+  const clock = () => (calls++ === 0 ? 0 : 1000)
+  const out = await qualify({ ...h.deps, budgetMs: 500, clock })
+  assert.equal(out.timedOut, true)
+  assert.ok(h.updates.length < rows.length, 'the time guard did not stop the loop')
+  assert.ok(
+    h.events.some((e) => e.kind === 'skipped' && /time guard/.test(e.detail.reason)),
+    'no skipped event explained the time guard'
+  )
+})
+
+test('qualify promotes up to callTasksPerDay minus what already promoted today, one event per row', async () => {
+  const promoted = []
+  const h = harness({
+    rows: [],
+    promotedToday: 5,
+    promoteNoEmail: async (_s, { limit }) => {
+      assert.equal(limit, 15) // callTasksPerDay(20) - promotedToday(5)
+      const rows = Array.from({ length: limit }, (_, i) => ({ id: `no-email-${i}` }))
+      promoted.push(...rows)
+      return rows
+    },
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.promoted, 15)
+  assert.equal(h.events.filter((e) => e.kind === 'promoted').length, 15)
+})
+
+test('a second same-day qualify run promotes nothing once the day quota is spent', async () => {
+  const h = harness({
+    rows: [],
+    promotedToday: 20, // callTasksPerDay's default, already spent
+    promoteNoEmail: async () => {
+      throw new Error('promoteNoEmail should not be called with no room left')
+    },
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.promoted, 0)
+  assert.equal(h.events.filter((e) => e.kind === 'promoted').length, 0)
 })
 
 test('parseAnswer digs the object out of a fenced or chatty reply', () => {

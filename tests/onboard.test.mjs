@@ -383,7 +383,7 @@ function notifyHarness({
   const deps = {
     sql: {},
     db: {
-      businessesByStage: (_s, stage) => Promise.resolve(store.filter((r) => r.stage === stage)),
+      unnotifiedByStage: (_s, stage) => Promise.resolve(store.filter((r) => r.stage === stage)),
       notifiedKeys: async () => [],
       firstOutbound: async () => [],
       logEvent: (_s, job, kind, detail) => (events.push({ job, kind, detail }), Promise.resolve([])),

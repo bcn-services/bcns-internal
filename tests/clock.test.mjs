@@ -51,20 +51,20 @@ test('clock.yml references no secret that does not yet exist', () => {
 
 test('the dispatcher maps each cron to its job', () => {
   assert.equal(jobName({ schedule: '0 8-20 * * *' }), 'poll')
-  assert.equal(jobName({ schedule: '0 14 * * 1-5' }), 'touch')
-  assert.equal(jobName({ schedule: '0 13 * * 1' }), 'source')
-  assert.equal(jobName({ schedule: '30 13 * * 1-5' }), 'personalize')
-  assert.equal(Object.keys(SCHEDULES).length, 4)
-  // The poll tick is a chain: poll reads the inbox, pitch/quote/onboard work
-  // what it wrote, and notify reports on what they left behind — in that
+  assert.equal(jobName({ schedule: '0 11 * * 1-5' }), 'source')
+  assert.equal(jobName({ schedule: '30 12 * * 1-5' }), 'personalize')
+  assert.equal(Object.keys(SCHEDULES).length, 3)
+  // The poll tick is a chain: poll reads the inbox, touch/pitch/quote/onboard
+  // work what it wrote, and notify reports on what they left behind — in that
   // order. quote and onboard need not exist yet; main() skips a missing module.
-  // Every day of the week: replies land on weekends too, and this tick never sends.
-  const poll = ['poll', 'pitch', 'quote', 'onboard', 'notify']
+  // Every day of the week: replies land on weekends too, and this tick never
+  // sends outside touch's own send window.
+  const poll = ['poll', 'touch', 'pitch', 'quote', 'onboard', 'notify']
   assert.deepEqual(jobNames({ schedule: '0 8-20 * * *' }), poll)
 })
 
 test('a dispatch input overrides the schedule, and an unknown name throws', () => {
-  assert.equal(jobName({ schedule: '0 13 * * 1', job: 'heartbeat' }), 'heartbeat')
+  assert.equal(jobName({ schedule: '0 11 * * 1-5', job: 'heartbeat' }), 'heartbeat')
   assert.throws(() => jobName({ schedule: 'not-a-cron' }), /no job for schedule/)
   assert.throws(() => jobName({}), /no job for schedule/)
 })
@@ -153,20 +153,19 @@ test('an unrelated import error is never mistaken for an unbuilt job', async () 
   )
 })
 
-test('the Monday cron runs source then qualify, in that order', () => {
-  assert.deepEqual(jobNames({ schedule: '0 13 * * 1' }), ['source', 'qualify', 'heartbeat'])
-  // 13:30 is between qualify (13:00 Monday) and touch (14:00), so a row
-  // qualified this morning is drafted before touch goes looking for it.
-  assert.deepEqual(jobNames({ schedule: '30 13 * * 1-5' }), ['personalize'])
-  assert.deepEqual(jobNames({ schedule: '0 14 * * 1-5' }), ['touch'])
-  assert.deepEqual(jobNames({ schedule: '0 13 * * 1', job: 'heartbeat' }), ['heartbeat'])
+test('the weekday cron runs source then qualify, in that order', () => {
+  assert.deepEqual(jobNames({ schedule: '0 11 * * 1-5' }), ['source', 'qualify', 'heartbeat'])
+  // 12:30 is well after source+qualify and well before the hourly touch
+  // ticks, so a row qualified that morning is drafted before touch looks.
+  assert.deepEqual(jobNames({ schedule: '30 12 * * 1-5' }), ['personalize'])
+  assert.deepEqual(jobNames({ schedule: '0 11 * * 1-5', job: 'heartbeat' }), ['heartbeat'])
   assert.throws(() => jobNames({ schedule: 'not-a-cron' }), /no job for schedule/)
 })
 
 test('main runs every job of a tick in order, on one deps object', async () => {
   const { main } = await import('../jobs/run.mjs')
   const ran = []
-  const out = await main({ SCHEDULE: '0 13 * * 1' }, async (name) => ({
+  const out = await main({ SCHEDULE: '0 11 * * 1-5' }, async (name) => ({
     run: async (deps) => { ran.push([name, deps]); return name },
   }))
   assert.deepEqual(ran.map((r) => r[0]), ['source', 'qualify', 'heartbeat'])

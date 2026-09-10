@@ -222,7 +222,7 @@ test('a dry-run quote tick marks nothing and leaves the row quotable next tick',
 
 test('a dry-run pitch tick marks nothing and leaves the row pitchable next tick', async () => {
   const h = harness({
-    rows: [biz({ stage: 'call_due' })],
+    rows: [biz({ stage: 'replied' })],
     push: { dryRun: true, commands: ['git push'] },
   })
   try {
@@ -289,7 +289,7 @@ test('a DRY_RUN quote tick makes no skill call at all, and stays quotable', asyn
 test('a DRY_RUN pitch tick makes no skill call at all, and stays pitchable', async () => {
   const calls = []
   const h = harness({
-    rows: [biz({ stage: 'call_due' })],
+    rows: [biz({ stage: 'replied' })],
     runSkill: async (opts) => (calls.push(opts), { wrote: ['/w/os/x.md'], dryrun: [] }),
   })
   h.deps.dryRun = true
@@ -299,7 +299,7 @@ test('a DRY_RUN pitch tick makes no skill call at all, and stays pitchable', asy
 
     assert.deepEqual(calls, [])
     assert.deepEqual(h.pushes, [])
-    assert.equal(h.store[0].stage, 'call_due')
+    assert.equal(h.store[0].stage, 'replied')
     assert.equal(JSON.parse(h.store[0].research).pitch_path, undefined)
     assert.deepEqual(h.updates.map((u) => Object.keys(u.patch)), [['os_slug']])
 
@@ -343,7 +343,7 @@ test('a quote skill run that wrote nothing is an error event and no push', async
 
 test('a pitch skill run that wrote nothing is an error event and no push', async () => {
   const h = harness({
-    rows: [biz({ stage: 'call_due' })],
+    rows: [biz({ stage: 'replied' })],
     runSkill: async () => ({ wrote: [], dryrun: [] }),
   })
   try {

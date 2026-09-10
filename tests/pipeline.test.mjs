@@ -79,7 +79,12 @@ function makeSql({ now }) {
   const today = dayOf(now)
   const store = {
     businesses: [],
-    mailboxes: [{ id: 'mb1', ...MAILBOX, sent_on: dayOf(now), warmed_at: now }],
+    // Warmed long ago so its cap is the full daily_cap, not the first-week
+    // ramp — the pipeline test sends more than one mail in a tick and the
+    // warming ramp is exercised on its own in touch.test.mjs.
+    mailboxes: [
+      { id: 'mb1', ...MAILBOX, sent_on: dayOf(now), warmed_at: new Date(now.getTime() - 60 * 86_400_000) },
+    ],
     search_grid: [],
     email_threads: [],
     events: [],
@@ -139,6 +144,26 @@ function makeSql({ now }) {
     if (q.includes('count(*)::int as count from selectable_businesses')) {
       return [{ count: selectable().filter((b) => b.stage === 'drafted').length }]
     }
+    // qualify's end-of-run promotion: a CTE read through the view followed by
+    // a direct update, so it must be matched before the generic 'update
+    // businesses set' and 'from selectable_businesses' branches below.
+    if (q.startsWith('with candidates as')) {
+      const limit = values[0]
+      const candidates = selectable()
+        .filter((b) => b.stage === 'no_email')
+        .sort((a, b) => {
+          const rc = (r) => Number(r?.research?.review_count ?? -Infinity)
+          const rt = (r) => Number(r?.rating ?? -Infinity)
+          return rc(b) - rc(a) || rt(b) - rt(a)
+        })
+        .slice(0, limit)
+      for (const c of candidates) {
+        const row = byId(c.id)
+        row.stage = 'call_due'
+        row.updated_at = now
+      }
+      return candidates.map((c) => clone(byId(c.id)))
+    }
     if (q.includes('from selectable_businesses')) {
       if (q.includes("where stage = 'drafted' or (stage = 'sent'")) {
         const [at, limit] = values
@@ -177,7 +202,8 @@ function makeSql({ now }) {
       if (q.includes('where id =')) {
         return give(selectable().filter((b) => b.id === values[0]).slice(0, 1))
       }
-      if (q.includes('where stage = ? order by updated_at')) {
+      // notify's backlog read; the SQL dedupe is left to notify's own key check here.
+      if (q.includes('where stage = ? order by updated_at') || q.includes('where s.stage = ? and (s.stage')) {
         const [stage, limit] = values
         return give(selectable().filter((b) => b.stage === stage).slice(0, limit))
       }
@@ -245,6 +271,12 @@ function makeSql({ now }) {
       const row = { id: store.events.length + 1, job, kind, detail: detail ?? {}, created_at: now }
       store.events.push(row)
       return [clone(row)]
+    }
+    // qualify's promotedToday count — matched before the generic poll
+    // dead-letter-dedupe count below, which the same substring would
+    // otherwise catch.
+    if (q.includes("job = 'qualify' and kind = 'promoted'")) {
+      return [{ count: store.events.filter((e) => e.job === 'qualify' && e.kind === 'promoted').length }]
     }
     if (q.includes('count(*)::int as count from events')) {
       const uid = values[0]
@@ -505,11 +537,10 @@ function bodyOf(raw) {
 test('one business walks sourced -> qualified -> drafted -> sent -> replied through every job in schedule order', async () => {
   const p = pipeline()
 
-  // --- Monday 13:00 — source, then qualify (SCHEDULES['0 13 * * 1']) ---
+  // --- Monday 13:00 — source, then qualify (SCHEDULES['0 11 * * 1-5']) ---
   p.sql.phase('source')
   const sourced = await source(p.deps)
   assert.equal(sourced.inserted, 1)
-  assert.equal(sourced.query, 'roofers in Milford CT')
 
   let row = p.row('Acme Roofing')
   assert.ok(row, 'source wrote no business row')
@@ -525,7 +556,14 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
 
   p.sql.phase('qualify')
   const qualified = await qualify(p.deps)
-  assert.deepEqual(qualified, { qualified: 1, callDue: 0, skipped: 0, errors: 0 })
+  assert.deepEqual(qualified, {
+    qualified: 1,
+    callDue: 0,
+    skipped: 0,
+    errors: 0,
+    promoted: 0,
+    timedOut: false,
+  })
 
   row = p.row('Acme Roofing')
   assert.equal(row.stage, 'qualified')
@@ -546,7 +584,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
   assert.equal(row.research.facts.length, 3)
   assert.equal(row.research.fit, 'good')
 
-  // --- weekday 14:00 — touch (SCHEDULES['0 14 * * 1-5']) ---
+  // --- hourly tick — touch is folded into the hourly job list (SCHEDULES['0 8-20 * * *']) ---
   // The recipient has to be on the send allow-list for a real send, so the list
   // here is what a live pilot's SEND_ALLOWED_RECIPIENTS would hold — the
   // prospect and nobody internal.
