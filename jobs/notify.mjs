@@ -174,16 +174,15 @@ export function quoteReadyEmail(row) {
   return { subject: `[pipeline] quote ready for ${row.name}`, text }
 }
 
-// The one mail that does not go to the internal list. `onboard` has just built
-// the repo and the intake folder; this hands them to the one person who works
-// them, named by ONBOARD_NOTIFY_TO alone.
+// The one mail that does not go to the internal list. `onboard` has just
+// built the intake folder; this hands it to the one person who works it,
+// named by ONBOARD_NOTIFY_TO alone.
 export function onboardedEmail(row) {
   const research = parseResearch(row.research)
   const text = [
-    `${row.name} signed. The repo and the intake folder exist — over to you.`,
+    `${row.name} signed. The intake folder is ready — over to you.`,
     '',
     ...[
-      line('Repo', research.repo_url),
       line('Intake checklist', research.intake_checklist_path),
       line('Request email', research.request_email_path),
       line('Contact', research.owner_name),

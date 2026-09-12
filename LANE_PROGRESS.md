@@ -4,6 +4,20 @@ LANE.md is the contract; this tracks where we are in it. If they disagree,
 LANE.md wins for scope.
 
 **Current position**
+- Status 2026-09-11: bcns moved off the per-client-repo model to a shared
+  data-layer platform (one shared app, `client_id`-scoped), so item 20's
+  `/new-client-repo` call is superseded. `jobs/onboard.mjs` now runs `/intake`
+  only — no repo, no `clients.repo_url` write. The idempotency read moved
+  from `client.repo_url` to `research.intake_checklist_path`, same shape as
+  `quote.mjs`'s `research.quote_path` gate; the dry-run guard collapsed to
+  the same pre-skill-call shape `quote.mjs` and `pitch.mjs` use, since
+  `/intake` (unlike `gh repo create`) is a reversible file write. `notify.mjs`'s
+  onboarded-stage mail dropped its `Repo:` line. `clients.repo_url` stays in
+  the schema (harmless, nullable, still correct for the legacy custom-build
+  clients like TA and l2detailz) but new onboards never set it. Item 20's
+  original spec in LANE.md and its `LANE_PROGRESS.md` entry below are left as
+  the historical record of what was originally built. 434 tests, none
+  failing.
 - Status 2026-09-07 (overnight autonomous run, branches `heartbeat-chain` and `alert-fixer`): the Monday clock failure is explained and fixed — the heartbeat job was never scheduled, so the commit step had nothing to add; it now runs last on the Monday tick and a manual dispatch proved the commit lands. Alert triage grew from "file it" to "fix it": an alerts@ mail is parsed (GitHub Actions, Sentry, UptimeRobot, anything else), mapped to a repo, cloned, handed to Claude to reproduce and fix, and pushed as a draft PR carrying the fix or a TRIAGE.md diagnosis. Cap, dedupe and never-merge stay. Gmail's pipeline filter now also routes alerts@. 390 tests, none failing.
 - Next: merge PR #9 (heartbeat) and PR #10 (`alert-fixer`); `ALERT_REPO` and `ALERT_REPO_MAP` repo variables are set; point GitHub, Sentry and UptimeRobot notifications at alerts@bcn-services.com; decide on `DRY_RUN`. Until DRY_RUN is off the runner only logs `would_triage`.
 - Blockers: none in code. The runner's `OS_TOKEN` must be able to push a branch and open a PR on every mapped repo; unverified from a session.

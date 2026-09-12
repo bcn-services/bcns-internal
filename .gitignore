@@ -8,3 +8,5 @@ node_modules
 .claude/dev-team/*-report.md
 !.claude/dev-team/team-memory.md
 .claude/worktrees/
+.check-loop.mjs
+supabase/.temp/

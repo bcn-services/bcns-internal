@@ -1,8 +1,7 @@
-// Onboard: the two skill runs, the markers, and the one-recipient handover mail.
+// Onboard: the intake run, the markers, and the one-recipient handover mail.
 //
-// Every boundary is a fake. The Claude CLI is never spawned, `gh repo create`
-// is never executed, and the only filesystem touched is a temp dir standing in
-// for the ~/os clone.
+// Every boundary is a fake. The Claude CLI is never spawned, and the only
+// filesystem touched is a temp dir standing in for the ~/os clone.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,20 +9,18 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { run as onboard, briefMarkdown, bumpReadmeStatus } from '../jobs/onboard.mjs'
+import { run as onboard, bumpReadmeStatus } from '../jobs/onboard.mjs'
 import { run as notify, onboardedEmail, TEMPLATES, NOTIFY_STAGES } from '../jobs/notify.mjs'
 import { commitDefaults } from '../jobs/run.mjs'
 import { commitAndPush } from '../lib/osrepo.mjs'
 
 const SLUG = 'acme-roofing-danbury'
-const REPO = `https://github.com/bcn-services/bcns-client-${SLUG}`
 
 // What ~/os/clients/_TEMPLATE.md produces: frontmatter first, `status: lead`.
 const README = `---
 name: Acme Roofing
 slug: ${SLUG}
 status: lead
-repo: ${REPO}
 ---
 
 # Acme Roofing
@@ -59,38 +56,22 @@ const client = (over = {}) => ({
   slug: SLUG,
   signed_at: '2026-08-30T15:04:00Z',
   contract_path: 'clients/acme/contract.pdf',
-  repo_url: null,
   ...over,
 })
 
-// The fake skill runner. Its output is built from the SKILL.md contracts, not
-// from what this job would find convenient: `/new-client-repo` prints REPO plus
-// one README line, its --dry-run prints one DRYRUN line and nothing else, and
-// `/intake` prints the checklist and the request email.
+// The fake skill runner. Its output is built from the SKILL.md contract:
+// `/intake` prints the checklist and the request email. The README already
+// exists here (as it would from an earlier `/pitch` run); `/intake` only
+// creates it when one is missing, which onboard.mjs doesn't depend on either
+// way — it just needs the README to exist by the time it reads it.
 function fakeSkills(osDir, calls) {
   return async ({ command, cwd }) => {
     calls.push({ command, cwd })
-    if (command.includes('--dry-run')) {
-      return {
-        wrote: [],
-        repo: undefined,
-        dryrun: [
-          `gh repo create bcn-services/bcns-client-${SLUG} --template bcn-services/bcns-app-template --private --clone`,
-        ],
-      }
-    }
-    if (command.startsWith('/new-client-repo')) {
-      const path = join(osDir, 'clients', SLUG, 'README.md')
-      await mkdir(join(osDir, 'clients', SLUG), { recursive: true })
-      await writeFile(path, README)
-      return { wrote: [path], repo: REPO, dryrun: [] }
-    }
     return {
       wrote: [
         join(osDir, 'clients', SLUG, 'intake/checklist.md'),
         join(osDir, 'clients', SLUG, 'intake/request-email.md'),
       ],
-      repo: undefined,
       dryrun: [],
     }
   }
@@ -99,6 +80,9 @@ function fakeSkills(osDir, calls) {
 async function harness({ rows = [biz()], clients = [client()], dryRun = false, push = { dryRun: false, commands: [] } } = {}) {
   const osDir = await mkdtemp(join(tmpdir(), 'onboard-os-'))
   const temps = [osDir]
+  // The README exists already, as it would from an earlier /pitch run.
+  await mkdir(join(osDir, 'clients', SLUG), { recursive: true })
+  await writeFile(join(osDir, 'clients', SLUG, 'README.md'), README)
   const events = []
   const calls = []
   const pushes = []
@@ -126,11 +110,6 @@ async function harness({ rows = [biz()], clients = [client()], dryRun = false, p
     dryRun,
     runSkill: fakeSkills(osDir, calls),
     commitAndPush: async (opts) => (pushes.push(opts), push),
-    mkTempDir: async () => {
-      const d = await mkdtemp(join(tmpdir(), 'onboard-brief-'))
-      temps.push(d)
-      return d
-    },
   }
   return {
     deps,
@@ -150,30 +129,23 @@ const commands = (calls) => calls.map((c) => c.command)
 
 // --- the happy path ---------------------------------------------------------
 
-test('the two skill commands run in order and repo_url is stored from the REPO: line', async () => {
+test('the intake skill runs once and its paths are stored on the row', async () => {
   const h = await harness()
   try {
     const out = await onboard(h.deps)
 
     assert.equal(out.onboarded, 1)
     assert.equal(out.errors, 0)
-    assert.equal(h.calls.length, 2)
-    const brief = commands(h.calls)[0].match(/--brief (\S+)/)[1]
-    assert.deepEqual(commands(h.calls), [
-      `/new-client-repo ${SLUG} --brief ${brief} --yes`,
-      `/intake ${SLUG} --yes`,
-    ])
-    assert.ok(!commands(h.calls)[0].includes('--dry-run'))
+    assert.equal(h.calls.length, 1)
+    assert.deepEqual(commands(h.calls), [`/intake ${SLUG} --yes`])
     for (const c of h.calls) assert.equal(c.cwd, h.osDir)
 
-    // The marker the second run reads, taken from the skill's REPO: line.
-    assert.deepEqual(h.clientPatches, [{ id: 'b1', patch: { repo_url: REPO } }])
-    assert.equal(h.roster[0].repo_url, REPO)
+    // No repo — onboard never touches the client row any more.
+    assert.deepEqual(h.clientPatches, [])
     assert.equal(h.store[0].stage, 'onboarded')
 
-    // notify reads these three off the row, so onboard has to write them.
+    // notify reads these two off the row, so onboard has to write them.
     const research = JSON.parse(h.store[0].research)
-    assert.equal(research.repo_url, REPO)
     assert.equal(research.intake_checklist_path, `clients/${SLUG}/intake/checklist.md`)
     assert.equal(research.request_email_path, `clients/${SLUG}/intake/request-email.md`)
     // The sibling keys the other jobs wrote are still there.
@@ -205,28 +177,14 @@ test('the README frontmatter status moves to in-progress and the body is left al
 
 test('bumpReadmeStatus rewrites only the frontmatter, and only status: lead/active', () => {
   assert.match(bumpReadmeStatus(README), /^status: in-progress$/m)
-  // /new-client-repo regenerates the README with `active`; that moves too.
+  // A repo built under the legacy per-client model stamped `active`; that
+  // still moves too, for any client onboarded before this change.
   assert.match(bumpReadmeStatus(README.replace('status: lead', 'status: active')), /^status: in-progress$/m)
   // Already moved on: nothing to do, and no second rewrite.
   const done = README.replace('status: lead', 'status: in-progress')
   assert.equal(bumpReadmeStatus(done), done)
   // No frontmatter at all is returned untouched rather than half-rewritten.
   assert.equal(bumpReadmeStatus('# Acme\n\nstatus: lead\n'), '# Acme\n\nstatus: lead\n')
-})
-
-test('the brief carries the name, city, site, facts, notes and the quote path', () => {
-  const md = briefMarkdown(biz(), JSON.parse(RESEARCH()))
-  for (const re of [
-    /# Acme Roofing/,
-    /City: Danbury, CT/,
-    /Site: acmeroofing\.example/,
-    /no online booking/,
-    /wants a portal for his crews/,
-    new RegExp(`Quote: clients/${SLUG}/quote/`),
-  ]) {
-    assert.match(md, re)
-  }
-  assert.ok(!/undefined|null|\[object/.test(briefMarkdown({ name: 'Bare Co' })))
 })
 
 // --- what must not happen twice ---------------------------------------------
@@ -239,8 +197,9 @@ test('a second run over the same row makes zero skill calls and writes nothing',
     h.events.length = 0
     h.clientPatches.length = 0
     h.pushes.length = 0
-    // The row is at `onboarded` now; put it back at `won` with its repo_url to
-    // pin the repo_url gate itself rather than the stage read.
+    // The row is at `onboarded` now; put it back at `won` with its
+    // intake_checklist_path to pin the research gate itself rather than the
+    // stage read.
     h.store[0].stage = 'won'
 
     const second = await onboard(h.deps)
@@ -288,22 +247,21 @@ test('a won row with no client row is skipped', async () => {
   }
 })
 
-// --- dry run creates no repository ------------------------------------------
+// --- dry run costs nothing ---------------------------------------------------
 
-test('a dry run runs only --dry-run, creates nothing, and marks nothing', async () => {
+test('a dry run makes no skill call and marks nothing', async () => {
   const h = await harness({ dryRun: true })
   try {
     const out = await onboard(h.deps)
 
     assert.equal(out.onboarded, 0)
     assert.equal(out.errors, 0)
-    assert.equal(h.calls.length, 1, 'a dry run reached /intake')
-    assert.match(commands(h.calls)[0], /^\/new-client-repo acme-roofing-danbury --brief \S+ --yes --dry-run$/)
+    assert.deepEqual(h.calls, [], 'a dry run called a skill')
     assert.deepEqual(h.pushes, [], 'a dry run pushed')
     assert.deepEqual(h.clientPatches, [])
     assert.equal(h.store[0].stage, 'won')
     assert.deepEqual(kinds(h.events), ['skipped'])
-    assert.match(h.events[0].detail.dryrun[0], /^gh repo create bcn-services\/bcns-client-/)
+    assert.match(h.events[0].detail.command, /^\/intake acme-roofing-danbury --yes$/)
   } finally {
     await h.cleanup()
   }
@@ -322,18 +280,20 @@ test('a push that turns out to be a dry run leaves the row unmarked', async () =
   }
 })
 
-test('a /new-client-repo run with no REPO: line is an error, not a half-onboard', async () => {
+test('an /intake run with no wrote: list is an error, not a half-onboard', async () => {
   const h = await harness()
   try {
     h.deps.runSkill = async ({ command }) => {
       h.calls.push({ command })
-      return { wrote: [], repo: undefined, dryrun: [] }
+      return { wrote: [], dryrun: [] }
     }
     const out = await onboard(h.deps)
     assert.equal(out.errors, 1)
-    assert.equal(h.calls.length, 1, '/intake ran without a repo')
-    assert.deepEqual(h.clientPatches, [])
+    assert.equal(h.calls.length, 1)
+    assert.deepEqual(h.pushes, [])
+    assert.equal(h.store[0].stage, 'won')
     assert.deepEqual(kinds(h.events), ['error'])
+    assert.match(h.events[0].detail.error, /nothing to commit/)
   } finally {
     await h.cleanup()
   }
@@ -365,7 +325,6 @@ const onboardedRow = (over = {}) => ({
   stage: 'onboarded',
   next_touch_at: null,
   research: RESEARCH({
-    repo_url: REPO,
     intake_checklist_path: `clients/${SLUG}/intake/checklist.md`,
     request_email_path: `clients/${SLUG}/intake/request-email.md`,
   }),
@@ -418,10 +377,6 @@ test('the onboarded mail has exactly one recipient, the ONBOARD_NOTIFY_TO addres
   }
   // The Subject header is literal in the MIME; the bodies are base64 parts.
   assert.match(h.sent[0].raw, /^Subject: Signed: Acme Roofing — your turn$/m)
-  assert.ok(
-    h.sent[0].raw.includes(Buffer.from(REPO).toString('base64').slice(0, 24)),
-    'the repo URL is not in the body'
-  )
   assert.equal(h.events.filter((e) => e.kind === 'notified').length, 1)
 })
 
@@ -471,10 +426,9 @@ test('no internal allow-list and no ONBOARD_NOTIFY_TO mails nobody', async () =>
   assert.match(h.events[0].detail.reason, /no allow-listed recipient/)
 })
 
-test('the onboarded body names the repo, the checklist and the request email', () => {
+test('the onboarded body names the checklist and the request email', () => {
   const mail = onboardedEmail(onboardedRow())
   assert.equal(mail.subject, 'Signed: Acme Roofing — your turn')
-  assert.match(mail.text, new RegExp(`Repo: ${REPO}`))
   assert.match(mail.text, new RegExp(`Intake checklist: clients/${SLUG}/intake/checklist.md`))
   assert.match(mail.text, new RegExp(`Request email: clients/${SLUG}/intake/request-email.md`))
 
