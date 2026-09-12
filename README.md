@@ -54,7 +54,7 @@ the whole suite testable without a network.
 | `poll` | every 20 min, 8–20 weekdays | Drains the `pipeline` IMAP label. Turns each reply into a suppression, a stage move, or a forward to a human. |
 | `pitch` | every 20 min, after `poll` | A `call_due` row gets `/pitch` run against it; the artifact lands in `~/os` under `clients/<slug>/`. |
 | `quote` | every 20 min, after `pitch` | A `quoting` row with a teammate's `notes` reply gets `/quote`. → `quoted` |
-| `onboard` | every 20 min, after `quote` | A signed `won` row gets `/new-client-repo` + `/intake`. → `onboarded` |
+| `onboard` | every 20 min, after `quote` | A signed `won` row gets `/intake`. → `onboarded` |
 | `notify` | every 20 min, last | Tells the internal humans what the tick left behind. Writes no business row, ever. |
 | `heartbeat` | with the Monday run | Writes a dated file under `outputs/heartbeat` and commits it, so GitHub doesn't disable the schedules after 60 days of inactivity. |
 | `authcheck` | manual dispatch | Proves the keyless GCP token exchange worked and reports whether the `~/os` clone landed. Calls no Google API. |
