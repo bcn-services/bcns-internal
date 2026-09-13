@@ -3,5 +3,3 @@ packages:
 allowBuilds:
   esbuild: true
   sharp: true
-minimumReleaseAgeExclude:
-  - '@nseluga/app-core@0.2.0'
