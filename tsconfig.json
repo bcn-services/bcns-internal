@@ -1,5 +1,5 @@
 {
-  "extends": "@nseluga/config/tsconfig/nextjs.json",
+  "extends": "@bcn-services/config/tsconfig/nextjs.json",
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
