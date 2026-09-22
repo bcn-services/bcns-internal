@@ -551,7 +551,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
   assert.equal(row.domain, 'acmeroofing.example')
   assert.equal(row.phone, '(203) 555-0100')
   assert.equal(row.town, 'Milford')
-  assert.equal(row.trade, 'roofers')
+  assert.equal(row.trade, 'restaurants')
   assert.equal(row.stage, 'sourced')
 
   p.sql.phase('qualify')
