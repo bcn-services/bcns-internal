@@ -1,8 +1,8 @@
-// The internal mailer. Runs at the end of every poll tick and writes to Nate
-// and Brandon only — never to a prospect, and never to the pipeline's own
+// The internal mailer. Runs at the end of every poll tick and writes to
+// internal humans only — never to a prospect, and never to the pipeline's own
 // outreach mailbox.
 //
-// Three things are load-bearing:
+// Four things are load-bearing:
 //
 //  1. The allow-list — NOTIFY_ALLOWED_RECIPIENTS, the internal humans, never
 //     SEND_ALLOWED_RECIPIENTS, the prospects `touch` may mail. Every send goes
@@ -15,6 +15,11 @@
 //  3. One notification per row per stage. The marker is an `events` row
 //     (`job = 'notify'`, `kind = 'notified'`, `detail.key`) — the only dedupe
 //     store there is. See `notifyKey` for what makes a second notification.
+//  4. NOTIFY_TO only narrows delivery, never widens it. It picks who among
+//     NOTIFY_ALLOWED_RECIPIENTS actually receives the non-onboarded notices
+//     (so two founders on the allow-list don't both get every task mailed
+//     twice); the notifier's own allow-list is always NOTIFY_ALLOWED_RECIPIENTS,
+//     so a NOTIFY_TO address that isn't allow-listed still gets refused.
 
 import { randomUUID } from 'node:crypto'
 import { createNotifier } from './poll.mjs'
@@ -216,6 +221,7 @@ export async function run({
   notify = null,
   transport = null,
   internalRecipients = [],
+  notifyTo = [],
   onboardRecipient = '',
   notifyFrom = 'bot@bcn-services.com',
   dryRun = true,
@@ -236,8 +242,15 @@ export async function run({
     return result
   }
 
+  // The notifier's allow-list stays NOTIFY_ALLOWED_RECIPIENTS regardless of
+  // who actually gets mailed below — narrowing delivery to NOTIFY_TO must
+  // never widen who assertAllowed will hand a message to.
   const send =
     notify ?? createNotifier({ transport, internalRecipients, from: notifyFrom, dryRun, uuid, now })
+  // Who receives the non-onboarded stage notices. Empty NOTIFY_TO is not "off"
+  // — it means the repo variable was never set, so behavior stays exactly
+  // what it was before NOTIFY_TO existed: every internal recipient.
+  const toRecipients = notifyTo.length ? notifyTo : internalRecipients
 
   // The onboarded mail gets its own notifier whose allow-list is exactly the
   // one address. Passing it through `send` would refuse it (it is not on
@@ -270,7 +283,7 @@ export async function run({
       await log('error', { stage, reason: 'ONBOARD_NOTIFY_TO is unset — nothing mailed' })
       continue
     }
-    const recipients = stage === 'onboarded' ? [onboardRecipient] : internalRecipients
+    const recipients = stage === 'onboarded' ? [onboardRecipient] : toRecipients
 
     // One email per row: each is a task somebody picks up individually.
     const batches = await Promise.all(
