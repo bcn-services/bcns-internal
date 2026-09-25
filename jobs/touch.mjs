@@ -1,8 +1,9 @@
 // The sender. Dispatched hourly alongside poll/pitch/quote/onboard/notify
 // (see jobs/run.mjs's SCHEDULES, 08:00-20:00 UTC), but only actually sends
 // inside its own `sendWindow` (13:00-20:00 UTC by default) on weekdays —
-// every other tick is a no-op `skipped` event. First touches out of the
-// `drafted` buffer, then bumps for rows whose next_touch_at has passed.
+// every other tick is a no-op `skipped` event. Due bumps (next_touch_at has
+// passed) go out first, then first touches out of the `drafted` buffer —
+// see dueTouches in lib/db.mjs for why.
 //
 // Four things in here are load-bearing and none of them are conveniences:
 //

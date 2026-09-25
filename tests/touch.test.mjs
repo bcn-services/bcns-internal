@@ -219,6 +219,18 @@ test('dueTouches reads through selectable_businesses and excludes replied rows',
   assert.doesNotThrow(() => assertSelectable(text))
 })
 
+// A due bump must not starve behind first touches: with a limit of 1, this is
+// what put 46 bumps 14-16 days late against a 7-day cadence (2026-09-24) —
+// the warmed cap went entirely to `drafted` rows for days because they sorted
+// first. `order by` runs before `limit`, so proving stage = 'sent' sorts
+// ahead of stage = 'drafted' proves a due bump wins the one slot.
+test('dueTouches orders a due bump ahead of a drafted row', () => {
+  let text = ''
+  const sql = (strings) => { text = strings.join('?'); return [] }
+  dueTouches(sql, { now: NOW, limit: 1 })
+  assert.match(text, /order by \(stage = 'sent'\) desc, next_touch_at asc nulls first/)
+})
+
 test('claimMailboxSlot increments only below the cap, and starts over on a new day', () => {
   let text = ''
   claimMailboxSlot((strings) => { text = strings.join('?'); return [] }, { address: 'a@b.test', cap: 5 })
