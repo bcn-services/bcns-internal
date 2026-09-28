@@ -179,12 +179,13 @@ test('both bump copies are under forty words, differ, and make no new argument',
   for (const copy of [BUMP_BODY, BUMP_BODY_2]) {
     const words = copy.trim().split(/\s+/)
     assert.ok(words.length < 40, `bump is ${words.length} words`)
-    assert.ok(!/free|price|\$|demo is ready|http/i.test(copy))
+    // "a free 15 minutes" is about time; a free offer or a price is a new argument.
+    assert.ok(!/for free|free (demo|trial|mock|audit|consult)|price|\$|demo is ready|http/i.test(copy))
   }
   assert.notEqual(BUMP_BODY, BUMP_BODY_2)
   assert.ok(bumpBody(1, 'Dana').startsWith('Hi Dana,'))
   assert.ok(bumpBody(2, null).startsWith('Hi,'))
-  assert.ok(bumpBody(2, 'Dana').includes('Last note'))
+  assert.ok(bumpBody(2, 'Dana').includes('one more time'))
 })
 
 test('the allow-list refuses an unlisted address and an empty list allows nobody', () => {

@@ -32,17 +32,15 @@ export const MAX_TOUCHES = 3
 // Under forty words, and it makes no argument the first email did not.
 export const BUMP_BODY = `Hi,
 
-Floating this back to the top of your inbox in case it got buried. Happy to put
-that mock-up together whenever you have a spare fifteen minutes.
+Just wanted to follow up and see if you had a free 15 minutes this week to chat.
 
 Best,`
 
-// The second bump is the last mail of the sequence; it says so and asks for
-// nothing new. Two identical bumps a week apart read as a machine.
+// The second bump is the last mail of the sequence. Same ask, worded
+// differently: two identical bumps a week apart read as a machine.
 export const BUMP_BODY_2 = `Hi,
 
-Last note from me on this. If a booking tool for the shop isn't worth fifteen
-minutes right now, no hard feelings, I'll leave it here.
+Just wanted to follow up one more time in case you had a free 15 minutes sometime soon.
 
 Best,`
 
