@@ -230,6 +230,12 @@ export async function buildDeps(env = process.env, exists = existsSync) {
       .filter(Boolean)
   deps.allowedRecipients = list(env.SEND_ALLOWED_RECIPIENTS)
   deps.internalRecipients = list(env.NOTIFY_ALLOWED_RECIPIENTS)
+  // Who actually receives the non-onboarded stage notices, as opposed to
+  // whose replies notify/poll obey. Unset (the common case) falls back to
+  // internalRecipients inside notify.mjs — this list only ever narrows who
+  // gets mailed, never widens it: every address here still has to clear
+  // NOTIFY_ALLOWED_RECIPIENTS's assertAllowed.
+  deps.notifyTo = list(env.NOTIFY_TO)
   // A third list of exactly one, and deliberately not part of either. The
   // `onboarded` mail hands over a signed client and goes to one person; unset
   // means notify mails nobody about it, never the internal list.

@@ -188,9 +188,16 @@ test('the send list and the internal list are two independent variables', async 
   const both = await buildDeps({
     SEND_ALLOWED_RECIPIENTS: ' dana@acmeroofing.example , owner@boltroofing.example ,,',
     NOTIFY_ALLOWED_RECIPIENTS: 'nseluga@bcn-services.com',
+    NOTIFY_TO: 'nseluga@bcn-services.com',
   })
   assert.deepEqual(both.allowedRecipients, ['dana@acmeroofing.example', 'owner@boltroofing.example'])
   assert.deepEqual(both.internalRecipients, ['nseluga@bcn-services.com'])
+  assert.deepEqual(both.notifyTo, ['nseluga@bcn-services.com'])
+
+  // Unset falls back to empty, same as the other two lists — notify.mjs is
+  // what turns an empty notifyTo into "mail internalRecipients instead".
+  const noNotifyTo = await buildDeps({ NOTIFY_ALLOWED_RECIPIENTS: 'nseluga@bcn-services.com' })
+  assert.deepEqual(noNotifyTo.notifyTo, [])
 
   // Each unset independently: that path reaches nobody, the other still works.
   const noSend = await buildDeps({ NOTIFY_ALLOWED_RECIPIENTS: 'nseluga@bcn-services.com' })

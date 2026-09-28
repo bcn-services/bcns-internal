@@ -179,12 +179,13 @@ test('both bump copies are under forty words, differ, and make no new argument',
   for (const copy of [BUMP_BODY, BUMP_BODY_2]) {
     const words = copy.trim().split(/\s+/)
     assert.ok(words.length < 40, `bump is ${words.length} words`)
-    assert.ok(!/free|price|\$|demo is ready|http/i.test(copy))
+    // "a free 15 minutes" is about time; a free offer or a price is a new argument.
+    assert.ok(!/for free|free (demo|trial|mock|audit|consult)|price|\$|demo is ready|http/i.test(copy))
   }
   assert.notEqual(BUMP_BODY, BUMP_BODY_2)
   assert.ok(bumpBody(1, 'Dana').startsWith('Hi Dana,'))
   assert.ok(bumpBody(2, null).startsWith('Hi,'))
-  assert.ok(bumpBody(2, 'Dana').includes('Last note'))
+  assert.ok(bumpBody(2, 'Dana').includes('one more time'))
 })
 
 test('the allow-list refuses an unlisted address and an empty list allows nobody', () => {
@@ -217,6 +218,18 @@ test('dueTouches reads through selectable_businesses and excludes replied rows',
   assert.match(text, /stage = 'sent'/)
   assert.ok(!/replied/.test(text))
   assert.doesNotThrow(() => assertSelectable(text))
+})
+
+// A due bump must not starve behind first touches: with a limit of 1, this is
+// what put 46 bumps 14-16 days late against a 7-day cadence (2026-09-24) —
+// the warmed cap went entirely to `drafted` rows for days because they sorted
+// first. `order by` runs before `limit`, so proving stage = 'sent' sorts
+// ahead of stage = 'drafted' proves a due bump wins the one slot.
+test('dueTouches orders a due bump ahead of a drafted row', () => {
+  let text = ''
+  const sql = (strings) => { text = strings.join('?'); return [] }
+  dueTouches(sql, { now: NOW, limit: 1 })
+  assert.match(text, /order by \(stage = 'sent'\) desc, next_touch_at asc nulls first/)
 })
 
 test('claimMailboxSlot increments only below the cap, and starts over on a new day', () => {

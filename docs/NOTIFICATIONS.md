@@ -128,6 +128,14 @@ sign-in, and step 3 produces a credential no agent may handle.
 7. **Widen the allowlist** to the real employee addresses once a message
    arrives, via `NOTIFY_ALLOWED_RECIPIENTS` (comma-separated).
 
+`NOTIFY_TO` (comma-separated, optional) narrows who actually receives the
+non-onboarded stage notices, so two founders both on `NOTIFY_ALLOWED_RECIPIENTS`
+don't each get a separate copy of every call_due/replied/quoting/quoted mail.
+Every address in it must still be on `NOTIFY_ALLOWED_RECIPIENTS` — it is
+checked the same way any other recipient is. Unset, notify mails everyone on
+`NOTIFY_ALLOWED_RECIPIENTS`, one copy each, same as before this existed.
+`ONBOARD_NOTIFY_TO` is unaffected — it is its own single-address list.
+
 `SMTP_PASS` is already in the redaction list in `lib/agent/verbs/types.ts#scrub`,
 so it cannot surface in a logged error message.
 

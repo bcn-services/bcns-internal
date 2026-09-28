@@ -251,6 +251,51 @@ test('an empty allow-list is nobody, not everybody', async () => {
   assert.deepEqual(kinds(h.events), ['skipped'])
 })
 
+// --- NOTIFY_TO ---------------------------------------------------------------
+// NOTIFY_TO only narrows who among the internal list gets mailed; it must
+// never let a run reach an address the allow-list itself would refuse.
+
+test('NOTIFY_TO set to one address sends exactly one email per row, to that address', async () => {
+  const h = harness({ rows: [biz()] })
+  h.deps.notifyTo = ['nseluga@bcn-services.com']
+
+  const result = await notify(h.deps)
+
+  assert.equal(result.call_due, 1)
+  assert.deepEqual(h.sent.map((m) => m.to), ['nseluga@bcn-services.com'])
+})
+
+test('NOTIFY_TO unset falls back to mailing every internal recipient, unchanged', async () => {
+  const h = harness({ rows: [biz()] })
+
+  await notify(h.deps)
+
+  assert.deepEqual(h.sent.map((m) => m.to).sort(), [...ALLOWED].sort())
+})
+
+test('a NOTIFY_TO address outside NOTIFY_ALLOWED_RECIPIENTS is refused, not bypassed', async () => {
+  let transports = 0
+  const send = createNotifier({
+    transport: async () => {
+      transports++
+      return { sendMail: async () => {} }
+    },
+    internalRecipients: ALLOWED,
+    from: 'bot@bcn-services.com',
+    dryRun: false,
+    now: NOW,
+  })
+  const h = harness({ rows: [biz()], allowed: ALLOWED, send })
+  h.deps.notifyTo = ['stranger@outside.example']
+
+  const result = await notify(h.deps)
+
+  assert.equal(transports, 0)
+  assert.equal(result.call_due, 0)
+  assert.equal(result.errors, 1)
+  assert.match(h.events.find((e) => e.kind === 'error').detail.error, /not in NOTIFY_ALLOWED_RECIPIENTS/)
+})
+
 // --- the three templates ----------------------------------------------------
 
 test('the three templates render row fields and no prospect address is ever a recipient', async () => {
