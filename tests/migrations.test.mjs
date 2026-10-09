@@ -245,16 +245,26 @@ test('0026 edits no applied migration', () => {
 
 const unstick = readFileSync(new URL('0027_unstick_qualify.sql', dir), 'utf8')
 
-test('0027 parks sourced rows with three or more qualify failures', () => {
+test('0027 parks sourced rows with three or more fetch-class failures', () => {
   assert.match(unstick, /where stage = 'sourced'/i)
-  assert.match(unstick, /kind in \('error', 'skipped'\)/i)
+  assert.match(unstick, /kind = 'skipped' and detail->>'reason' = 'page fetch returned no text'/i)
+  assert.match(unstick, /detail->>'error' like 'fetch %'/i)
+  assert.match(unstick, /like '%operation was aborted%'/i)
   assert.match(unstick, /having count\(\*\) >= 3/i)
+  // Claude/parse/DB errors never count toward the three.
+  assert.ok(!/kind in \('error', 'skipped'\)/i.test(unstick), 'counts every error kind')
+})
+
+test('0027 parks sourced rows with a businesses_email_key violation, still scoped to sourced', () => {
+  assert.match(unstick, /like 'duplicate key value violates unique constraint "businesses_email_key"%'/i)
+  // The OR must sit inside the parentheses that follow the stage test.
+  assert.match(unstick, /where stage = 'sourced'\s+and \(id::text in/i)
 })
 
 test('0027 returns untouched phoneless call_due rows to the pool', () => {
   assert.match(
     unstick,
-    /where stage = 'call_due'\s+and coalesce\(phone, ''\) = ''\s+and email is null\s+and coalesce\(touches, 0\) = 0/i
+    /where stage = 'call_due'\s+and coalesce\(trim\(phone\), ''\) = ''\s+and email is null\s+and coalesce\(touches, 0\) = 0/i
   )
 })
 

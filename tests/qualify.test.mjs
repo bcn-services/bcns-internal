@@ -245,10 +245,33 @@ test('an unparseable Claude answer is an error, not a half-written row', async (
   })
   const out = await qualify(h.deps)
   assert.equal(out.errors, 1)
-  // Only the failure counter is written: no stage, no email, no facts.
-  assert.equal(h.updates.length, 1)
-  assert.deepEqual(Object.keys(h.updates[0].patch), ['research'])
-  assert.deepEqual(researchOf(h.updates[0]), { qualify_failures: 1 })
+  assert.equal(h.updates.length, 0, 'a parse failure is not the site\'s fault')
+})
+
+test('a claude.ask throw writes nothing and does not count against the site', async () => {
+  const h = harness({
+    rows: [{ ...acme, research: JSON.stringify({ qualify_failures: 2 }) }],
+    pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+    answer: () => { throw new Error('claude is down') },
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.errors, 1)
+  assert.equal(h.updates.length, 0, 'a Claude failure was counted or parked the row')
+  assert.equal(h.events.filter((e) => e.kind === 'error').length, 1)
+  assert.ok(!h.events.some((e) => e.kind === 'no_email'))
+})
+
+test('a log failure after a stage write does not rewrite the row', async () => {
+  const h = harness({ rows: [acme] }) // no email-shaped text: parks at no_email
+  const real = h.deps.db.logEvent
+  h.deps.db.logEvent = (s, job, kind, detail) => {
+    if (kind === 'no_email') throw new Error('log down')
+    return real(s, job, kind, detail)
+  }
+  const out = await qualify(h.deps)
+  assert.equal(out.errors, 1)
+  assert.equal(h.updates.length, 1, 'recordFailure overwrote a row that already moved')
+  assert.equal(h.updates[0].patch.stage, 'no_email')
 })
 
 test('an empty backlog writes a skipped event', async () => {
