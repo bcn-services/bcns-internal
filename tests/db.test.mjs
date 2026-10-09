@@ -115,7 +115,7 @@ test('sourcedBacklog orders by updated_at so failed rows rotate to the back', as
 test('promoteNoEmail never promotes a row without a phone number', async () => {
   const sql = fakeClient()
   await promoteNoEmail(sql, { limit: 5 })
-  assert.match(sql.calls[0].text, /where stage = 'no_email' and coalesce\(phone, ''\) <> ''/i)
+  assert.match(sql.calls[0].text, /where stage = 'no_email' and coalesce\(trim\(phone\), ''\) <> ''/i)
 })
 
 test('suppress never writes null', async () => {
