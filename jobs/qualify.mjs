@@ -78,6 +78,9 @@ function parseResearch(research) {
   return research
 }
 
+// A site that fails this many ticks running is a dead site, not a flaky one.
+export const MAX_QUALIFY_FAILURES = 3
+
 export const DEFAULT_BUDGET_MS = 20 * 60 * 1000
 
 export async function run({
@@ -114,6 +117,29 @@ export async function run({
     await log('skipped', { reason: 'no businesses at stage sourced' })
   }
 
+  // Counts a failed attempt on the row's research. The write bumps updated_at,
+  // which rotates the row to the back of sourcedBacklog; at the cap the row is
+  // parked as a calling lead (promoteNoEmail drops it if it has no phone). A
+  // failing counter write must never mask the original error or end the run.
+  const recordFailure = async (b) => {
+    try {
+      const research = parseResearch(b.research)
+      const failures = (research.qualify_failures ?? 0) + 1
+      const patch = { research: JSON.stringify({ ...research, qualify_failures: failures }) }
+      if (failures >= MAX_QUALIFY_FAILURES) {
+        await db.updateBusiness(sql, b.id, { ...patch, stage: 'no_email' })
+        await log('no_email', {
+          business: b.id,
+          reason: `site unreachable after ${MAX_QUALIFY_FAILURES} attempts`,
+        })
+      } else {
+        await db.updateBusiness(sql, b.id, patch)
+      }
+    } catch {
+      // The row stays at sourced and is retried; the error event is already written.
+    }
+  }
+
   const startedAt = clock()
 
   for (const b of businesses) {
@@ -121,6 +147,11 @@ export async function run({
       timedOut = true
       break
     }
+    // fetched: the fetch phase finished, so a later throw (Claude, parsing, DB)
+    // is not the site's fault and must not count against it. moved: a stage
+    // write already landed, so a later throw (a log) must not rewrite the row.
+    let fetched = false
+    let moved = false
     try {
       // No website means nothing to read and no address to find. Per LANE that
       // is a calling lead, not an error to retry every day forever — it goes
@@ -128,6 +159,7 @@ export async function run({
       // call task.
       if (!b.domain) {
         await db.updateBusiness(sql, b.id, { stage: 'no_email' })
+        moved = true
         await log('no_email', { business: b.id, reason: 'no domain' })
         continue
       }
@@ -143,14 +175,16 @@ export async function run({
       }
 
       const text = `${trim(home)}\n\n${trim(contact)}`.trim()
+      fetched = true
 
       // No page text is not a business to judge, it is a fetch that failed —
       // a dead site, a bot wall, a redirect loop. Asking the model to read
       // nothing spends a call to be told so in prose. The row stays at
-      // `sourced` and the next tick tries the site again.
+      // `sourced` until it has failed MAX_QUALIFY_FAILURES times.
       if (!text) {
         skipped++
         await log('skipped', { business: b.id, name: b.name, reason: 'page fetch returned no text' })
+        await recordFailure(b)
         continue
       }
 
@@ -159,6 +193,7 @@ export async function run({
       // skip it and go straight to the no_email pool.
       if (!EMAIL_RE.test(text)) {
         await db.updateBusiness(sql, b.id, { stage: 'no_email' })
+        moved = true
         await log('no_email', { business: b.id, reason: 'no email-shaped text on page' })
         continue
       }
@@ -205,6 +240,7 @@ export async function run({
           stage: 'no_email',
           research,
         })
+        moved = true
         await log('no_email', { business: b.id, reason: 'email failed verification', status: verdict.status })
       } else if (email) {
         await db.updateBusiness(sql, b.id, {
@@ -212,6 +248,7 @@ export async function run({
           stage: 'qualified',
           research,
         })
+        moved = true
         qualified++
         await log('qualified', { business: b.id, facts: facts.length })
       } else {
@@ -220,12 +257,29 @@ export async function run({
           stage: 'no_email',
           research,
         })
+        moved = true
         await log('no_email', { business: b.id, reason: 'no discoverable email' })
       }
     } catch (err) {
       errors++
       await log('error', { business: b.id, name: b.name, error: String(err?.message ?? err) })
-      // The row is left untouched, so it stays at stage sourced and is retried.
+      try {
+        if (moved) {
+          // The row is already where it belongs; only a later log failed.
+        } else if (err?.code === '23505') {
+          // businesses_email_key: another row already owns this address (possibly
+          // a suppressed one). Retrying can never succeed, so park it as a
+          // calling lead without looking the owner up.
+          await db.updateBusiness(sql, b.id, { stage: 'no_email' })
+          await log('no_email', { business: b.id, reason: 'email already used by another business' })
+        } else if (!fetched) {
+          await recordFailure(b)
+        }
+        // Claude, parse and DB errors after the fetch write nothing: the row
+        // stays at sourced and is retried whole.
+      } catch {
+        // Parking failed; the row stays at sourced and is retried.
+      }
     }
   }
 

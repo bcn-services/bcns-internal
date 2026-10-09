@@ -103,6 +103,21 @@ test('promoteNoEmail orders candidates by review_count desc then rating desc', a
   assert.match(text, /next_touch_at = now\(\)/i)
 })
 
+// A failed row is touched (updated_at bumps) so it rotates to the back instead
+// of blocking the head of the queue forever.
+test('sourcedBacklog orders by updated_at so failed rows rotate to the back', async () => {
+  const sql = fakeClient()
+  await sourcedBacklog(sql)
+  assert.match(sql.calls[0].text, /order by updated_at asc/i)
+})
+
+// A phoneless no_email row has nothing to dial; promoting it burns a daily slot.
+test('promoteNoEmail never promotes a row without a phone number', async () => {
+  const sql = fakeClient()
+  await promoteNoEmail(sql, { limit: 5 })
+  assert.match(sql.calls[0].text, /where stage = 'no_email' and coalesce\(trim\(phone\), ''\) <> ''/i)
+})
+
 test('suppress never writes null', async () => {
   const sql = fakeClient()
   await suppress(sql, 'b1')

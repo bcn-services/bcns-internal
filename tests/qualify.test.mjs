@@ -162,15 +162,69 @@ test('an email not present in the page text is refused, never written', async ()
   assert.equal(h.updates[0].patch.stage, 'no_email')
 })
 
-test('a fetch that throws leaves the row at sourced and writes one error event', async () => {
-  const h = harness({ rows: [acme], fetchThrows: true })
+const researchOf = (u) => JSON.parse(u.patch.research)
+
+test('the first and second failure count on the row and leave it at sourced', async () => {
+  for (const prior of [undefined, 1]) {
+    const research = prior ? JSON.stringify({ qualify_failures: prior, keep: 'me' }) : undefined
+    const h = harness({ rows: [{ ...acme, research }], fetchThrows: true })
+    const out = await qualify(h.deps)
+    assert.equal(out.errors, 1)
+    assert.equal(h.updates.length, 1)
+    const patch = h.updates[0].patch
+    assert.ok(!('stage' in patch), 'a sub-cap failure moved the row')
+    assert.equal(researchOf(h.updates[0]).qualify_failures, (prior ?? 0) + 1)
+    if (prior) assert.equal(researchOf(h.updates[0]).keep, 'me', 'existing research was dropped')
+    assert.equal(typeof patch.research, 'string', 'research must stay JSON.stringify-encoded')
+    const errs = h.events.filter((e) => e.kind === 'error')
+    assert.equal(errs.length, 1)
+    assert.equal(errs[0].detail.business, 'b1')
+    assert.equal(errs[0].detail.name, 'Acme Roofing')
+    assert.ok(!h.events.some((e) => e.kind === 'no_email'))
+  }
+})
+
+test('the third failure parks the row at no_email with a reason', async () => {
+  const research = JSON.stringify({ qualify_failures: 2 })
+  const h = harness({ rows: [{ ...acme, research }], fetchThrows: true })
+  await qualify(h.deps)
+  assert.equal(h.updates.length, 1)
+  assert.equal(h.updates[0].patch.stage, 'no_email')
+  assert.equal(researchOf(h.updates[0]).qualify_failures, 3)
+  const parked = h.events.filter((e) => e.kind === 'no_email')
+  assert.equal(parked.length, 1)
+  assert.equal(parked[0].detail.reason, 'site unreachable after 3 attempts')
+  assert.equal(h.events.filter((e) => e.kind === 'error').length, 1, 'the error event was dropped')
+})
+
+test('a duplicate email (23505) parks the row at no_email at once, with one event', async () => {
+  const h = harness({
+    rows: [acme],
+    pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+    answer: JSON.stringify({ email: 'hello@acme.example', facts: ['a', 'b', 'c'], fit: 'good' }),
+  })
+  const real = h.deps.db.updateBusiness
+  h.deps.db.updateBusiness = async (s, id, patch) => {
+    if (patch.email) throw Object.assign(new Error('duplicate key businesses_email_key'), { code: '23505' })
+    return real(s, id, patch)
+  }
   const out = await qualify(h.deps)
-  assert.equal(out.errors, 1)
-  assert.equal(h.updates.length, 0, 'a failed fetch changed the row')
+  assert.equal(out.qualified, 0)
+  assert.equal(h.updates.length, 1)
+  assert.deepEqual(h.updates[0].patch, { stage: 'no_email' })
+  const parked = h.events.filter((e) => e.kind === 'no_email')
+  assert.equal(parked.length, 1)
+  assert.equal(parked[0].detail.reason, 'email already used by another business')
+})
+
+test('a failing counter write does not mask the error or crash the run', async () => {
+  const h = harness({ rows: [acme, { ...acme, id: 'b2' }], fetchThrows: true })
+  h.deps.db.updateBusiness = async () => { throw new Error('db down') }
+  const out = await qualify(h.deps)
+  assert.equal(out.errors, 2)
   const errs = h.events.filter((e) => e.kind === 'error')
-  assert.equal(errs.length, 1)
-  assert.equal(errs[0].detail.business, 'b1')
-  assert.equal(errs[0].detail.name, 'Acme Roofing')
+  assert.equal(errs.length, 2)
+  assert.equal(errs[0].detail.error, 'ECONNREFUSED')
 })
 
 test('a business with no domain is a calling lead, not an error retried forever', async () => {
@@ -191,7 +245,33 @@ test('an unparseable Claude answer is an error, not a half-written row', async (
   })
   const out = await qualify(h.deps)
   assert.equal(out.errors, 1)
-  assert.equal(h.updates.length, 0)
+  assert.equal(h.updates.length, 0, 'a parse failure is not the site\'s fault')
+})
+
+test('a claude.ask throw writes nothing and does not count against the site', async () => {
+  const h = harness({
+    rows: [{ ...acme, research: JSON.stringify({ qualify_failures: 2 }) }],
+    pages: { home: PAGE('<p>Reach us at hello@acme.example</p>') },
+    answer: () => { throw new Error('claude is down') },
+  })
+  const out = await qualify(h.deps)
+  assert.equal(out.errors, 1)
+  assert.equal(h.updates.length, 0, 'a Claude failure was counted or parked the row')
+  assert.equal(h.events.filter((e) => e.kind === 'error').length, 1)
+  assert.ok(!h.events.some((e) => e.kind === 'no_email'))
+})
+
+test('a log failure after a stage write does not rewrite the row', async () => {
+  const h = harness({ rows: [acme] }) // no email-shaped text: parks at no_email
+  const real = h.deps.db.logEvent
+  h.deps.db.logEvent = (s, job, kind, detail) => {
+    if (kind === 'no_email') throw new Error('log down')
+    return real(s, job, kind, detail)
+  }
+  const out = await qualify(h.deps)
+  assert.equal(out.errors, 1)
+  assert.equal(h.updates.length, 1, 'recordFailure overwrote a row that already moved')
+  assert.equal(h.updates[0].patch.stage, 'no_email')
 })
 
 test('an empty backlog writes a skipped event', async () => {
@@ -273,8 +353,19 @@ test('an empty page is skipped without spending a Claude call', async () => {
   assert.equal(out.skipped, 1)
   assert.equal(out.errors, 0, 'a dead site is not an error')
   assert.equal(h.asks, 0, 'the model was asked to read an empty page')
-  assert.equal(h.updates.length, 0, 'the row moved off sourced and will not be retried')
+  assert.equal(h.updates.length, 1)
+  assert.ok(!('stage' in h.updates[0].patch), 'the first empty page moved the row')
+  assert.equal(researchOf(h.updates[0]).qualify_failures, 1)
   assert.match(h.events.at(-1).detail.reason, /no text/)
+})
+
+test('an empty page counts toward the cap like a thrown fetch', async () => {
+  const research = JSON.stringify({ qualify_failures: 2 })
+  const h = harness({ rows: [{ ...acme, research }], pages: { home: '' } })
+  await qualify(h.deps)
+  assert.equal(h.updates[0].patch.stage, 'no_email')
+  assert.equal(h.asks, 0)
+  assert.equal(h.events.at(-1).detail.reason, 'site unreachable after 3 attempts')
 })
 
 test('page text with no email-shaped string skips the Claude call and lands at no_email', async () => {
