@@ -240,3 +240,28 @@ test('0026 edits no applied migration', () => {
   assert.ok(!/no_email/i.test(pipeline), '0018 was edited — it is applied')
   assert.ok(!/no_email/i.test(pipelineV2), '0022 was edited — it is applied')
 })
+
+// --- 0027 --------------------------------------------------------------
+
+const unstick = readFileSync(new URL('0027_unstick_qualify.sql', dir), 'utf8')
+
+test('0027 parks sourced rows with three or more qualify failures', () => {
+  assert.match(unstick, /where stage = 'sourced'/i)
+  assert.match(unstick, /kind in \('error', 'skipped'\)/i)
+  assert.match(unstick, /having count\(\*\) >= 3/i)
+})
+
+test('0027 returns untouched phoneless call_due rows to the pool', () => {
+  assert.match(
+    unstick,
+    /where stage = 'call_due'\s+and coalesce\(phone, ''\) = ''\s+and email is null\s+and coalesce\(touches, 0\) = 0/i
+  )
+})
+
+test('0027 is data only: one begin, one commit, no DDL', () => {
+  const stripped = unstick.replace(/--[^\n]*/g, '')
+  assert.equal((stripped.match(/\bbegin\b/gi) || []).length, 1)
+  assert.equal((stripped.match(/\bcommit\b/gi) || []).length, 1)
+  assert.ok(!/\b(alter|drop|create)\b/i.test(stripped), '0027 changes schema')
+  assert.ok(!/\bdelete\s+from\b/i.test(stripped), '0027 deletes rows')
+})
