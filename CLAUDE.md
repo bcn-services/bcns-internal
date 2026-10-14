@@ -42,6 +42,10 @@ When they disagree, LANE.md wins.
   Every boundary (Places, Claude, HTTP fetch, Postgres, SMTP) is a parameter with
   a fake supplied in the test. A test needing a live service is the wrong test —
   assert on the request the code *would* have made.
+- **`tests/migrations.test.mjs` is textual.** A new migration needs its own
+  `--- NNNN ---` block there, or it is silently uncovered.
+- **`businesses.os_slug` has no FK to `clients.slug`, on purpose.** Don't add one.
+- **`internalRecipients` is internal-only mail.** Never route a prospect through it.
 
 ## Never
 
