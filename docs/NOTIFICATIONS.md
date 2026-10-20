@@ -128,13 +128,34 @@ sign-in, and step 3 produces a credential no agent may handle.
 7. **Widen the allowlist** to the real employee addresses once a message
    arrives, via `NOTIFY_ALLOWED_RECIPIENTS` (comma-separated).
 
-`NOTIFY_TO` (comma-separated, optional) narrows who actually receives the
-non-onboarded stage notices, so two founders both on `NOTIFY_ALLOWED_RECIPIENTS`
-don't each get a separate copy of every call_due/replied/quoting/quoted mail.
-Every address in it must still be on `NOTIFY_ALLOWED_RECIPIENTS` — it is
-checked the same way any other recipient is. Unset, notify mails everyone on
-`NOTIFY_ALLOWED_RECIPIENTS`, one copy each, same as before this existed.
-`ONBOARD_NOTIFY_TO` is unaffected — it is its own single-address list.
+## Cold email is off; calls go out as one daily list
+
+Outbound cold email is unscheduled: `touch` and `personalize` are on no cron
+(they stay in the repo and run only via the `job` input). The pipeline's
+output is call tasks for Brandon, and `notify` no longer mails a
+`[pipeline] call <name>` per lead — `call_due` is not in `NOTIFY_STAGES`.
+`replied`, `quoting`, `quoted` and `onboarded` notices are unchanged.
+
+`jobs/digest.mjs` replaces the per-lead mail. It runs weekdays at `30 12 * * 1-5`
+and sends ONE text email, `[pipeline] N calls for YYYY-MM-DD` (New York date),
+listing every `call_due` business not yet listed, best `fit_score` first (rows
+without one last): name, phone, town/state, trade, fit and reason, facts,
+website, email, pitch folder. No new rows: one line, "No new call tasks today";
+a re-dispatch later the same day with nothing new writes a `skipped` event and
+sends nothing. "Not yet listed" is the `digested` event's `detail.ids` (a dry
+run, or a live run with no SMTP credentials, writes `would_digest` and consumes
+nothing; so does a send that failed for any `NOTIFY_TO` address, which writes an
+`error` per failure and no marker). Rows the old per-lead mail
+already covered are excluded, so the first live digest is not the backlog.
+
+`NOTIFY_TO` (comma-separated) is the digest's only recipient: unset, the digest
+writes an `error` event and sends nothing — it never falls back to
+`NOTIFY_ALLOWED_RECIPIENTS`. Every address must still be on
+`NOTIFY_ALLOWED_RECIPIENTS`; that is checked before any read or transport. For
+`notify` it narrows who gets the `replied`/`quoting`/`quoted` mails, so two
+founders both on the allow-list don't each get a copy; unset, notify mails
+everyone on `NOTIFY_ALLOWED_RECIPIENTS`, one copy each. `ONBOARD_NOTIFY_TO` is
+unaffected — it is its own single-address list.
 
 `SMTP_PASS` is already in the redaction list in `lib/agent/verbs/types.ts#scrub`,
 so it cannot surface in a logged error message.
