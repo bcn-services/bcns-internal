@@ -564,11 +564,13 @@ export function createFetchPage({
 }
 
 // clock.yml kills a job at timeout-minutes: 30, and ~3 minutes of setup
-// (install, CLI smoke) precede node. 24 minutes from the start of main() leaves
-// the rest as margin for the one row (up to ~40 s) a bounded job can overrun by,
-// its promotion step and the db close. Not the workflow's own limit: this is
-// the point after which a long job should stop taking on new work.
-export const PROCESS_BUDGET_MS = 24 * 60 * 1000
+// (install, CLI smoke) precede node. 22 minutes from the start of main() leaves
+// ~5 minutes for the one row a bounded job can overrun by (the last row starts
+// at deadline-epsilon and can take 4 x 10 s of fetch plus the 120 s Claude
+// timeout, ~2.7 minutes), its promotion step and the db close. Not the
+// workflow's own limit: this is the point after which a long job should stop
+// taking on new work.
+export const PROCESS_BUDGET_MS = 22 * 60 * 1000
 
 export async function main(env = process.env, load = (n) => import(`./${n}.mjs`)) {
   const startedAt = Date.now()

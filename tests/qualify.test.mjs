@@ -409,10 +409,10 @@ test('an unparseable Claude answer is an error that rotates the row, never a hal
   assert.ok(!('fit_score' in researchOf(h.updates[0])), 'a half-scored row was written')
 })
 
-test('a post-fetch failure bumps qualify_errors (so the row rotates) and leaves the fetch-failure count alone', async () => {
+test('a post-fetch parse failure bumps qualify_errors (so the row rotates) and leaves the fetch-failure count alone', async () => {
   for (const [priorErrors, priorFetch] of [[undefined, undefined], [1, 2]]) {
     const research = JSON.stringify({ keep: 'me', ...(priorErrors && { qualify_errors: priorErrors }), ...(priorFetch && { qualify_failures: priorFetch }) })
-    const h = harness({ rows: [{ ...acme, research }], answer: () => { throw new Error('claude is down') } })
+    const h = harness({ rows: [{ ...acme, research }], answer: 'sorry, I cannot do that' })
     const out = await qualify(h.deps)
     assert.equal(out.errors, 1)
     assert.equal(h.updates.length, 1, 'no write means updated_at never bumps and the row never rotates')
@@ -428,9 +428,9 @@ test('a post-fetch failure bumps qualify_errors (so the row rotates) and leaves 
   }
 })
 
-test('the third post-fetch failure parks the row as lost/qualify_failed', async () => {
+test('the third post-fetch parse failure parks the row as lost/qualify_failed', async () => {
   const research = JSON.stringify({ qualify_errors: 2, qualify_failures: 1, keep: 'me' })
-  const h = harness({ rows: [{ ...acme, research }], answer: () => { throw new Error('claude is down') } })
+  const h = harness({ rows: [{ ...acme, research }], answer: 'sorry, I cannot do that' }) // an answer that came back, unusable
   await qualify(h.deps)
   assert.equal(h.updates.length, 1)
   assert.equal(h.updates[0].patch.stage, 'lost')
@@ -444,8 +444,60 @@ test('the third post-fetch failure parks the row as lost/qualify_failed', async 
   assert.match(parked[0].detail.reason, /qualify failed after 3 attempts/)
 })
 
-test('a failing bookkeeping write after a post-fetch failure is swallowed', async () => {
-  const h = harness({ rows: [acme, { ...acme, id: 'b2' }], answer: () => { throw new Error('claude is down') } })
+// A THROWN Claude call (CLI exit, 401 expired token, usage limit, timeout) is an
+// outage, not the row's fault, and it fails fast. Counting it would park the
+// whole sourced backlog as lost/qualify_failed after three bad hourly ticks.
+test('a thrown Claude call never counts: 3 outage ticks leave the row sourced, one ask per tick, the loop stops, promotion still runs', async () => {
+  const prior = { keep: 'me', qualify_errors: 1 }
+  const first = { ...acme, research: JSON.stringify(prior) }
+  const second = { ...acme, id: 'b2', domain: 'second.example' }
+  let promotionChecks = 0
+  const h = harness({
+    rows: [first, second],
+    answer: () => { throw new Error('401 OAuth token expired') },
+    promoteQualified: async () => { promotionChecks++; return [] },
+  })
+  h.deps.db.updateBusiness = async (_s, id, patch) => { h.updates.push({ id, patch }); Object.assign(first, patch); return [] }
+
+  for (let run = 1; run <= 3; run++) {
+    const out = await qualify(h.deps)
+    assert.equal(h.asks, run, 'more than one Claude call in a tick: the loop did not stop')
+    assert.equal(out.errors, 1)
+    assert.equal(out.qualified, 0)
+    assert.equal(promotionChecks, run, 'promotion did not run after the Claude outage')
+  }
+  assert.ok(!h.fetched.some((u) => u.includes('second.example')), 'the second row was fetched after Claude threw')
+  assert.equal(h.updates.length, 3, 'each tick rotates the row exactly once')
+  for (const u of h.updates) {
+    assert.equal(u.id, 'b1')
+    assert.ok(!('stage' in u.patch), 'an outage moved the row')
+    assert.deepEqual(researchOf(u), prior, 'an outage changed the row research')
+  }
+  assert.equal(first.stage, undefined)
+  assert.equal(researchOf({ patch: first }).qualify_errors, 1, 'an outage was counted toward the 3')
+  const errs = h.events.filter((e) => e.kind === 'error')
+  assert.equal(errs.length, 3, 'one error event per tick')
+  assert.match(errs[0].detail.error, /claude unavailable: 401 OAuth token expired/)
+  assert.ok(!h.events.some((e) => e.kind === 'lost'))
+})
+
+test('a Claude outage with a failing rotation write is still one error event, the loop still stops, promotion still runs', async () => {
+  let promotionChecks = 0
+  const h = harness({
+    rows: [acme, { ...acme, id: 'b2' }],
+    answer: () => { throw new Error('CLI timeout') },
+    promoteQualified: async () => { promotionChecks++; return [] },
+  })
+  h.deps.db.updateBusiness = async () => { throw new Error('db down') }
+  const out = await qualify(h.deps)
+  assert.equal(h.asks, 1)
+  assert.equal(out.errors, 1)
+  assert.equal(promotionChecks, 1)
+  assert.equal(h.events.filter((e) => e.kind === 'error').length, 1)
+})
+
+test('a failing bookkeeping write after a post-fetch parse failure is swallowed', async () => {
+  const h = harness({ rows: [acme, { ...acme, id: 'b2' }], answer: 'sorry, I cannot do that' })
   h.deps.db.updateBusiness = async () => { throw new Error('db down') }
   const out = await qualify(h.deps)
   assert.equal(out.errors, 2)

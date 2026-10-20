@@ -200,8 +200,9 @@ export async function run({
   // Counts a failed attempt on the row's research. The write bumps updated_at,
   // which rotates the row to the back of sourcedBacklog; at the cap the row is
   // parked as `lost`. Two separate counters: FETCH is the site's fault (dead,
-  // blocked); QUALIFY_ERRORS is everything after a good fetch (Claude, parse,
-  // DB) and must not be charged to the site. A failing counter write must never
+  // blocked); QUALIFY_ERRORS is everything after a good fetch where Claude
+  // ANSWERED (parse, validation, DB) and must not be charged to the site. A
+  // Claude call that throws is counted by neither: see the ask below. A failing counter write must never
   // mask the original error or end the run.
   const FETCH = { counter: 'qualify_failures', lostReason: 'fetch_failed', why: 'site unreachable' }
   const QUALIFY_ERRORS = { counter: 'qualify_errors', lostReason: 'qualify_failed', why: 'qualify failed' }
@@ -233,8 +234,8 @@ export async function run({
       timedOut = true
       break
     }
-    // fetched: the fetch phase finished, so a later throw (Claude, parsing, DB)
-    // is not the site's fault: it counts as a qualify error, not a fetch failure.
+    // fetched: the fetch phase finished, so a later throw (parsing, DB) is not
+    // the site's fault: it counts as a qualify error, not a fetch failure.
     let fetched = false
     moved = false
     try {
@@ -283,7 +284,24 @@ export async function run({
         continue
       }
 
-      const answer = await claude.ask(PROMPT + text)
+      // A THROWN Claude call (CLI exit, expired token, usage limit, timeout) is
+      // an outage, not this row's fault, and it fails fast: counting it would
+      // park the whole sourced backlog as qualify_failed in three bad ticks.
+      // Rotate the row without counting, log once, and stop the loop: the rest
+      // of the backlog would only burn the same failure. Promotion still runs.
+      let answer
+      try {
+        answer = await claude.ask(PROMPT + text)
+      } catch (err) {
+        errors++
+        try {
+          await log('error', { business: b.id, name: b.name, error: `claude unavailable: ${String(err?.message ?? err)}` })
+          await db.updateBusiness(sql, b.id, { research: JSON.stringify(parseResearch(b.research)) })
+        } catch {
+          // Bookkeeping failed; the row stays where it is and is retried.
+        }
+        break
+      }
       const parsed = parseAnswer(answer)
 
       const facts = Array.isArray(parsed.facts) ? parsed.facts : []
