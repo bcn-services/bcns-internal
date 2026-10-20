@@ -25,9 +25,10 @@ import { randomUUID } from 'node:crypto'
 import { createNotifier } from './poll.mjs'
 
 // Read in this order every tick. `drafted` is deliberately absent: there is no
-// approval step, so a draft is not a task for a human — `touch` sends it at
-// 14:00 without anyone being asked.
-export const NOTIFY_STAGES = ['call_due', 'replied', 'quoting', 'quoted', 'onboarded']
+// approval step, so a draft is not a task for a human. `call_due` is absent
+// too: call tasks go to Brandon as one daily list (jobs/digest.mjs), not one
+// mail per lead.
+export const NOTIFY_STAGES = ['replied', 'quoting', 'quoted', 'onboarded']
 
 function parseResearch(research) {
   if (!research) return {}
@@ -205,7 +206,6 @@ export function onboardedEmail(row) {
 // last arm was the default, so a new stage that forgot its template silently
 // mailed the quote-ready body.
 export const TEMPLATES = {
-  call_due: (row) => callTaskEmail(row),
   replied: async (row, { db, sql }) =>
     meetingEmail(row, (await db.firstOutbound(sql, row.id))?.[0] ?? null),
   quoting: (row) => quoteEmail(row),
@@ -230,7 +230,7 @@ export async function run({
   limit = 50,
 } = {}) {
   const log = (kind, detail) => db.logEvent(sql, 'notify', kind, detail)
-  const result = { call_due: 0, replied: 0, quoting: 0, quoted: 0, onboarded: 0, emails: 0, errors: 0 }
+  const result = { replied: 0, quoting: 0, quoted: 0, onboarded: 0, emails: 0, errors: 0 }
 
   // Nobody on the list is not "mail everybody" — it is a job with nothing to do.
   // `onboardRecipient` keeps the job alive on its own: the handover mail has

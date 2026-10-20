@@ -8,15 +8,13 @@ import { existsSync } from 'node:fs'
 export const SCHEDULES = {
   // Read the inbox, then tell the humans what it left behind. Notify runs at
   // the end of the tick because it reports on what poll just wrote.
-  // touch/pitch/quote/onboard sit between them: each reads what poll just
-  // wrote and notify reports on what they left behind. touch used to have its
-  // own 14:00 schedule; it is folded in here now because its own send-window
-  // gate (jobs/touch.mjs's `sendWindow`) already decides per-tick whether
-  // there is anything to send, so an hourly tick is enough. A module that is
-  // not built yet is skipped by main(), not a failed tick. Every day, not
-  // just weekdays: replies land on weekends too, and touch's own weekday
-  // check keeps it from sending outreach on a Saturday tick.
-  '0 8-20 * * *': ['poll', 'touch', 'pitch', 'quote', 'onboard', 'notify'],
+  // pitch/quote/onboard sit between them: each reads what poll just wrote and
+  // notify reports on what they left behind. Cold email is off: touch (and
+  // personalize below) are unscheduled, not deleted — the modules stay and
+  // run on demand via the `job` input. A module that is not built yet is
+  // skipped by main(), not a failed tick. Every day, not just weekdays:
+  // replies land on weekends too.
+  '0 8-20 * * *': ['poll', 'pitch', 'quote', 'onboard', 'notify'],
   // Weekdays at 11:00: source finds businesses, qualify reads the ones it
   // just wrote (and promotes the day's call list from the no_email pool).
   // Order is the contract, so it lives in this list. heartbeat runs last: it
@@ -25,11 +23,10 @@ export const SCHEDULES = {
   // now, not a Monday-only tick — the daily source/qualify volume needs more
   // than one run a week to keep up with the call-task quota.
   '0 11 * * 1-5': ['source', 'qualify', 'heartbeat'],
-  // An hour and a half after source+qualify, so a row qualified that morning
-  // is drafted well before the hourly touch ticks look for something to send.
-  // Weekdays, not Mondays only: a retry of a draft that failed validation
-  // needs a tick of its own.
-  '30 12 * * 1-5': 'personalize',
+  // An hour and a half after source+qualify: the day's call list goes to
+  // Brandon once, after qualify has promoted that morning's call_due rows.
+  // (This cron used to run personalize; drafting is off with cold email.)
+  '30 12 * * 1-5': ['digest'],
 }
 
 export function jobNames({ schedule = '', job = '' } = {}) {

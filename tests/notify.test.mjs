@@ -34,7 +34,7 @@ function biz(over = {}) {
     state: 'CT',
     trade: 'roofing',
     place_id: 'p1',
-    stage: 'call_due',
+    stage: 'replied',
     touches: 3,
     next_touch_at: new Date('2026-09-04T14:00:00Z'),
     suppressed_at: null,
@@ -100,40 +100,68 @@ const kinds = (events) => events.map((e) => e.kind)
 // --- the literals this suite pins ------------------------------------------
 
 test('the constants this suite asserts against are what they claim to be', () => {
-  assert.deepEqual(NOTIFY_STAGES, ['call_due', 'replied', 'quoting', 'quoted', 'onboarded'])
-  assert.equal(NOTIFY_STAGES.length, 5)
+  assert.deepEqual(NOTIFY_STAGES, ['replied', 'quoting', 'quoted', 'onboarded'])
+  assert.equal(NOTIFY_STAGES.length, 4)
+  // Call tasks are the daily digest's now (jobs/digest.mjs), not a per-lead mail.
+  assert.ok(!NOTIFY_STAGES.includes('call_due'))
   // There is no approval step: a drafted row is not a task for a human.
   assert.ok(!NOTIFY_STAGES.includes('drafted'))
 })
 
 // --- notified once per stage ------------------------------------------------
 
-test('a call_due row produces exactly one call-task email across two runs', async () => {
+test('a replied row produces exactly one email per recipient across two runs', async () => {
   const h = harness({ rows: [biz()] })
 
   const first = await notify(h.deps)
   const second = await notify(h.deps)
 
-  assert.equal(first.call_due, 1)
-  assert.equal(second.call_due, 0)
+  assert.equal(first.replied, 1)
+  assert.equal(second.replied, 0)
   // One email per allow-listed recipient, once — not once per run.
   assert.equal(h.sent.length, 2)
   assert.deepEqual(h.sent.map((m) => m.to).sort(), [...ALLOWED].sort())
-  assert.equal(h.sent.filter((m) => /call Acme Roofing/.test(m.subject)).length, 2)
+  assert.equal(h.sent.filter((m) => /Acme Roofing replied/.test(m.subject)).length, 2)
   assert.equal(kinds(h.events).filter((k) => k === 'notified').length, 1)
 })
 
-test('a re-scheduled call is a new notification, so the marker cannot wedge', async () => {
-  const h = harness({ rows: [biz()] })
-  await notify(h.deps)
+// Table over the four stages that still route through notify: each is mailed
+// once, with its own subject, to the internal list (onboarded: its own address).
+test('replied, quoting, quoted and onboarded route exactly as before', async () => {
+  const table = [
+    ['replied', /^\[pipeline\] Acme Roofing replied — book the meeting$/, ALLOWED],
+    ['quoting', /^\[pipeline\] quote Acme Roofing$/, ALLOWED],
+    ['quoted', /^\[pipeline\] quote ready for Acme Roofing$/, ALLOWED],
+    ['onboarded', /^Signed: Acme Roofing — your turn$/, ['brandon@bcn-services.com']],
+  ]
+  for (const [stage, subject, recipients] of table) {
+    const h = harness({ rows: [biz({ stage })] })
+    h.deps.onboardRecipient = 'brandon@bcn-services.com'
+    const first = await notify(h.deps)
+    await notify(h.deps)
+    assert.equal(first[stage], 1, stage)
+    assert.deepEqual(h.sent.map((m) => m.to).sort(), [...recipients].sort(), stage)
+    assert.match(h.sent[0].subject, subject, stage)
+    assert.equal(kinds(h.events).filter((k) => k === 'notified').length, 1, stage)
+  }
+})
+
+test('a call_due row is not mailed by notify — the daily digest owns call tasks', async () => {
+  const h = harness({ rows: [biz({ stage: 'call_due' })] })
+
+  const result = await notify(h.deps)
+
+  assert.deepEqual(h.sent, [])
+  assert.equal(result.emails, 0)
+  assert.deepEqual(kinds(h.events), ['skipped'])
+})
+
+test('a re-scheduled call is still a new notifyKey, so a future call_due consumer cannot wedge', () => {
   // What poll's `no answer` command writes: same stage, later next_touch_at.
-  h.store[0].next_touch_at = new Date('2026-09-06T14:00:00Z')
-
-  const again = await notify(h.deps)
-
-  assert.equal(again.call_due, 1)
-  assert.equal(h.sent.length, 4)
-  assert.notEqual(notifyKey(h.store[0]), `b1:call_due:${new Date('2026-09-04T14:00:00Z').toISOString()}`)
+  const row = biz({ stage: 'call_due' })
+  const later = { ...row, next_touch_at: new Date('2026-09-06T14:00:00Z') }
+  assert.equal(notifyKey(row), 'b1:call_due:2026-09-04T14:00:00.000Z')
+  assert.notEqual(notifyKey(later), notifyKey(row))
 })
 
 test('a dry run marks would_notify, which never consumes the real notification', async () => {
@@ -160,7 +188,7 @@ test('a real send registers the thread, so a reply to the task email routes back
     assert.equal(t.businessId, 'b1')
     assert.equal(t.direction, 'outbound')
     assert.equal(t.mailbox, 'bot@bcn-services.com')
-    assert.match(t.subject, /call Acme Roofing/)
+    assert.match(t.subject, /Acme Roofing replied/)
   }
 })
 
@@ -212,7 +240,7 @@ test('a widened recipient list still cannot reach a prospect', async () => {
   const result = await notify(h.deps)
 
   assert.equal(transports, 0)
-  assert.equal(result.call_due, 0)
+  assert.equal(result.replied, 0)
   assert.equal(result.errors, 1)
   assert.equal(kinds(h.events).filter((k) => k === 'notified').length, 0)
   assert.match(h.events.find((e) => e.kind === 'error').detail.error, /not in NOTIFY_ALLOWED_RECIPIENTS/)
@@ -261,7 +289,7 @@ test('NOTIFY_TO set to one address sends exactly one email per row, to that addr
 
   const result = await notify(h.deps)
 
-  assert.equal(result.call_due, 1)
+  assert.equal(result.replied, 1)
   assert.deepEqual(h.sent.map((m) => m.to), ['nseluga@bcn-services.com'])
 })
 
@@ -291,7 +319,7 @@ test('a NOTIFY_TO address outside NOTIFY_ALLOWED_RECIPIENTS is refused, not bypa
   const result = await notify(h.deps)
 
   assert.equal(transports, 0)
-  assert.equal(result.call_due, 0)
+  assert.equal(result.replied, 0)
   assert.equal(result.errors, 1)
   assert.match(h.events.find((e) => e.kind === 'error').detail.error, /not in NOTIFY_ALLOWED_RECIPIENTS/)
 })
@@ -301,7 +329,6 @@ test('a NOTIFY_TO address outside NOTIFY_ALLOWED_RECIPIENTS is refused, not bypa
 test('the three templates render row fields and no prospect address is ever a recipient', async () => {
   const h = harness({
     rows: [
-      biz({ id: 'c1', stage: 'call_due' }),
       biz({ id: 'r1', stage: 'replied' }),
       biz({ id: 'q1', stage: 'quoting' }),
     ],
@@ -310,12 +337,12 @@ test('the three templates render row fields and no prospect address is ever a re
   const result = await notify(h.deps)
 
   assert.deepEqual(
-    { call_due: result.call_due, replied: result.replied, quoting: result.quoting },
-    { call_due: 1, replied: 1, quoting: 1 }
+    { replied: result.replied, quoting: result.quoting },
+    { replied: 1, quoting: 1 }
   )
   assert.equal(result.drafted, undefined, 'the result still carries a drafted tally')
-  // Three bodies, each to both humans.
-  assert.equal(h.sent.length, 6)
+  // Two bodies, each to both humans.
+  assert.equal(h.sent.length, 4)
   for (const m of h.sent) {
     assert.ok(ALLOWED.includes(m.to), `${m.to} is not an allow-listed recipient`)
     assert.notEqual(m.to, PROSPECT)
@@ -325,13 +352,6 @@ test('the three templates render row fields and no prospect address is ever a re
 
   const body = (re) => h.sent.find((m) => re.test(m.subject)).text
   assert.ok(!h.sent.some((m) => /approve/i.test(m.subject)), 'an approval mail still goes out')
-
-  const call = body(/call Acme Roofing — 203-555-0142/)
-  assert.match(call, /Phone: 203-555-0142/)
-  assert.match(call, /Owner: Dana/)
-  assert.match(call, /no online booking/)
-  // The call task names the folder the pitch job already built in ~/os.
-  assert.match(call, /Pitch folder: clients\/acme-roofing-danbury\/pitch\//)
 
   const meeting = body(/replied — book the meeting/)
   assert.match(meeting, /Thread: a question about Acme Roofing/)

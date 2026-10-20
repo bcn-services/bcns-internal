@@ -52,15 +52,26 @@ test('clock.yml references no secret that does not yet exist', () => {
 test('the dispatcher maps each cron to its job', () => {
   assert.equal(jobName({ schedule: '0 8-20 * * *' }), 'poll')
   assert.equal(jobName({ schedule: '0 11 * * 1-5' }), 'source')
-  assert.equal(jobName({ schedule: '30 12 * * 1-5' }), 'personalize')
+  assert.equal(jobName({ schedule: '30 12 * * 1-5' }), 'digest')
   assert.equal(Object.keys(SCHEDULES).length, 3)
-  // The poll tick is a chain: poll reads the inbox, touch/pitch/quote/onboard
+  // The poll tick is a chain: poll reads the inbox, pitch/quote/onboard
   // work what it wrote, and notify reports on what they left behind — in that
-  // order. quote and onboard need not exist yet; main() skips a missing module.
+  // order. touch is not on it: cold email is off. quote and onboard need not exist yet; main() skips a missing module.
   // Every day of the week: replies land on weekends too, and this tick never
   // sends outside touch's own send window.
-  const poll = ['poll', 'touch', 'pitch', 'quote', 'onboard', 'notify']
+  const poll = ['poll', 'pitch', 'quote', 'onboard', 'notify']
   assert.deepEqual(jobNames({ schedule: '0 8-20 * * *' }), poll)
+})
+
+test('cold email is off: no schedule runs touch or personalize, but both stay runnable by name', () => {
+  for (const [cron, jobs] of Object.entries(SCHEDULES)) {
+    const names = [jobs].flat()
+    assert.ok(!names.includes('touch'), `${cron} still runs touch`)
+    assert.ok(!names.includes('personalize'), `${cron} still runs personalize`)
+  }
+  assert.deepEqual(jobNames({ schedule: '0 8-20 * * *', job: 'touch' }), ['touch'])
+  assert.deepEqual(jobNames({ job: 'personalize' }), ['personalize'])
+  assert.deepEqual(jobNames({ job: 'digest' }), ['digest'])
 })
 
 test('a dispatch input overrides the schedule, and an unknown name throws', () => {
@@ -155,9 +166,8 @@ test('an unrelated import error is never mistaken for an unbuilt job', async () 
 
 test('the weekday cron runs source then qualify, in that order', () => {
   assert.deepEqual(jobNames({ schedule: '0 11 * * 1-5' }), ['source', 'qualify', 'heartbeat'])
-  // 12:30 is well after source+qualify and well before the hourly touch
-  // ticks, so a row qualified that morning is drafted before touch looks.
-  assert.deepEqual(jobNames({ schedule: '30 12 * * 1-5' }), ['personalize'])
+  // 12:30 is after source+qualify, so the digest lists that morning's promotions.
+  assert.deepEqual(jobNames({ schedule: '30 12 * * 1-5' }), ['digest'])
   assert.deepEqual(jobNames({ schedule: '0 11 * * 1-5', job: 'heartbeat' }), ['heartbeat'])
   assert.throws(() => jobNames({ schedule: 'not-a-cron' }), /no job for schedule/)
 })
