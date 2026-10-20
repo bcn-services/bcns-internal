@@ -6,14 +6,32 @@ import { run as source } from '../jobs/source.mjs'
 const cells = (rows) => rows.map((r) => ({ exhausted_at: null, last_run_at: null, ...r }))
 
 test('the grid is every trade by every town, and nothing else', () => {
-  assert.equal(TRADES.length, 76)
-  assert.equal(TOWNS.length, 49)
+  assert.equal(TRADES.length, 33)
+  assert.equal(TOWNS.length, 79)
+  assert.equal(GRID.length, 2607)
   assert.equal(GRID.length, TRADES.length * TOWNS.length)
-  assert.ok(isKnownCell({ trade: 'roofers', town: 'Milford', state: 'CT' }))
-  // A category and town both added this pass, never in the original 8x8 grid.
-  assert.ok(isKnownCell({ trade: 'chiropractors', town: 'Norwalk', state: 'CT' }))
-  assert.ok(!isKnownCell({ trade: 'roofers', town: 'Boston', state: 'MA' }))
+  assert.ok(isKnownCell({ trade: 'accountants', town: 'Milford', state: 'CT' }))
+  assert.ok(isKnownCell({ trade: 'law firms', town: 'Norwalk', state: 'CT' }))
+  assert.ok(isKnownCell({ trade: 'online store', town: 'Los Angeles', state: 'CA' }))
+  assert.ok(isKnownCell({ trade: 'marketing agencies', town: 'Brooklyn', state: 'NY' }))
+  assert.ok(isKnownCell({ trade: 'accountants', town: 'Boston', state: 'MA' }))
+  // Out of the niche: removed categories are not in the grid.
+  assert.ok(!isKnownCell({ trade: 'roofers', town: 'Milford', state: 'CT' }))
+  assert.ok(!isKnownCell({ trade: 'restaurants', town: 'Milford', state: 'CT' }))
+  assert.ok(!isKnownCell({ trade: 'accountants', town: 'Boston', state: 'CT' }))
   assert.ok(!isKnownCell({ trade: 'dentists in space', town: 'Milford', state: 'CT' }))
+})
+
+test('categories and towns are pinned in priority order', () => {
+  assert.deepEqual(TRADES.slice(0, 3), ['accountants', 'bookkeepers', 'tax preparers'])
+  assert.equal(TRADES[20], 'property management')
+  assert.equal(TRADES[21], 'online store')
+  assert.equal(TRADES.at(-1), 'subscription box company')
+  assert.deepEqual(TOWNS[0], { town: 'Milford', state: 'CT' })
+  assert.deepEqual(TOWNS[48], { town: 'Johnston', state: 'RI' })
+  assert.deepEqual(TOWNS[49], { town: 'New York', state: 'NY' })
+  assert.deepEqual(TOWNS[61], { town: 'Los Angeles', state: 'CA' })
+  assert.deepEqual(TOWNS.at(-1), { town: 'Portland', state: 'OR' })
 })
 
 test('every grid cell is unique', () => {
@@ -23,31 +41,63 @@ test('every grid cell is unique', () => {
 
 test('pickNextCell returns the least recently run unexhausted cell', () => {
   const c = cells([
-    { trade: 'roofers', town: 'Milford', state: 'CT', last_run_at: '2026-08-20' },
-    { trade: 'plumbers', town: 'Milford', state: 'CT', last_run_at: '2026-08-01' },
-    { trade: 'HVAC', town: 'Milford', state: 'CT', last_run_at: '2026-08-10' },
+    { trade: 'accountants', town: 'Milford', state: 'CT', last_run_at: '2026-08-20' },
+    { trade: 'bookkeepers', town: 'Milford', state: 'CT', last_run_at: '2026-08-01' },
+    { trade: 'tax preparers', town: 'Milford', state: 'CT', last_run_at: '2026-08-10' },
   ])
-  assert.equal(pickNextCell(c).trade, 'plumbers')
+  assert.equal(pickNextCell(c).trade, 'bookkeepers')
 })
 
 test('a never-run cell outranks every cell that has run', () => {
   const c = cells([
-    { trade: 'roofers', town: 'Milford', state: 'CT', last_run_at: '2020-01-01' },
-    { trade: 'plumbers', town: 'Milford', state: 'CT' },
+    { trade: 'accountants', town: 'Milford', state: 'CT', last_run_at: '2020-01-01' },
+    { trade: 'bookkeepers', town: 'Milford', state: 'CT' },
   ])
-  assert.equal(pickNextCell(c).trade, 'plumbers')
+  assert.equal(pickNextCell(c).trade, 'bookkeepers')
+})
+
+test('stale removed-category row with the oldest last_run_at is skipped; next in-grid cell wins', () => {
+  const c = cells([
+    { trade: 'roofers', town: 'Milford', state: 'CT', last_run_at: '2019-01-01' },
+    { trade: 'accountants', town: 'Milford', state: 'CT', last_run_at: '2026-08-20' },
+    { trade: 'bookkeepers', town: 'Milford', state: 'CT', last_run_at: '2026-08-01' },
+  ])
+  assert.equal(pickNextCell(c).trade, 'bookkeepers')
+  assert.equal(pickNextCell(cells([{ trade: 'roofers', town: 'Milford', state: 'CT' }])), null)
+})
+
+test('among never-run cells, trade order then town order decide; CT before NYC before CA', () => {
+  const never = (trade, town, state) => ({ trade, town, state })
+  // trade priority wins over town priority
+  assert.equal(
+    pickNextCell(cells([never('bookkeepers', 'Milford', 'CT'), never('accountants', 'Los Angeles', 'CA')])).trade,
+    'accountants'
+  )
+  // same trade: CT beats NYC beats CA regardless of input order
+  const same = cells([
+    never('accountants', 'Los Angeles', 'CA'),
+    never('accountants', 'Brooklyn', 'NY'),
+    never('accountants', 'Norwalk', 'CT'),
+  ])
+  assert.equal(pickNextCell(same).town, 'Norwalk')
+  assert.equal(pickNextCell(same.filter((x) => x.state !== 'CT')).town, 'Brooklyn')
+  // a run cell is still younger than any never-run cell
+  assert.equal(
+    pickNextCell(cells([never('accountants', 'Milford', 'CT'), never('law firms', 'Boston', 'MA')].map((x, i) => (i ? x : { ...x, last_run_at: '2026-01-01' })))).trade,
+    'law firms'
+  )
 })
 
 test('pickNextCell returns null when every cell is exhausted', () => {
   const c = cells([
-    { trade: 'roofers', town: 'Milford', state: 'CT', exhausted_at: '2026-08-01' },
-    { trade: 'plumbers', town: 'Milford', state: 'CT', exhausted_at: '2026-08-02' },
+    { trade: 'accountants', town: 'Milford', state: 'CT', exhausted_at: '2026-08-01' },
+    { trade: 'bookkeepers', town: 'Milford', state: 'CT', exhausted_at: '2026-08-02' },
   ])
   assert.equal(pickNextCell(c), null)
 })
 
 test('a run of entirely known place ids exhausts the cell, and it is never picked again', () => {
-  const cell = cells([{ trade: 'roofers', town: 'Milford', state: 'CT' }])[0]
+  const cell = cells([{ trade: 'accountants', town: 'Milford', state: 'CT' }])[0]
   const results = Array.from({ length: 20 }, (_, i) => ({ place_id: `p${i}`, known: true }))
   const after = evaluateRun(cell, results, new Date('2026-08-30'))
   assert.ok(after.exhausted_at, 'cell not marked exhausted')
@@ -56,7 +106,7 @@ test('a run of entirely known place ids exhausts the cell, and it is never picke
 })
 
 test('exactly ninety percent known is not yet exhausted', () => {
-  const cell = cells([{ trade: 'roofers', town: 'Milford', state: 'CT' }])[0]
+  const cell = cells([{ trade: 'accountants', town: 'Milford', state: 'CT' }])[0]
   const results = Array.from({ length: 10 }, (_, i) => ({ place_id: `p${i}`, known: i < 9 }))
   assert.equal(evaluateRun(cell, results).exhausted_at, null)
   const harder = Array.from({ length: 20 }, (_, i) => ({ place_id: `p${i}`, known: i < 19 }))
@@ -64,7 +114,7 @@ test('exactly ninety percent known is not yet exhausted', () => {
 })
 
 test('an already-exhausted cell keeps its original exhaustion timestamp', () => {
-  const cell = { trade: 'roofers', town: 'Milford', state: 'CT', exhausted_at: '2026-01-01' }
+  const cell = { trade: 'accountants', town: 'Milford', state: 'CT', exhausted_at: '2026-01-01' }
   assert.equal(evaluateRun(cell, [{ place_id: 'p', known: true }]).exhausted_at, '2026-01-01')
 })
 
@@ -122,7 +172,7 @@ function harness({
       if (b instanceof Error) throw b
       return b
     },
-    loadCells: async () => cellRows ?? cells([{ trade: 'roofers', town: 'Milford', state: 'CT' }]),
+    loadCells: async () => cellRows ?? cells([{ trade: 'accountants', town: 'Milford', state: 'CT' }]),
     saveCell: async (c) => saved.push(c),
     now: new Date('2026-08-30T13:00:00Z'),
   }
@@ -152,7 +202,7 @@ test('inserted rows carry place_id, source_query and stage sourced', async () =>
   await source(h.deps)
   assert.equal(h.inserted.length, 1)
   assert.equal(h.inserted[0].place_id, 'p1')
-  assert.equal(h.inserted[0].source_query, 'roofers in Milford CT')
+  assert.equal(h.inserted[0].source_query, 'accountants in Milford CT')
   assert.equal(h.inserted[0].stage, 'sourced')
   assert.equal(h.inserted[0].town, 'Milford')
 })
@@ -194,7 +244,7 @@ test('an all-known run marks the cell exhausted on the saved row', async () => {
 
 test('an exhausted grid writes a skipped event and calls nothing', async () => {
   const h = harness({
-    cellRows: cells([{ trade: 'roofers', town: 'Milford', state: 'CT', exhausted_at: '2026-01-01' }]),
+    cellRows: cells([{ trade: 'accountants', town: 'Milford', state: 'CT', exhausted_at: '2026-01-01' }]),
   })
   await source(h.deps)
   assert.equal(h.events.at(-1).kind, 'skipped')
@@ -202,9 +252,24 @@ test('an exhausted grid writes a skipped event and calls nothing', async () => {
   assert.equal(h.placesCalls.length, 0)
 })
 
-test('a cell outside the grid is refused, never searched', async () => {
-  const h = harness({ cellRows: cells([{ trade: 'dentists', town: 'Boston', state: 'MA' }]) })
-  await assert.rejects(source(h.deps), /not in the grid/)
+test('a stale row outside the grid is skipped, never searched, never thrown on', async () => {
+  const h = harness({
+    cellRows: cells([
+      { trade: 'roofers', town: 'Milford', state: 'CT', last_run_at: '2020-01-01' },
+      { trade: 'dentists', town: 'Boston', state: 'MA' },
+      { trade: 'bookkeepers', town: 'Milford', state: 'CT', last_run_at: '2026-08-01' },
+    ]),
+  })
+  await source({ ...h.deps, cellsPerRun: 1 })
+  assert.equal(h.saved.length, 1)
+  assert.equal(h.saved[0].trade, 'bookkeepers')
+  assert.equal(h.placesCalls[0].query, 'bookkeepers in Milford CT')
+})
+
+test('a grid holding only stale rows skips cleanly', async () => {
+  const h = harness({ cellRows: cells([{ trade: 'roofers', town: 'Milford', state: 'CT' }]) })
+  await source(h.deps)
+  assert.equal(h.events.at(-1).kind, 'skipped')
   assert.equal(h.placesCalls.length, 0)
 })
 
@@ -216,7 +281,7 @@ test('every run writes an events row', async () => {
 })
 
 test('cellQuery renders the literal Places search string', () => {
-  assert.equal(cellQuery({ trade: 'plumbers', town: 'Providence', state: 'RI' }), 'plumbers in Providence RI')
+  assert.equal(cellQuery({ trade: 'bookkeepers', town: 'Providence', state: 'RI' }), 'bookkeepers in Providence RI')
 })
 
 // --- multi-cell, multi-page, per-page budget checks -------------------------
@@ -225,8 +290,8 @@ test('two cells at three pages each make exactly six Places calls, with the budg
   const h = harness({
     cellsPerRun: 2,
     cellRows: cells([
-      { trade: 'roofers', town: 'Milford', state: 'CT' },
-      { trade: 'plumbers', town: 'Milford', state: 'CT' },
+      { trade: 'accountants', town: 'Milford', state: 'CT' },
+      { trade: 'bookkeepers', town: 'Milford', state: 'CT' },
     ]),
     budget: { remaining: 500 },
     // Every page but the last of each cell says there is another page; the
@@ -260,8 +325,8 @@ test('a Places error on one cell logs and moves to the next cell', async () => {
   const h = harness({
     cellsPerRun: 2,
     cellRows: cells([
-      { trade: 'roofers', town: 'Milford', state: 'CT' },
-      { trade: 'plumbers', town: 'Milford', state: 'CT' },
+      { trade: 'accountants', town: 'Milford', state: 'CT' },
+      { trade: 'bookkeepers', town: 'Milford', state: 'CT' },
     ]),
     budget: { remaining: 500 },
   })
@@ -279,8 +344,8 @@ test('a budget that drops mid-run stops before the next page, and logs why', asy
   const h = harness({
     cellsPerRun: 2,
     cellRows: cells([
-      { trade: 'roofers', town: 'Milford', state: 'CT' },
-      { trade: 'plumbers', town: 'Milford', state: 'CT' },
+      { trade: 'accountants', town: 'Milford', state: 'CT' },
+      { trade: 'bookkeepers', town: 'Milford', state: 'CT' },
     ]),
     pages: [
       { results: [], nextPageToken: 't1' },
@@ -297,7 +362,7 @@ test('a budget that drops mid-run stops before the next page, and logs why', asy
   assert.equal(h.placesCalls.length, 2)
   // The two paid pages are kept (the cell is saved); the second cell is not.
   assert.equal(h.saved.length, 1)
-  assert.equal(h.saved[0].trade, 'roofers')
+  assert.equal(h.saved[0].trade, 'accountants')
   const skip = h.events.find((e) => e.kind === 'skipped')
   assert.match(skip.detail.reason, /budget exhausted/)
 })
