@@ -213,7 +213,55 @@ test('a send failure writes an error and no digested marker, so the rows are lis
   assert.match(h.events[0].detail.error, /smtp down/)
 })
 
-test('digestCandidates reads the view, dedupes on digested ids and old call mail, and filters due rows', async () => {
+test('live run with no SMTP credentials is not a delivery: would_digest, no marker, rows listed again', async () => {
+  const h = harness({ rows: [biz({ id: 'a' })] })
+  h.deps.notify = null // the real createNotifier...
+  h.deps.transport = null // ...with no credentials: it answers { dryRun: true } and sends nothing
+
+  const first = await digest(h.deps)
+  const second = await digest(h.deps)
+
+  assert.deepEqual(kinds(h.events), ['would_digest', 'would_digest'])
+  assert.ok(!kinds(h.events).includes('digested'))
+  assert.equal(first.sent, 0)
+  assert.deepEqual(h.events[1].detail.ids, ['a']) // the next run lists the same row again
+  assert.equal(second.listed, 1)
+
+  // Credentials arrive: the row is still there and now really goes out.
+  const mails = []
+  h.deps.transport = async () => ({ sendMail: async (m) => mails.push(m) })
+  await digest(h.deps)
+  assert.equal(mails.length, 1)
+  assert.equal(h.events.at(-1).kind, 'digested')
+  assert.deepEqual(h.events.at(-1).detail.ids, ['a'])
+})
+
+test('marker only when every NOTIFY_TO address was delivered; one failure leaves the rows to the next run', async () => {
+  const NATE = 'nseluga@bcn-services.com'
+  const sent = []
+  let nateDown = true
+  const send = async (m) => {
+    if (m.to === NATE && nateDown) throw new Error('mailbox full')
+    sent.push(m.to)
+  }
+  const h = harness({ rows: [biz({ id: 'a' })], notifyTo: [BRANDON, NATE], send })
+
+  const first = await digest(h.deps)
+
+  assert.deepEqual(sent, [BRANDON]) // Brandon got it, Nate's send failed
+  assert.deepEqual(kinds(h.events), ['error'])
+  assert.equal(h.events[0].detail.to, NATE)
+  assert.match(h.events[0].detail.error, /mailbox full/)
+  assert.equal(first.listed, 0)
+
+  nateDown = false
+  await digest(h.deps) // re-lists the row to both
+  assert.deepEqual(sent, [BRANDON, BRANDON, NATE])
+  assert.deepEqual(kinds(h.events), ['error', 'digested'])
+  assert.deepEqual(h.events[1].detail.ids, ['a'])
+})
+
+test('digestCandidates reads the view, dedupes on digested ids and old call mail, and filters on next_touch_at', async () => {
   const calls = []
   const sql = (strings, ...values) => {
     calls.push({ text: strings.join(' ? '), values })
@@ -224,6 +272,7 @@ test('digestCandidates reads the view, dedupes on digested ids and old call mail
   assert.match(text, /from\s+selectable_businesses/i)
   assert.ok(!/\bfrom\s+businesses\b/i.test(text))
   assert.match(text, /s\.stage = 'call_due'/)
+  assert.match(text, /s\.next_touch_at is null or s\.next_touch_at <= now\(\)/)
   assert.match(text, /e\.job = 'digest' and e\.kind = 'digested'/)
   assert.match(text, /detail->'ids' @> to_jsonb\(s\.id::text\)/)
   assert.match(text, /e\.job = 'notify' and e\.kind = 'notified'/)

@@ -10,9 +10,10 @@
 //     only sender here) checks again, then short-circuits dry runs, then and
 //     only then builds a transport.
 //  2. The dedupe store is the `digested` event: `detail.ids` is the set of
-//     business ids that mail listed. The next run lists none of them
-//     (db.digestCandidates). A dry run writes `would_digest` and consumes
-//     nothing.
+//     business ids that mail listed, written only when EVERY NOTIFY_TO address
+//     was really delivered. The next run lists none of them
+//     (db.digestCandidates). A dry run (or a notifier that sent nothing)
+//     writes `would_digest` and consumes nothing.
 //  3. Writes no business row.
 
 import { randomUUID } from 'node:crypto'
@@ -111,18 +112,26 @@ export async function run({
   const { ids, ...mail } = digestMail(rows, date)
   const send = notify ?? createNotifier({ transport, internalRecipients, from: notifyFrom, dryRun, uuid, now })
   let delivered = 0
+  let dry = 0
+  let failed = 0
   for (const to of notifyTo) {
     try {
-      await send({ to, ...mail })
-      delivered++
+      // createNotifier answers { dryRun: true } when it sent nothing (DRY_RUN, or
+      // no SMTP credentials): that is not a delivery.
+      const res = await send({ to, ...mail })
+      if (res?.dryRun) dry++
+      else delivered++
     } catch (err) {
+      failed++
       await log('error', { to, error: String(err?.message ?? err) })
     }
   }
-  if (!delivered) return { sent: 0, listed: 0 }
+  // Any failed recipient leaves no marker: the next run re-lists every row (the
+  // recipients who did get this mail get it again).
+  if (failed) return { sent: delivered, listed: 0 }
 
-  // Dry runs write `would_digest`, which digestCandidates ignores: a run that
-  // mailed nobody must not consume the rows.
-  await log(dryRun ? 'would_digest' : 'digested', { ids, date, subject: mail.subject })
+  // `would_digest` is ignored by digestCandidates: a run that mailed nobody
+  // must not consume the rows.
+  await log(dryRun || dry ? 'would_digest' : 'digested', { ids, date, subject: mail.subject })
   return { sent: delivered, listed: ids.length }
 }

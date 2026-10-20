@@ -143,7 +143,9 @@ without one last): name, phone, town/state, trade, fit and reason, facts,
 website, email, pitch folder. No new rows: one line, "No new call tasks today";
 a re-dispatch later the same day with nothing new writes a `skipped` event and
 sends nothing. "Not yet listed" is the `digested` event's `detail.ids` (a dry
-run writes `would_digest` and consumes nothing). Rows the old per-lead mail
+run, or a live run with no SMTP credentials, writes `would_digest` and consumes
+nothing; so does a send that failed for any `NOTIFY_TO` address, which writes an
+`error` per failure and no marker). Rows the old per-lead mail
 already covered are excluded, so the first live digest is not the backlog.
 
 `NOTIFY_TO` (comma-separated) is the digest's only recipient: unset, the digest
