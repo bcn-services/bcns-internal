@@ -165,9 +165,13 @@ test('an unrelated import error is never mistaken for an unbuilt job', async () 
   )
 })
 
-test('the weekday cron runs source then qualify, in that order', () => {
-  assert.deepEqual(jobNames({ schedule: '0 11 * * 1-5' }), ['source', 'qualify', 'heartbeat'])
-  // 12:30 is after source+qualify, so the digest lists that morning's promotions.
+test('the weekday cron runs source then heartbeat; qualify lives only on the hourly tick', () => {
+  assert.deepEqual(jobNames({ schedule: '0 11 * * 1-5' }), ['source', 'heartbeat'])
+  // A second qualify schedule would overlap the hourly 11:00 run: concurrency
+  // groups are keyed per schedule string, so the two would work one backlog.
+  const withQualify = Object.entries(SCHEDULES).filter(([, jobs]) => [jobs].flat().includes('qualify'))
+  assert.deepEqual(withQualify.map(([cron]) => cron), ['0 8-20 * * *'])
+  // 12:30 is after the 08-12 hourly ticks, so the digest lists that morning's promotions.
   assert.deepEqual(jobNames({ schedule: '30 12 * * 1-5' }), ['digest'])
   assert.deepEqual(jobNames({ schedule: '0 11 * * 1-5', job: 'heartbeat' }), ['heartbeat'])
   assert.throws(() => jobNames({ schedule: 'not-a-cron' }), /no job for schedule/)
@@ -179,9 +183,24 @@ test('main runs every job of a tick in order, on one deps object', async () => {
   const out = await main({ SCHEDULE: '0 11 * * 1-5' }, async (name) => ({
     run: async (deps) => { ran.push([name, deps]); return name },
   }))
-  assert.deepEqual(ran.map((r) => r[0]), ['source', 'qualify', 'heartbeat'])
+  assert.deepEqual(ran.map((r) => r[0]), ['source', 'heartbeat'])
   assert.equal(ran[0][1], ran[1][1], 'the two jobs got different deps objects')
-  assert.deepEqual(out, ['source', 'qualify', 'heartbeat'])
+  assert.deepEqual(out, ['source', 'heartbeat'])
+})
+
+test('main stamps one process deadline into deps, inside clock.yml\'s 30-minute timeout', async () => {
+  const { main, PROCESS_BUDGET_MS } = await import('../jobs/run.mjs')
+  const seen = []
+  const before = Date.now()
+  await main({ SCHEDULE: '0 8-20 * * *' }, async (name) => ({
+    run: async (deps) => { seen.push(deps.deadline); return name },
+  }))
+  const after = Date.now()
+  assert.equal(seen.length, 6)
+  assert.ok(seen.every((d) => d === seen[0]), 'the deadline moved between jobs')
+  assert.ok(seen[0] >= before + PROCESS_BUDGET_MS && seen[0] <= after + PROCESS_BUDGET_MS)
+  // ~3 minutes of setup precede node, and one row can overrun: leave real margin.
+  assert.ok(PROCESS_BUDGET_MS <= 25 * 60_000 && PROCESS_BUDGET_MS > 20 * 60_000)
 })
 
 test('buildDeps hands qualify fetchPage always and claude only on the OAuth token', async () => {

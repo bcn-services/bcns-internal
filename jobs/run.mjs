@@ -14,21 +14,25 @@ export const SCHEDULES = {
   // run on demand via the `job` input. A module that is not built yet is
   // skipped by main(), not a failed tick. Every day, not just weekdays:
   // replies land on weekends too.
-  // qualify rides this tick, after notify, because the 11:00 run alone cannot
-  // read enough sites to fill 50 call tasks a day (arithmetic in the PR body).
-  // It is last so a long qualify never delays the inbox; its promotion step
-  // skips weekends itself.
+  // qualify rides this tick, after notify, because one run a day cannot read
+  // enough sites to fill 50 call tasks a day (arithmetic in the PR body). It is
+  // the ONLY qualify schedule: the 11:00 tick below runs source, and this
+  // tick's 11:00 and 12:00 runs read its new rows (a second qualify on another
+  // cron would be a different concurrency group and overlap this one on the
+  // same backlog). It is last so a long qualify never delays the inbox; main()
+  // hands it the time left in the process. Its promotion step runs only on
+  // weekday ticks before the 12:30 digest.
   '0 8-20 * * *': ['poll', 'pitch', 'quote', 'onboard', 'notify', 'qualify'],
-  // Weekdays at 11:00: source finds businesses, qualify reads the ones it
-  // just wrote (and promotes the day's call list from the qualified pool).
-  // Order is the contract, so it lives in this list. heartbeat runs last: it
-  // writes the dated file clock.yml commits so GitHub never disables the
+  // Weekdays at 11:00: source finds businesses; the hourly tick above qualifies
+  // them. Order is the contract, so it lives in this list. heartbeat runs last:
+  // it writes the dated file clock.yml commits so GitHub never disables the
   // schedules, and a source failure still fails the tick. Daily on weekdays
-  // now, not a Monday-only tick — the daily source/qualify volume needs more
-  // than one run a week to keep up with the call-task quota.
-  '0 11 * * 1-5': ['source', 'qualify', 'heartbeat'],
-  // An hour and a half after source+qualify: the day's call list goes to
-  // Brandon once, after qualify has promoted that morning's call_due rows.
+  // now, not a Monday-only tick — the call-task quota needs more than one
+  // source run a week.
+  '0 11 * * 1-5': ['source', 'heartbeat'],
+  // The day's call list goes to Brandon once, after the 08-12 hourly ticks
+  // have promoted that morning's call_due rows (qualify stops promoting at
+  // 12:30 UTC, this cron's own minute).
   // (This cron used to run personalize; drafting is off with cold email.)
   '30 12 * * 1-5': ['digest'],
 }
@@ -559,7 +563,15 @@ export function createFetchPage({
   }
 }
 
+// clock.yml kills a job at timeout-minutes: 30, and ~3 minutes of setup
+// (install, CLI smoke) precede node. 24 minutes from the start of main() leaves
+// the rest as margin for the one row (up to ~40 s) a bounded job can overrun by,
+// its promotion step and the db close. Not the workflow's own limit: this is
+// the point after which a long job should stop taking on new work.
+export const PROCESS_BUDGET_MS = 24 * 60 * 1000
+
 export async function main(env = process.env, load = (n) => import(`./${n}.mjs`)) {
+  const startedAt = Date.now()
   const names = jobNames({ schedule: env.SCHEDULE, job: env.JOB })
 
   // A job below the stop marker is not built yet. That is not a failure: the
@@ -580,7 +592,12 @@ export async function main(env = process.env, load = (n) => import(`./${n}.mjs`)
         continue
       }
       if (typeof mod.run !== 'function') throw new Error(`job ${name} exports no run()`)
-      deps ??= await buildDeps(env)
+      if (!deps) {
+        deps = await buildDeps(env)
+        // Stamped once, so every job on the tick measures against the same
+        // wall: qualify reads `deadline` to bound itself by the time left.
+        deps.deadline = startedAt + PROCESS_BUDGET_MS
+      }
       results.push(await mod.run(deps))
     }
   } finally {

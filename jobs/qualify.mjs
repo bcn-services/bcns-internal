@@ -5,7 +5,7 @@
 // signals in lib/signals.mjs, detected by CODE from the raw HTML, and (b) it
 // has a phone number to dial. Pass -> `qualified` with research.fit_score;
 // anything else -> `lost` with research.lost_reason ('unfit' | 'no_phone' |
-// 'fetch_failed'). `no_email` is legacy and is never written here.
+// 'fetch_failed' | 'qualify_failed'). `no_email` is legacy and is never written here.
 //
 // The rule that still matters: an email address is only ever taken from
 // something the site actually published, and is stored UNVERIFIED (calls need
@@ -17,7 +17,9 @@ import { evidence, countSignals, SIGNAL_KEYS } from '../lib/signals.mjs'
 
 export const CONTACT_PATHS = ['/contact', '/contact-us', '/about']
 
-const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
+// Anchored: a claim that is not an address and nothing else ("info@acme.com.",
+// "Email: info@acme.com") is rejected, never stored with the stray characters.
+const EMAIL_RE = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i
 
 // The hard gate: signals detected in the HTML by code. A model-reported signal
 // with no code evidence does not count, so an over-eager model cannot pass a row.
@@ -105,12 +107,14 @@ function parseResearch(research) {
 //   niche      0-6    the model's niche read (its 0-100 fit_score * 0.06)
 //   headcount  +5     headcount band starts at or below 20 people
 //   single     +5     exactly one location
-//   geography  +3 CT, +2 NYC metro (NY/NJ), +1 CA, 0 elsewhere
+//   geography  +0.3 CT, +0.2 NYC metro (NY/NJ), +0.1 CA, 0 elsewhere
 //
-// Everything but signals sums to at most 19 < 20, so one more signal always
-// outranks every other factor combined; geography (<= 3) is below every other
-// step and only ever breaks ties. A chain or franchise (3+ locations) is
-// capped at 20, below the 40 floor of any non-chain row that passes the gate.
+// Everything but signals and geography is a whole number and sums to at most
+// 16 < 20, so one more signal always outranks every other factor combined.
+// Geography totals under 1 point, so it is a pure tiebreak: it can never beat
+// a one-point difference in any other factor. A chain or franchise (3+
+// locations) is capped at 20, below the 40 floor of any non-chain row that
+// passes the gate. Still a JSON number (one decimal), sorted numerically.
 export const CHAIN_CAP = 20
 
 export function fitScore({ signals, nicheScore, headcountBand, locations, state }) {
@@ -119,15 +123,21 @@ export function fitScore({ signals, nicheScore, headcountBand, locations, state 
   const small = Number.parseInt(String(headcountBand ?? ''), 10) <= 20 ? 5 : 0
   const single = locations === 1 ? 5 : 0
   const st = String(state ?? '').toUpperCase()
-  const geo = st === 'CT' ? 3 : st === 'NY' || st === 'NJ' ? 2 : st === 'CA' ? 1 : 0 // ponytail: state-level NYC metro — refine by town if NJ/upstate NY rows crowd the list
-  const score = 20 * count + niche + small + single + geo
-  return Math.min(100, locations >= 3 ? Math.min(score, CHAIN_CAP) : score)
+  // Tenths, so the sum stays exact: 98.3, never 98.30000000000001.
+  const geoTenths = st === 'CT' ? 3 : st === 'NY' || st === 'NJ' ? 2 : st === 'CA' ? 1 : 0 // ponytail: state-level NYC metro — refine by town if NJ/upstate NY rows crowd the list
+  const score = (20 * count + niche + small + single) * 10 + geoTenths
+  return Math.min(100, locations >= 3 ? Math.min(score / 10, CHAIN_CAP) : score / 10)
 }
 
 // A site that fails this many ticks running is a dead site, not a flaky one.
 export const MAX_QUALIFY_FAILURES = 3
 
 export const DEFAULT_BUDGET_MS = 20 * 60 * 1000
+
+// Promotion only runs on ticks before the weekday digest (cron `30 12 * * 1-5`,
+// jobs/run.mjs): a row promoted after the digest waits for the next one and
+// lands on top of that morning's fresh list.
+export const DIGEST_MINUTE_UTC = 12 * 60 + 30
 
 // Per-run row cap. The time guard (budgetMs) is what actually bounds a run;
 // this only has to sit above what one budget can get through. See the PR body
@@ -142,6 +152,11 @@ export async function run({
   limit = DEFAULT_LIMIT,
   contactPaths = CONTACT_PATHS,
   budgetMs = DEFAULT_BUDGET_MS,
+  // When the process must be done, set once by main() in jobs/run.mjs from the
+  // workflow's timeout. The loop gets min(budgetMs, time left to it) so a slow
+  // tick (pitch/quote runs ahead of qualify) cannot be killed mid-qualify with
+  // its promotion step never reached. Unset: budgetMs alone.
+  deadline,
   clock = () => Date.now(),
   callTasksPerDay = 50,
 } = {}) {
@@ -184,24 +199,25 @@ export async function run({
 
   // Counts a failed attempt on the row's research. The write bumps updated_at,
   // which rotates the row to the back of sourcedBacklog; at the cap the row is
-  // parked as `lost`/'fetch_failed'. A failing counter write must never mask
-  // the original error or end the run.
-  const recordFailure = async (b) => {
+  // parked as `lost`. Two separate counters: FETCH is the site's fault (dead,
+  // blocked); QUALIFY_ERRORS is everything after a good fetch (Claude, parse,
+  // DB) and must not be charged to the site. A failing counter write must never
+  // mask the original error or end the run.
+  const FETCH = { counter: 'qualify_failures', lostReason: 'fetch_failed', why: 'site unreachable' }
+  const QUALIFY_ERRORS = { counter: 'qualify_errors', lostReason: 'qualify_failed', why: 'qualify failed' }
+  const recordFailure = async (b, { counter, lostReason, why } = FETCH) => {
     try {
       const research = parseResearch(b.research)
-      const failures = (research.qualify_failures ?? 0) + 1
+      const failures = (research[counter] ?? 0) + 1
       if (failures >= MAX_QUALIFY_FAILURES) {
         await db.updateBusiness(sql, b.id, {
           stage: 'lost',
-          research: JSON.stringify({ ...research, qualify_failures: failures, lost_reason: 'fetch_failed' }),
+          research: JSON.stringify({ ...research, [counter]: failures, lost_reason: lostReason }),
         })
-        await log('lost', {
-          business: b.id,
-          reason: `site unreachable after ${MAX_QUALIFY_FAILURES} attempts`,
-        })
+        await log('lost', { business: b.id, reason: `${why} after ${MAX_QUALIFY_FAILURES} attempts` })
       } else {
         await db.updateBusiness(sql, b.id, {
-          research: JSON.stringify({ ...research, qualify_failures: failures }),
+          research: JSON.stringify({ ...research, [counter]: failures }),
         })
       }
     } catch {
@@ -210,14 +226,15 @@ export async function run({
   }
 
   const startedAt = clock()
+  const budget = deadline == null ? budgetMs : Math.min(budgetMs, deadline - startedAt)
 
   for (const b of businesses) {
-    if (clock() - startedAt > budgetMs) {
+    if (clock() - startedAt >= budget) {
       timedOut = true
       break
     }
     // fetched: the fetch phase finished, so a later throw (Claude, parsing, DB)
-    // is not the site's fault and must not count against it.
+    // is not the site's fault: it counts as a qualify error, not a fetch failure.
     let fetched = false
     moved = false
     try {
@@ -317,9 +334,9 @@ export async function run({
       errors++
       await log('error', { business: b.id, name: b.name, error: String(err?.message ?? err) })
       try {
-        if (!moved && !fetched) await recordFailure(b)
-        // Claude, parse and DB errors after the fetch write nothing: the row
-        // stays at sourced and is retried whole.
+        // A post-fetch error must rotate the row too, or it sits at the head of
+        // sourcedBacklog and burns a Claude call every tick forever.
+        if (!moved) await recordFailure(b, fetched ? QUALIFY_ERRORS : FETCH)
       } catch {
         // Counting failed; the row stays at sourced and is retried.
       }
@@ -327,18 +344,23 @@ export async function run({
   }
 
   if (timedOut) {
-    await log('skipped', { reason: 'time guard — budgetMs exceeded, remaining rows stay at sourced' })
+    await log('skipped', {
+      reason: 'time guard — budgetMs or the process deadline exceeded, remaining rows stay at sourced',
+    })
   }
 
   // Promotion runs every tick regardless of whether there was a sourced
   // backlog above — the qualified pool fills from many past runs, and the call
   // list has to keep getting fed even on a day with nothing fresh to qualify.
-  // Not on weekends: qualify rides the every-day hourly tick, but the digest
-  // only goes out on weekdays, so a Saturday promotion would pile into Monday's
-  // list on top of Monday's own 50.
+  // Only on weekday ticks before the digest: qualify rides the every-day
+  // hourly tick, but the digest goes out once, weekdays at 12:30 UTC, and lists
+  // everything promoted since the last one. A weekend or afternoon promotion
+  // would pile into the next digest on top of that morning's own 50.
   let promoted = 0
-  const day = new Date(clock()).getUTCDay()
-  if (day !== 0 && day !== 6) {
+  const at = new Date(clock())
+  const day = at.getUTCDay()
+  const minuteOfDay = at.getUTCHours() * 60 + at.getUTCMinutes()
+  if (day !== 0 && day !== 6 && minuteOfDay < DIGEST_MINUTE_UTC) {
     const [{ count: promotedSoFar = 0 } = {}] = (await db.promotedToday(sql)) ?? []
     const room = callTasksPerDay - promotedSoFar
     if (room > 0) {

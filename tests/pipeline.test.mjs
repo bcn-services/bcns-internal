@@ -828,6 +828,8 @@ test('a mailbox spent yesterday sends again today rather than going quiet foreve
 test('calls-only: source -> qualify (signal + phone gates, score) -> top-N promotion -> digest in rank order', async () => {
   const p = pipeline({ places: [PLACE, CARA, DARA, EVE, FINN] })
   p.deps.callTasksPerDay = 2
+  // An hourly tick before the 12:30 digest: the only kind that promotes.
+  p.deps.clock = () => Date.UTC(2026, 8, 7, 11)
   p.deps.notifyTo = [TEAMMATE]
 
   // Legacy rows already sitting at `qualified`: one scored but phoneless, one
@@ -859,7 +861,7 @@ test('calls-only: source -> qualify (signal + phone gates, score) -> top-N promo
 
   // Score: signals dominate (4 > 3 > 2), written as a number, no email invented.
   const scores = ['Dara Tax', 'Cara Accounting', 'Acme Roofing'].map((n) => p.row(n).research.fit_score)
-  assert.deepEqual(scores, [98, 78, 58])
+  assert.deepEqual(scores, [95.3, 75.3, 55.3]) // CT: +0.3 geography tiebreak
   assert.equal(p.row('Dara Tax').email, null)
   assert.equal(p.row('Dara Tax').research.reason, 'runs a crew, tracks jobs on paper')
 
@@ -886,8 +888,8 @@ test('calls-only: source -> qualify (signal + phone gates, score) -> top-N promo
   const body = bodyOf(mail.raw)
   assert.match(body, /1\. Dara Tax — \(203\) 555-0302/)
   assert.match(body, /2\. Cara Accounting — \(203\) 555-0301/)
-  assert.match(body, /Fit: 98 — runs a crew, tracks jobs on paper/)
-  assert.match(body, /Fit: 78 — /)
+  assert.match(body, /Fit: 95\.3 — runs a crew, tracks jobs on paper/)
+  assert.match(body, /Fit: 75\.3 — /)
   for (const absent of ['Acme Roofing', 'Eve Books', 'Finn Law', 'Gus Insurance', 'Hal Realty']) {
     assert.ok(!body.includes(absent), `${absent} is on the call list`)
   }
