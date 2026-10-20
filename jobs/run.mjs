@@ -14,9 +14,13 @@ export const SCHEDULES = {
   // run on demand via the `job` input. A module that is not built yet is
   // skipped by main(), not a failed tick. Every day, not just weekdays:
   // replies land on weekends too.
-  '0 8-20 * * *': ['poll', 'pitch', 'quote', 'onboard', 'notify'],
+  // qualify rides this tick, after notify, because the 11:00 run alone cannot
+  // read enough sites to fill 50 call tasks a day (arithmetic in the PR body).
+  // It is last so a long qualify never delays the inbox; its promotion step
+  // skips weekends itself.
+  '0 8-20 * * *': ['poll', 'pitch', 'quote', 'onboard', 'notify', 'qualify'],
   // Weekdays at 11:00: source finds businesses, qualify reads the ones it
-  // just wrote (and promotes the day's call list from the no_email pool).
+  // just wrote (and promotes the day's call list from the qualified pool).
   // Order is the contract, so it lives in this list. heartbeat runs last: it
   // writes the dated file clock.yml commits so GitHub never disables the
   // schedules, and a source failure still fails the tick. Daily on weekdays
@@ -186,30 +190,6 @@ export async function buildDeps(env = process.env, exists = existsSync) {
     deps.claude = claudeClient()
   }
 
-  // Verification needs an envelope sender to put in MAIL FROM; without one
-  // there is no probe, and qualify simply trusts what it found.
-  if (env.MAIL_FROM) {
-    const [{ verifyEmail, smtpSession }, { resolveMx }, net] = await Promise.all([
-      import('../lib/verify.mjs'),
-      import('node:dns/promises'),
-      import('node:net'),
-    ])
-    deps.verify = (address) =>
-      verifyEmail(address, {
-        resolveMx,
-        from: env.MAIL_FROM,
-        connect: (host) =>
-          new Promise((resolve, reject) => {
-            const socket = net.connect(25, host)
-            // Runners that block port 25 hang rather than refuse; don't let
-            // one row eat minutes of qualify's time budget.
-            socket.setTimeout(10000, () => socket.destroy(new Error('smtp connect timeout')))
-            socket.once('error', reject)
-            socket.once('connect', () => resolve(smtpSession(socket)))
-          }),
-      })
-  }
-
   // Two lists, deliberately not one. `allowedRecipients` is the hard gate the
   // touch job applies to every PROSPECT recipient, dry run or not.
   // `internalRecipients` is the set of internal humans poll/notify forward to,
@@ -245,7 +225,7 @@ export async function buildDeps(env = process.env, exists = existsSync) {
   if (env.JITTER_WINDOW_MS) deps.jitterWindowMs = Number(env.JITTER_WINDOW_MS)
   if (env.SKILL_JOB_LIMIT) deps.skillLimit = Number(env.SKILL_JOB_LIMIT)
   // How many grid cells source works per tick, how many call tasks qualify's
-  // no_email promotion feeds the funnel per day, and the UTC hour window
+  // promotion feeds the funnel per day, and the UTC hour window
   // touch is allowed to send in ('13-20' -> {start:13, end:20}).
   if (env.SOURCE_CELLS_PER_RUN) deps.cellsPerRun = Number(env.SOURCE_CELLS_PER_RUN)
   if (env.CALL_TASKS_PER_DAY) deps.callTasksPerDay = Number(env.CALL_TASKS_PER_DAY)

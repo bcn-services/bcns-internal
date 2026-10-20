@@ -56,10 +56,11 @@ test('the dispatcher maps each cron to its job', () => {
   assert.equal(Object.keys(SCHEDULES).length, 3)
   // The poll tick is a chain: poll reads the inbox, pitch/quote/onboard
   // work what it wrote, and notify reports on what they left behind — in that
-  // order. touch is not on it: cold email is off. quote and onboard need not exist yet; main() skips a missing module.
+  // order, then qualify (after notify, so a long run never delays the inbox).
+  // touch is not on it: cold email is off. quote and onboard need not exist yet; main() skips a missing module.
   // Every day of the week: replies land on weekends too, and this tick never
   // sends outside touch's own send window.
-  const poll = ['poll', 'pitch', 'quote', 'onboard', 'notify']
+  const poll = ['poll', 'pitch', 'quote', 'onboard', 'notify', 'qualify']
   assert.deepEqual(jobNames({ schedule: '0 8-20 * * *' }), poll)
 })
 
@@ -187,11 +188,12 @@ test('buildDeps hands qualify fetchPage always and claude only on the OAuth toke
   const bare = await buildDeps({})
   assert.equal(typeof bare.fetchPage, 'function')
   assert.equal('claude' in bare, false)
-  assert.equal('verify' in bare, false)
 
+  // The SMTP verification probe is gone from qualify: even with MAIL_FROM set
+  // nothing wires a `verify` dep.
   const full = await buildDeps({ CLAUDE_CODE_OAUTH_TOKEN: 'oat_x', MAIL_FROM: 'a@b.test' })
   assert.equal(typeof full.claude.ask, 'function')
-  assert.equal(typeof full.verify, 'function')
+  assert.equal('verify' in full, false)
 })
 
 test('the send list and the internal list are two independent variables', async () => {
