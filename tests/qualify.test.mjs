@@ -676,3 +676,39 @@ test('parseAnswer digs the object out of a fenced or chatty reply', () => {
   assert.deepEqual(parseAnswer(obj), obj)
   assert.throws(() => parseAnswer('The PAGE TEXT appears to be empty.'), /no JSON/)
 })
+
+test('a deadline already passed: zero rows, the time-guard skip event, and promotion still evaluated', async () => {
+  let asked = 0
+  const h = harness({
+    rows: [acme, { ...acme, id: 'b2' }],
+    promoteQualified: async () => { asked++; return [{ id: 'q-1' }] },
+  })
+  const out = await qualify({ ...h.deps, deadline: MONDAY - 1 })
+  assert.equal(out.timedOut, true)
+  assert.equal(h.updates.length, 0, 'a row was touched after the deadline')
+  assert.equal(h.asks, 0, 'Claude was called after the deadline')
+  assert.equal(h.fetched.length, 0, 'a site was fetched after the deadline')
+  const skips = h.events.filter((e) => e.kind === 'skipped' && /time guard/.test(e.detail.reason))
+  assert.equal(skips.length, 1)
+  assert.equal(asked, 1, 'promotion was not evaluated')
+  assert.equal(out.promoted, 1)
+})
+
+test('a db error on the post-fetch stage write rotates the row via qualify_errors and merges research', async () => {
+  const h = harness({ rows: [{ ...acme, research: JSON.stringify({ keep: 'me', qualify_failures: 1 }) }] })
+  const writes = []
+  h.deps.db.updateBusiness = async (_s, id, patch) => {
+    writes.push({ id, patch })
+    if (writes.length === 1) throw new Error('connection reset') // the stage write itself
+    return []
+  }
+  const out = await qualify(h.deps)
+  assert.equal(out.errors, 1)
+  assert.equal(writes.length, 2, 'no bookkeeping write after the db error, so the row never rotates')
+  assert.ok(!('stage' in writes[1].patch), 'a sub-cap error moved the row')
+  const r = JSON.parse(writes[1].patch.research)
+  assert.equal(r.qualify_errors, 1)
+  assert.equal(r.qualify_failures, 1, 'the fetch-failure count changed')
+  assert.equal(r.keep, 'me', 'existing research was clobbered')
+  assert.ok(!('fit_score' in r), 'half-scored research was written')
+})
