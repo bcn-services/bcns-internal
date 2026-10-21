@@ -1,5 +1,6 @@
-// The end-to-end test. One business walks source -> qualify -> personalize ->
-// touch -> poll -> notify through ONE injected deps object, and every job hands
+// The end-to-end test. Businesses walk source -> qualify -> promotion -> digest
+// (the calls-only funnel), and one walks the legacy cold-email path
+// source -> qualify -> personalize -> touch -> poll -> notify, through ONE injected deps object, and every job hands
 // the next job the row the previous job actually wrote.
 //
 // Why this file exists: every other test file supplies its own `db` stub, so a
@@ -21,6 +22,7 @@ import { run as personalize } from '../jobs/personalize.mjs'
 import { run as touch } from '../jobs/touch.mjs'
 import { run as poll } from '../jobs/poll.mjs'
 import { run as notify } from '../jobs/notify.mjs'
+import { run as digest } from '../jobs/digest.mjs'
 import { createFetchPage, drainMessages } from '../jobs/run.mjs'
 import { createPlaces } from '../lib/places.mjs'
 import { GRID } from '../lib/grid.mjs'
@@ -146,23 +148,39 @@ function makeSql({ now }) {
     }
     // qualify's end-of-run promotion: a CTE read through the view followed by
     // a direct update, so it must be matched before the generic 'update
-    // businesses set' and 'from selectable_businesses' branches below.
+    // businesses set' and 'from selectable_businesses' branches below. The
+    // fake honours the phone and fit_score filters only if the query text
+    // carries them, so dropping either from lib/db.mjs is visible here.
     if (q.startsWith('with candidates as')) {
       const limit = values[0]
+      const needsPhone = q.includes("coalesce(trim(phone), '') <> ''")
+      const needsScore = q.includes("'fit_score') is not null")
       const candidates = selectable()
-        .filter((b) => b.stage === 'no_email')
-        .sort((a, b) => {
-          const rc = (r) => Number(r?.research?.review_count ?? -Infinity)
-          const rt = (r) => Number(r?.rating ?? -Infinity)
-          return rc(b) - rc(a) || rt(b) - rt(a)
-        })
+        .filter((b) => b.stage === 'qualified')
+        .filter((b) => !needsPhone || String(b.phone ?? '').trim() !== '')
+        .filter((b) => !needsScore || b.research?.fit_score != null)
+        .sort((a, b) => Number(b.research.fit_score) - Number(a.research.fit_score) || a.created_at - b.created_at)
         .slice(0, limit)
       for (const c of candidates) {
         const row = byId(c.id)
         row.stage = 'call_due'
+        row.next_touch_at = now
         row.updated_at = now
       }
       return candidates.map((c) => clone(byId(c.id)))
+    }
+    // digest's read: call_due rows no earlier digest listed.
+    if (q.includes("from selectable_businesses s where s.stage = 'call_due'")) {
+      const listed = new Set(
+        store.events.filter((e) => e.job === 'digest' && e.kind === 'digested').flatMap((e) => e.detail.ids)
+      )
+      return give(
+        selectable()
+          .filter((b) => b.stage === 'call_due' && (b.next_touch_at == null || b.next_touch_at <= now))
+          .filter((b) => !listed.has(b.id))
+          .sort((a, b) => a.updated_at - b.updated_at)
+          .slice(0, values[0])
+      )
     }
     if (q.includes('from selectable_businesses')) {
       if (q.includes("where stage = 'drafted' or (stage = 'sent'")) {
@@ -272,6 +290,13 @@ function makeSql({ now }) {
       store.events.push(row)
       return [clone(row)]
     }
+    if (q.startsWith('select 1 from events') && q.includes("job = 'digest' and kind = 'digested'")) {
+      const etDay = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d)
+      return store.events
+        .filter((e) => e.job === 'digest' && e.kind === 'digested' && etDay(e.created_at) === String(values[0]))
+        .slice(0, 1)
+        .map(() => ({ '?column?': 1 }))
+    }
     // qualify's promotedToday count — matched before the generic poll
     // dead-letter-dedupe count below, which the same substring would
     // otherwise catch.
@@ -368,6 +393,20 @@ const PLACE = {
   userRatingCount: 61,
 }
 
+const place = (id, name, host, phone) => ({
+  id: `places/${id}`,
+  displayName: { text: name },
+  formattedAddress: '1 Main St, Milford, CT 06460',
+  ...(phone && { nationalPhoneNumber: phone }),
+  websiteUri: `https://${host}`,
+  rating: 4.5,
+  userRatingCount: 10,
+})
+const CARA = place('cara', 'Cara Accounting', 'caraaccounting.example', '(203) 555-0301')
+const DARA = place('dara', 'Dara Tax', 'daratax.example', '(203) 555-0302')
+const EVE = place('eve', 'Eve Books', 'evebooks.example', '(203) 555-0303')
+const FINN = place('finn', 'Finn Law', 'finnlaw.example', null)
+
 const SECOND_PLACE = {
   id: 'places/ChIJbolt',
   displayName: { text: 'Bolt Roofing' },
@@ -378,9 +417,18 @@ const SECOND_PLACE = {
   userRatingCount: 22,
 }
 
-const HOME = (name) => `<html><body><h1>${name}</h1>
+// The four signals live in raw tags, as on a real site; a page lists the ones it
+// has. store + booking is the default, two being the gate.
+const SIGNAL_TAGS = {
+  store: '<script src="https://cdn.shopify.com/s/files/1/x/theme.js"></script>',
+  booking: '<iframe src="https://calendly.com/acme/30min"></iframe>',
+  payments: '<script src="https://js.stripe.com/v3/"></script>',
+  marketing: '<script async src="https://www.googletagmanager.com/gtag/js?id=G-1"></script>',
+}
+const HOME = (name, signals = ['store', 'booking']) => `<html><body><h1>${name}</h1>
   <p>${name} has been family run since 1998 and serves Milford, Stratford and Orange CT.</p>
   <p>We are GAF Master Elite certified and our crews do asphalt, slate and flat roofs.</p>
+  ${signals.map((k) => SIGNAL_TAGS[k]).join('\n')}
   </body></html>`
 
 const CONTACT = (email) =>
@@ -391,6 +439,12 @@ const PAGES = {
   'https://acmeroofing.example/contact': CONTACT('hello@acmeroofing.example'),
   'https://boltroofing.example': HOME('Bolt Roofing'),
   'https://boltroofing.example/contact': CONTACT('office@boltroofing.example'),
+  // The calls-only walk: Cara has three signals, Dara four, Eve one, Finn two
+  // but no phone. Nobody publishes an email: calls need none.
+  'https://caraaccounting.example': HOME('Cara Accounting', ['store', 'booking', 'payments']),
+  'https://daratax.example': HOME('Dara Tax', ['store', 'booking', 'payments', 'marketing']),
+  'https://evebooks.example': HOME('Eve Books', ['marketing']),
+  'https://finnlaw.example': HOME('Finn Law'),
 }
 
 const FACTS = [
@@ -411,8 +465,12 @@ function claudeFor(state) {
         const email = /email (\S+@\S+) and we will/.exec(prompt)?.[1] ?? null
         return JSON.stringify({
           email,
+          owner_name: null,
           facts: FACTS,
-          fit: 'good',
+          signals: { store: true, booking: true, payments: false, marketing: false },
+          headcount_band: '6-20',
+          locations: 1,
+          fit_score: 80,
           reason: 'runs a crew, tracks jobs on paper',
         })
       }
@@ -457,6 +515,7 @@ function pipeline({ places = [PLACE], allowedRecipients = [], internalRecipients
     db,
     logEvent: db.logEvent,
     now,
+    clock: () => now.getTime(), // a Monday: qualify's promotion step runs
     dryRun: false,
     uuid: () => `uuid-${++uuids}`,
     random: () => 0,
@@ -488,7 +547,6 @@ function pipeline({ places = [PLACE], allowedRecipients = [], internalRecipients
         return { ok: true, status: 200, text: async () => body }
       },
     }),
-    verify: async () => ({ status: 'ok' }),
     transport: async () => ({
       sendMail: async ({ envelope, raw }) => {
         sent.push({ from: envelope.from, to: envelope.to, raw })
@@ -536,6 +594,9 @@ function bodyOf(raw) {
 
 test('one business walks sourced -> qualified -> drafted -> sent -> replied through every job in schedule order', async () => {
   const p = pipeline()
+  // This is the cold-email path: the qualified row must stay at `qualified` for
+  // personalize, so the call-list promotion is off (the calls walk is below).
+  p.deps.callTasksPerDay = 0
 
   // --- Monday 13:00 — source, then qualify (SCHEDULES['0 11 * * 1-5']) ---
   p.sql.phase('source')
@@ -558,7 +619,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
   const qualified = await qualify(p.deps)
   assert.deepEqual(qualified, {
     qualified: 1,
-    callDue: 0,
+    lost: 0,
     skipped: 0,
     errors: 0,
     promoted: 0,
@@ -569,7 +630,8 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
   assert.equal(row.stage, 'qualified')
   assert.equal(row.email, 'hello@acmeroofing.example')
   assert.equal(row.research.facts.length, 3)
-  assert.equal(row.research.fit, 'good')
+  assert.equal(typeof row.research.fit_score, 'number')
+  assert.deepEqual(row.research.signals, { store: true, booking: true, payments: false, marketing: false })
 
   // --- personalize (see the report: it has no cron cell of its own) ---
   p.sql.phase('personalize')
@@ -582,7 +644,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
   assert.match(row.research.draft.replace(/\n/g, ' '), /I noticed Acme Roofing is family run since 1998, and that is a long run in this trade\./)
   // personalize merges into `research`; it must not clobber qualify's keys.
   assert.equal(row.research.facts.length, 3)
-  assert.equal(row.research.fit, 'good')
+  assert.equal(typeof row.research.fit_score, 'number')
 
   // --- hourly tick — touch is folded into the hourly job list (SCHEDULES['0 8-20 * * *']) ---
   // The recipient has to be on the send allow-list for a real send, so the list
@@ -655,6 +717,7 @@ test('one business walks sourced -> qualified -> drafted -> sent -> replied thro
 
 test('an opt-out reply sets suppressed_at, and no later job in the same run selects that row', async () => {
   const p = pipeline({ places: [PLACE, SECOND_PLACE] })
+  p.deps.callTasksPerDay = 0
   p.deps.allowedRecipients = ['hello@acmeroofing.example', 'office@boltroofing.example']
 
   p.sql.phase('source')
@@ -731,6 +794,7 @@ test('an opt-out reply sets suppressed_at, and no later job in the same run sele
 
 test('a mailbox spent yesterday sends again today rather than going quiet forever', async () => {
   const p = pipeline({ places: [PLACE] })
+  p.deps.callTasksPerDay = 0
   p.deps.allowedRecipients = ['hello@acmeroofing.example']
 
   // Yesterday this mailbox hit its cap. Before the rollover the counter was
@@ -756,4 +820,81 @@ test('a mailbox spent yesterday sends again today rather than going quiet foreve
   assert.equal(mb.sent_today, 1)
   assert.equal(mb.sent_on, '2026-09-07')
   assert.equal(p.events('touch', 'skipped').length, 0)
+})
+
+// The calls-only funnel. Everything below runs the real jobs and the real
+// lib/db.mjs over the fake store, so a research field renamed by one job and
+// not the next (fit_score, signals) fails here and nowhere else.
+test('calls-only: source -> qualify (signal + phone gates, score) -> top-N promotion -> digest in rank order', async () => {
+  const p = pipeline({ places: [PLACE, CARA, DARA, EVE, FINN] })
+  p.deps.callTasksPerDay = 2
+  // An hourly tick before the 12:30 digest: the only kind that promotes.
+  p.deps.clock = () => Date.UTC(2026, 8, 7, 11)
+  p.deps.notifyTo = [TEAMMATE]
+
+  // Legacy rows already sitting at `qualified`: one scored but phoneless, one
+  // with a phone but never scored. Neither is a call task.
+  const legacy = (name, phone, research) => {
+    const row = {
+      id: `legacy-${name}`, ...BUSINESS_DEFAULTS, name, phone, research, stage: 'qualified',
+      created_at: new Date('2026-08-01T00:00:00Z'), updated_at: new Date('2026-08-01T00:00:00Z'),
+    }
+    p.store.businesses.push(row)
+    return row
+  }
+  legacy('Gus Insurance', null, { fit_score: 99 })
+  legacy('Hal Realty', '(203) 555-0999', { fit: 'good' })
+
+  p.sql.phase('source')
+  assert.equal((await source(p.deps)).inserted, 5)
+
+  p.sql.phase('qualify')
+  const out = await qualify(p.deps)
+  assert.deepEqual(out, { qualified: 3, lost: 2, skipped: 0, errors: 0, promoted: 2, timedOut: false })
+
+  // Gate: one signal -> unfit. Gate: no phone -> no_phone, though it has two signals.
+  assert.equal(p.row('Eve Books').stage, 'lost')
+  assert.equal(p.row('Eve Books').research.lost_reason, 'unfit')
+  assert.equal(p.row('Finn Law').stage, 'lost')
+  assert.equal(p.row('Finn Law').research.lost_reason, 'no_phone')
+  assert.ok(!p.store.businesses.some((b) => b.stage === 'no_email'), 'new code wrote no_email')
+
+  // Score: signals dominate (4 > 3 > 2), written as a number, no email invented.
+  const scores = ['Dara Tax', 'Cara Accounting', 'Acme Roofing'].map((n) => p.row(n).research.fit_score)
+  assert.deepEqual(scores, [95.3, 75.3, 55.3]) // CT: +0.3 geography tiebreak
+  assert.equal(p.row('Dara Tax').email, null)
+  assert.equal(p.row('Dara Tax').research.reason, 'runs a crew, tracks jobs on paper')
+
+  // Promotion: the top 2 by score go on the list; the third waits in the pool.
+  assert.equal(p.row('Dara Tax').stage, 'call_due')
+  assert.equal(p.row('Cara Accounting').stage, 'call_due')
+  assert.equal(p.row('Acme Roofing').stage, 'qualified')
+  assert.equal(p.row('Gus Insurance').stage, 'qualified', 'a phoneless row took a call slot')
+  assert.equal(p.row('Hal Realty').stage, 'qualified', 'an unscored row took a call slot')
+  assert.equal(p.events('qualify', 'promoted').length, 2)
+
+  // The day's quota is spent: a second run the same day promotes nothing more.
+  p.sql.phase('qualify-2')
+  assert.equal((await qualify(p.deps)).promoted, 0)
+  assert.equal(p.row('Acme Roofing').stage, 'qualified')
+
+  // Digest: lists exactly the promoted rows, best fit first, score and reason shown.
+  p.sql.phase('digest')
+  const sentBefore = p.sent.length
+  const digested = await digest(p.deps)
+  assert.deepEqual(digested, { sent: 1, listed: 2 })
+  const mail = p.sent[sentBefore]
+  assert.equal(mail.to, TEAMMATE)
+  const body = bodyOf(mail.raw)
+  assert.match(body, /1\. Dara Tax — \(203\) 555-0302/)
+  assert.match(body, /2\. Cara Accounting — \(203\) 555-0301/)
+  assert.match(body, /Fit: 95\.3 — runs a crew, tracks jobs on paper/)
+  assert.match(body, /Fit: 75\.3 — /)
+  for (const absent of ['Acme Roofing', 'Eve Books', 'Finn Law', 'Gus Insurance', 'Hal Realty']) {
+    assert.ok(!body.includes(absent), `${absent} is on the call list`)
+  }
+
+  // Listed once: the next digest has nothing new.
+  const again = await digest(p.deps)
+  assert.equal(again.listed, 0)
 })

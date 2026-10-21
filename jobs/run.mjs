@@ -14,17 +14,25 @@ export const SCHEDULES = {
   // run on demand via the `job` input. A module that is not built yet is
   // skipped by main(), not a failed tick. Every day, not just weekdays:
   // replies land on weekends too.
-  '0 8-20 * * *': ['poll', 'pitch', 'quote', 'onboard', 'notify'],
-  // Weekdays at 11:00: source finds businesses, qualify reads the ones it
-  // just wrote (and promotes the day's call list from the no_email pool).
-  // Order is the contract, so it lives in this list. heartbeat runs last: it
-  // writes the dated file clock.yml commits so GitHub never disables the
+  // qualify rides this tick, after notify, because one run a day cannot read
+  // enough sites to fill 50 call tasks a day (arithmetic in the PR body). It is
+  // the ONLY qualify schedule: the 11:00 tick below runs source, and this
+  // tick's 11:00 and 12:00 runs read its new rows (a second qualify on another
+  // cron would be a different concurrency group and overlap this one on the
+  // same backlog). It is last so a long qualify never delays the inbox; main()
+  // hands it the time left in the process. Its promotion step runs only on
+  // weekday ticks before the 12:30 digest.
+  '0 8-20 * * *': ['poll', 'pitch', 'quote', 'onboard', 'notify', 'qualify'],
+  // Weekdays at 11:00: source finds businesses; the hourly tick above qualifies
+  // them. Order is the contract, so it lives in this list. heartbeat runs last:
+  // it writes the dated file clock.yml commits so GitHub never disables the
   // schedules, and a source failure still fails the tick. Daily on weekdays
-  // now, not a Monday-only tick — the daily source/qualify volume needs more
-  // than one run a week to keep up with the call-task quota.
-  '0 11 * * 1-5': ['source', 'qualify', 'heartbeat'],
-  // An hour and a half after source+qualify: the day's call list goes to
-  // Brandon once, after qualify has promoted that morning's call_due rows.
+  // now, not a Monday-only tick — the call-task quota needs more than one
+  // source run a week.
+  '0 11 * * 1-5': ['source', 'heartbeat'],
+  // The day's call list goes to Brandon once, after the 08-12 hourly ticks
+  // have promoted that morning's call_due rows (qualify stops promoting at
+  // 12:30 UTC, this cron's own minute).
   // (This cron used to run personalize; drafting is off with cold email.)
   '30 12 * * 1-5': ['digest'],
 }
@@ -186,30 +194,6 @@ export async function buildDeps(env = process.env, exists = existsSync) {
     deps.claude = claudeClient()
   }
 
-  // Verification needs an envelope sender to put in MAIL FROM; without one
-  // there is no probe, and qualify simply trusts what it found.
-  if (env.MAIL_FROM) {
-    const [{ verifyEmail, smtpSession }, { resolveMx }, net] = await Promise.all([
-      import('../lib/verify.mjs'),
-      import('node:dns/promises'),
-      import('node:net'),
-    ])
-    deps.verify = (address) =>
-      verifyEmail(address, {
-        resolveMx,
-        from: env.MAIL_FROM,
-        connect: (host) =>
-          new Promise((resolve, reject) => {
-            const socket = net.connect(25, host)
-            // Runners that block port 25 hang rather than refuse; don't let
-            // one row eat minutes of qualify's time budget.
-            socket.setTimeout(10000, () => socket.destroy(new Error('smtp connect timeout')))
-            socket.once('error', reject)
-            socket.once('connect', () => resolve(smtpSession(socket)))
-          }),
-      })
-  }
-
   // Two lists, deliberately not one. `allowedRecipients` is the hard gate the
   // touch job applies to every PROSPECT recipient, dry run or not.
   // `internalRecipients` is the set of internal humans poll/notify forward to,
@@ -245,7 +229,7 @@ export async function buildDeps(env = process.env, exists = existsSync) {
   if (env.JITTER_WINDOW_MS) deps.jitterWindowMs = Number(env.JITTER_WINDOW_MS)
   if (env.SKILL_JOB_LIMIT) deps.skillLimit = Number(env.SKILL_JOB_LIMIT)
   // How many grid cells source works per tick, how many call tasks qualify's
-  // no_email promotion feeds the funnel per day, and the UTC hour window
+  // promotion feeds the funnel per day, and the UTC hour window
   // touch is allowed to send in ('13-20' -> {start:13, end:20}).
   if (env.SOURCE_CELLS_PER_RUN) deps.cellsPerRun = Number(env.SOURCE_CELLS_PER_RUN)
   if (env.CALL_TASKS_PER_DAY) deps.callTasksPerDay = Number(env.CALL_TASKS_PER_DAY)
@@ -579,7 +563,17 @@ export function createFetchPage({
   }
 }
 
+// clock.yml kills a job at timeout-minutes: 30, and ~3 minutes of setup
+// (install, CLI smoke) precede node. 22 minutes from the start of main() leaves
+// ~5 minutes for the one row a bounded job can overrun by (the last row starts
+// at deadline-epsilon and can take 4 x 10 s of fetch plus the 120 s Claude
+// timeout, ~2.7 minutes), its promotion step and the db close. Not the
+// workflow's own limit: this is the point after which a long job should stop
+// taking on new work.
+export const PROCESS_BUDGET_MS = 22 * 60 * 1000
+
 export async function main(env = process.env, load = (n) => import(`./${n}.mjs`)) {
+  const startedAt = Date.now()
   const names = jobNames({ schedule: env.SCHEDULE, job: env.JOB })
 
   // A job below the stop marker is not built yet. That is not a failure: the
@@ -600,7 +594,12 @@ export async function main(env = process.env, load = (n) => import(`./${n}.mjs`)
         continue
       }
       if (typeof mod.run !== 'function') throw new Error(`job ${name} exports no run()`)
-      deps ??= await buildDeps(env)
+      if (!deps) {
+        deps = await buildDeps(env)
+        // Stamped once, so every job on the tick measures against the same
+        // wall: qualify reads `deadline` to bound itself by the time left.
+        deps.deadline = startedAt + PROCESS_BUDGET_MS
+      }
       results.push(await mod.run(deps))
     }
   } finally {

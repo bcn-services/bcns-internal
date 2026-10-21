@@ -23,11 +23,12 @@ reads the inbox and reports — so there is no reputation cost to covering
 weekends, and a reply doesn't sit unread until Monday.
 
 Cold email is off, so **`touch` and `personalize` are on no schedule**: the
-hourly tick's job list is `['poll', 'pitch', 'quote', 'onboard', 'notify']`
+hourly tick's job list is `['poll', 'pitch', 'quote', 'onboard', 'notify', 'qualify']`
 and neither module appears in any `SCHEDULES` value (`tests/clock.test.mjs`
 asserts it). Both stay in the repo and run on demand with the `job` input
-(`job=touch`, `job=personalize`). `source`/`qualify`/`heartbeat` run weekday
-mornings at `0 11 * * 1-5`; `digest` — the one daily call list to Brandon, see
+(`job=touch`, `job=personalize`). `source`/`heartbeat` run weekday
+mornings at `0 11 * * 1-5` (`qualify` rides the hourly tick, last, and promotes
+only on weekday ticks before the digest); `digest` — the one daily call list to Brandon, see
 `docs/NOTIFICATIONS.md` — runs weekday midday at `30 12 * * 1-5`. That cron
 string is unchanged (it used to run `personalize`), so the existing Cloud
 Scheduler job needs no edit; its name, `clock-personalize`, is now just a label.
@@ -58,7 +59,7 @@ Scheduler job needs no edit; its name, `clock-personalize`, is now just a label.
 ## Migrating the live scheduler jobs to the current SCHEDULES
 
 `SCHEDULES` (`jobs/run.mjs`) now carries `'0 8-20 * * *'` (poll, pitch,
-quote, onboard, notify), `'0 11 * * 1-5'` (source, qualify, heartbeat) and
+quote, onboard, notify, qualify), `'0 11 * * 1-5'` (source, heartbeat) and
 `'30 12 * * 1-5'` (digest) — touch's old `clock-touch` cell is gone, and
 source/heartbeat moved off `'0 13 * * 1'` and personalize off
 `'30 13 * * 1-5'`. Every live Cloud Scheduler job must match a key in
