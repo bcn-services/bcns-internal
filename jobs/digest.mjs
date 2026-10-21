@@ -49,7 +49,8 @@ export function sortRows(rows) {
 function entry({ row, research }, i) {
   const fit = score(research) ?? research.fit
   const where = [row.town, row.state].filter(Boolean).join(', ')
-  const slug = row.os_slug || research.pitch_path
+  // os_slug is claimed before the pitch runs; pitch_path is written only on success
+  const slug = research.pitch_path ? (row.os_slug || research.pitch_path) : undefined
   return [
     `${i + 1}. ${row.name}${row.phone ? ` — ${row.phone}` : ''}`,
     ...[

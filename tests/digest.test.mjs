@@ -23,7 +23,7 @@ function biz(over = {}) {
     trade: 'roofing',
     stage: 'call_due',
     os_slug: 'acme-roofing-danbury',
-    research: JSON.stringify({ fit: 'good', reason: 'paper job tracking', facts: ['no online booking'] }),
+    research: JSON.stringify({ fit: 'good', reason: 'paper job tracking', facts: ['no online booking'], pitch_path: 'clients/acme-roofing-danbury/pitch' }),
     ...over,
   }
 }
@@ -87,6 +87,11 @@ test('each row carries name, phone, where, trade, fit and reason, facts, website
     'Pitch folder: acme-roofing-danbury',
   ]) assert.ok(text.includes(want), `missing ${want}\n${text}`)
   assert.ok(!/undefined|null|\[object/.test(text))
+})
+
+test('a slug claimed before the pitch succeeded is not shown as a pitch folder', () => {
+  const unbuilt = digestMail([biz({ research: JSON.stringify({ fit: 'good', reason: 'r' }) })], 'd').text
+  assert.ok(!unbuilt.includes('Pitch folder'), unbuilt)
 })
 
 test('a numeric fit_score shows and wins over the qualify label; a bare row prints no empty lines', () => {
