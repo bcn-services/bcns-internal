@@ -203,6 +203,14 @@ test('main stamps one process deadline into deps, inside clock.yml\'s 30-minute 
   assert.ok(PROCESS_BUDGET_MS <= 25 * 60_000 && PROCESS_BUDGET_MS > 20 * 60_000)
 })
 
+// 22, not 24: the last row can start at deadline-epsilon and take 4 x 10 s of
+// fetch plus the 120 s Claude timeout (~2.7 min), then promotion and the db
+// close, after ~3 min of setup, all inside clock.yml's 30. 24 leaves ~10 s.
+test('the process budget is exactly 22 minutes', async () => {
+  const { PROCESS_BUDGET_MS } = await import('../jobs/run.mjs')
+  assert.equal(PROCESS_BUDGET_MS, 22 * 60_000)
+})
+
 test('buildDeps hands qualify fetchPage always and claude only on the OAuth token', async () => {
   const bare = await buildDeps({})
   assert.equal(typeof bare.fetchPage, 'function')
