@@ -22,13 +22,16 @@ down from every 20 minutes on weekdays only. It never sends outreach — it
 reads the inbox and reports — so there is no reputation cost to covering
 weekends, and a reply doesn't sit unread until Monday.
 
-Touch has no cron cell of its own any more — it is folded into that same
-hourly tick's job list (`['poll', 'touch', 'pitch', 'quote', 'onboard',
-'notify']`), so `clock-touch` is retired. Touch's own weekday/send-window gate
-(`jobs/touch.mjs`, 13:00–20:00 UTC) and per-tick quota math are what keep it
-from sending on the weekend ticks or outside business hours — the cron no
-longer does that job. `source`/`qualify`/`heartbeat` run weekday mornings at
-`0 11 * * 1-5`; `personalize` runs weekday midday at `30 12 * * 1-5`.
+Cold email is off, so **`touch` and `personalize` are on no schedule**: the
+hourly tick's job list is `['poll', 'pitch', 'quote', 'onboard', 'notify', 'qualify']`
+and neither module appears in any `SCHEDULES` value (`tests/clock.test.mjs`
+asserts it). Both stay in the repo and run on demand with the `job` input
+(`job=touch`, `job=personalize`). `source`/`heartbeat` run weekday
+mornings at `0 11 * * 1-5` (`qualify` rides the hourly tick, last, and promotes
+only on weekday ticks before the digest); `digest` — the one daily call list to Brandon, see
+`docs/NOTIFICATIONS.md` — runs weekday midday at `30 12 * * 1-5`. That cron
+string is unchanged (it used to run `personalize`), so the existing Cloud
+Scheduler job needs no edit; its name, `clock-personalize`, is now just a label.
 
 ## One-time setup
 
@@ -55,9 +58,9 @@ longer does that job. `source`/`qualify`/`heartbeat` run weekday mornings at
 
 ## Migrating the live scheduler jobs to the current SCHEDULES
 
-`SCHEDULES` (`jobs/run.mjs`) now carries `'0 8-20 * * *'` (poll, touch, pitch,
-quote, onboard, notify), `'0 11 * * 1-5'` (source, qualify, heartbeat) and
-`'30 12 * * 1-5'` (personalize) — touch's old `clock-touch` cell is gone, and
+`SCHEDULES` (`jobs/run.mjs`) now carries `'0 8-20 * * *'` (poll, pitch,
+quote, onboard, notify, qualify), `'0 11 * * 1-5'` (source, heartbeat) and
+`'30 12 * * 1-5'` (digest) — touch's old `clock-touch` cell is gone, and
 source/heartbeat moved off `'0 13 * * 1'` and personalize off
 `'30 13 * * 1-5'`. Every live Cloud Scheduler job must match a key in
 `SCHEDULES` exactly, or `jobNames()` throws and that tick goes dark. Run these

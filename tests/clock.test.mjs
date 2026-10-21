@@ -52,15 +52,27 @@ test('clock.yml references no secret that does not yet exist', () => {
 test('the dispatcher maps each cron to its job', () => {
   assert.equal(jobName({ schedule: '0 8-20 * * *' }), 'poll')
   assert.equal(jobName({ schedule: '0 11 * * 1-5' }), 'source')
-  assert.equal(jobName({ schedule: '30 12 * * 1-5' }), 'personalize')
+  assert.equal(jobName({ schedule: '30 12 * * 1-5' }), 'digest')
   assert.equal(Object.keys(SCHEDULES).length, 3)
-  // The poll tick is a chain: poll reads the inbox, touch/pitch/quote/onboard
+  // The poll tick is a chain: poll reads the inbox, pitch/quote/onboard
   // work what it wrote, and notify reports on what they left behind — in that
-  // order. quote and onboard need not exist yet; main() skips a missing module.
+  // order, then qualify (after notify, so a long run never delays the inbox).
+  // touch is not on it: cold email is off. quote and onboard need not exist yet; main() skips a missing module.
   // Every day of the week: replies land on weekends too, and this tick never
   // sends outside touch's own send window.
-  const poll = ['poll', 'touch', 'pitch', 'quote', 'onboard', 'notify']
+  const poll = ['poll', 'pitch', 'quote', 'onboard', 'notify', 'qualify']
   assert.deepEqual(jobNames({ schedule: '0 8-20 * * *' }), poll)
+})
+
+test('cold email is off: no schedule runs touch or personalize, but both stay runnable by name', () => {
+  for (const [cron, jobs] of Object.entries(SCHEDULES)) {
+    const names = [jobs].flat()
+    assert.ok(!names.includes('touch'), `${cron} still runs touch`)
+    assert.ok(!names.includes('personalize'), `${cron} still runs personalize`)
+  }
+  assert.deepEqual(jobNames({ schedule: '0 8-20 * * *', job: 'touch' }), ['touch'])
+  assert.deepEqual(jobNames({ job: 'personalize' }), ['personalize'])
+  assert.deepEqual(jobNames({ job: 'digest' }), ['digest'])
 })
 
 test('a dispatch input overrides the schedule, and an unknown name throws', () => {
@@ -153,11 +165,14 @@ test('an unrelated import error is never mistaken for an unbuilt job', async () 
   )
 })
 
-test('the weekday cron runs source then qualify, in that order', () => {
-  assert.deepEqual(jobNames({ schedule: '0 11 * * 1-5' }), ['source', 'qualify', 'heartbeat'])
-  // 12:30 is well after source+qualify and well before the hourly touch
-  // ticks, so a row qualified that morning is drafted before touch looks.
-  assert.deepEqual(jobNames({ schedule: '30 12 * * 1-5' }), ['personalize'])
+test('the weekday cron runs source then heartbeat; qualify lives only on the hourly tick', () => {
+  assert.deepEqual(jobNames({ schedule: '0 11 * * 1-5' }), ['source', 'heartbeat'])
+  // A second qualify schedule would overlap the hourly 11:00 run: concurrency
+  // groups are keyed per schedule string, so the two would work one backlog.
+  const withQualify = Object.entries(SCHEDULES).filter(([, jobs]) => [jobs].flat().includes('qualify'))
+  assert.deepEqual(withQualify.map(([cron]) => cron), ['0 8-20 * * *'])
+  // 12:30 is after the 08-12 hourly ticks, so the digest lists that morning's promotions.
+  assert.deepEqual(jobNames({ schedule: '30 12 * * 1-5' }), ['digest'])
   assert.deepEqual(jobNames({ schedule: '0 11 * * 1-5', job: 'heartbeat' }), ['heartbeat'])
   assert.throws(() => jobNames({ schedule: 'not-a-cron' }), /no job for schedule/)
 })
@@ -168,20 +183,44 @@ test('main runs every job of a tick in order, on one deps object', async () => {
   const out = await main({ SCHEDULE: '0 11 * * 1-5' }, async (name) => ({
     run: async (deps) => { ran.push([name, deps]); return name },
   }))
-  assert.deepEqual(ran.map((r) => r[0]), ['source', 'qualify', 'heartbeat'])
+  assert.deepEqual(ran.map((r) => r[0]), ['source', 'heartbeat'])
   assert.equal(ran[0][1], ran[1][1], 'the two jobs got different deps objects')
-  assert.deepEqual(out, ['source', 'qualify', 'heartbeat'])
+  assert.deepEqual(out, ['source', 'heartbeat'])
+})
+
+test('main stamps one process deadline into deps, inside clock.yml\'s 30-minute timeout', async () => {
+  const { main, PROCESS_BUDGET_MS } = await import('../jobs/run.mjs')
+  const seen = []
+  const before = Date.now()
+  await main({ SCHEDULE: '0 8-20 * * *' }, async (name) => ({
+    run: async (deps) => { seen.push(deps.deadline); return name },
+  }))
+  const after = Date.now()
+  assert.equal(seen.length, 6)
+  assert.ok(seen.every((d) => d === seen[0]), 'the deadline moved between jobs')
+  assert.ok(seen[0] >= before + PROCESS_BUDGET_MS && seen[0] <= after + PROCESS_BUDGET_MS)
+  // ~3 minutes of setup precede node, and one row can overrun: leave real margin.
+  assert.ok(PROCESS_BUDGET_MS <= 25 * 60_000 && PROCESS_BUDGET_MS > 20 * 60_000)
+})
+
+// 22, not 24: the last row can start at deadline-epsilon and take 4 x 10 s of
+// fetch plus the 120 s Claude timeout (~2.7 min), then promotion and the db
+// close, after ~3 min of setup, all inside clock.yml's 30. 24 leaves ~10 s.
+test('the process budget is exactly 22 minutes', async () => {
+  const { PROCESS_BUDGET_MS } = await import('../jobs/run.mjs')
+  assert.equal(PROCESS_BUDGET_MS, 22 * 60_000)
 })
 
 test('buildDeps hands qualify fetchPage always and claude only on the OAuth token', async () => {
   const bare = await buildDeps({})
   assert.equal(typeof bare.fetchPage, 'function')
   assert.equal('claude' in bare, false)
-  assert.equal('verify' in bare, false)
 
+  // The SMTP verification probe is gone from qualify: even with MAIL_FROM set
+  // nothing wires a `verify` dep.
   const full = await buildDeps({ CLAUDE_CODE_OAUTH_TOKEN: 'oat_x', MAIL_FROM: 'a@b.test' })
   assert.equal(typeof full.claude.ask, 'function')
-  assert.equal(typeof full.verify, 'function')
+  assert.equal('verify' in full, false)
 })
 
 test('the send list and the internal list are two independent variables', async () => {

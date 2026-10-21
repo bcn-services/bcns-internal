@@ -48,7 +48,7 @@ the whole suite testable without a network.
 | job | schedule | what it does |
 |---|---|---|
 | `source` | Mon 13:00 | Picks one grid cell, searches Places, inserts unknown businesses as `sourced`. Reads the Google budget first and refuses to spend if it can't. |
-| `qualify` | Mon 13:00, after `source` | Fetches the site, one Claude call, extracts a **published** email plus facts and a fit judgement. Verifies the address over SMTP `RCPT TO` without sending. → `qualified` |
+| `qualify` | hourly 08–20 UTC, every day, after `notify` (bounded by the process deadline); promotes weekdays before the 12:30 digest | Fetches the site, fingerprints four fit signals from the raw HTML (`lib/signals.mjs`), and passes only rows with ≥2 signals **and** a phone: one Claude call extracts facts, headcount, locations and a **published** email (stored unverified, never constructed), and code writes `research.fit_score`. → `qualified`, else `lost`. Then promotes the day's top 50 by score → `call_due` |
 | `personalize` | weekdays 13:30 | One Claude call producing the single generated sentence the template has a hole for. Validates the rendered draft; a failure leaves the row at `qualified` to retry. → `drafted` |
 | `touch` | weekdays 14:00 | The sender. First touches out of the `drafted` buffer, then bumps. Three touches max, then the row becomes `call_due`. → `sent` |
 | `poll` | every 20 min, 8–20 weekdays | Drains the `pipeline` IMAP label. Turns each reply into a suppression, a stage move, or a forward to a human. |

@@ -232,9 +232,9 @@ test('no ~/os clone is a skipped event, never a throw', async () => {
 // --- qualify stores what pitch reads back ----------------------------------
 
 test('qualify persists the page text it read, capped, alongside the facts', async () => {
-  // An email in the text so the pre-Claude EMAIL_RE scan doesn't short-circuit
-  // straight to `no_email` — this test is about page_text capping, not the
-  // no-email path (see the qualify.test.mjs no-email-text tests for that).
+  // Two code-detected signals (store + booking) clear qualify's gate; without
+  // them the row would be parked before the model reads it.
+  const tags = '<script src="https://cdn.shopify.com/a.js"></script><iframe src="https://calendly.com/a"></iframe>'
   const long = 'Acme Roofing. hello@acme.example ' + 'x'.repeat(60_000)
   const updates = []
   let asked = ''
@@ -242,16 +242,16 @@ test('qualify persists the page text it read, capped, alongside the facts', asyn
     sql: {},
     db: {
       logEvent: () => {},
-      sourcedBacklog: async () => [{ id: 'b1', name: 'Acme', domain: 'acme.example' }],
+      sourcedBacklog: async () => [{ id: 'b1', name: 'Acme', domain: 'acme.example', phone: '555-0100' }],
       updateBusiness: async (_s, id, patch) => (updates.push(patch), []),
       promotedToday: async () => [{ count: 0 }],
-      promoteNoEmail: async () => [],
+      promoteQualified: async () => [],
     },
-    fetchPage: async (url) => (url.endsWith('.example') ? `<p>${long}</p>` : ''),
+    fetchPage: async (url) => (url.endsWith('.example') ? `${tags}<p>${long}</p>` : ''),
     claude: {
       ask: async (prompt) => {
         asked = prompt
-        return JSON.stringify({ email: null, facts: ['f1'], fit: 'good', reason: 'r' })
+        return JSON.stringify({ email: null, facts: ['f1'], fit_score: 70, reason: 'r' })
       },
     },
   }
@@ -264,7 +264,7 @@ test('qualify persists the page text it read, capped, alongside the facts', asyn
   assert.match(research.page_text, /^Acme Roofing\./)
   // The keys the rest of the pipeline reads are untouched.
   assert.deepEqual(research.facts, ['f1'])
-  assert.equal(research.fit, 'good')
+  assert.equal(typeof research.fit_score, 'number')
   assert.equal(research.reason, 'r')
 })
 

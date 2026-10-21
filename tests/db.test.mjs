@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   assertSelectable, dueBusinesses, businessByEmail, businessByPlaceId,
   qualifiedBacklog, sourcedBacklog, suppress, logEvent, recordThread,
-  activeMailboxes, claimMailboxSlot, promoteNoEmail,
+  activeMailboxes, claimMailboxSlot, promoteQualified,
 } from '../lib/db.mjs'
 
 // A postgres.js-shaped tagged-template fake. Records the static text of every
@@ -29,6 +29,7 @@ const READERS = [
   ['businessByPlaceId', (sql) => businessByPlaceId(sql, 'place-1')],
   ['qualifiedBacklog', (sql) => qualifiedBacklog(sql)],
   ['sourcedBacklog', (sql) => sourcedBacklog(sql)],
+  ['promoteQualified', (sql) => promoteQualified(sql)],
 ]
 
 test('every read helper goes through selectable_businesses', async () => {
@@ -91,16 +92,33 @@ test('suppress twice leaves the original timestamp unchanged', async () => {
   assert.deepEqual(second, [], 'a second suppress should update no row')
 })
 
-// Best leads (most reviews, then highest rating) must be promoted first —
-// an ascending sort would call the worst-rated no_email rows first.
-test('promoteNoEmail orders candidates by review_count desc then rating desc', async () => {
+// The best fit must be promoted first — an ascending sort would call the
+// worst-scored qualified rows first. The score is numeric, so it is cast: a
+// text sort would put 9 above 80.
+test('promoteQualified orders the qualified pool by fit_score desc, numerically', async () => {
   const sql = fakeClient()
-  await promoteNoEmail(sql, { limit: 5 })
+  await promoteQualified(sql, { limit: 5 })
   const { text } = sql.calls[0]
-  assert.match(text, /'review_count'\)::numeric desc nulls last/i)
-  assert.match(text, /'rating'\)::numeric desc nulls last/i)
-  // A fresh next_touch_at is what makes notify send the call task.
+  assert.match(text, /where stage = 'qualified'/i)
+  assert.match(text, /'fit_score'\)::numeric desc/i)
   assert.match(text, /next_touch_at = now\(\)/i)
+  assert.match(text, /set stage = 'call_due'/i)
+})
+
+// A failed row is touched (updated_at bumps) so it rotates to the back instead
+// of blocking the head of the queue forever.
+test('sourcedBacklog orders by updated_at so failed rows rotate to the back', async () => {
+  const sql = fakeClient()
+  await sourcedBacklog(sql)
+  assert.match(sql.calls[0].text, /order by updated_at asc/i)
+})
+
+// A phoneless row has nothing to dial; promoting it burns a daily slot.
+test('promoteQualified never promotes a row without a phone number or a score', async () => {
+  const sql = fakeClient()
+  await promoteQualified(sql, { limit: 5 })
+  assert.match(sql.calls[0].text, /stage = 'qualified' and coalesce\(trim\(phone\), ''\) <> ''/i)
+  assert.match(sql.calls[0].text, /'fit_score'\) is not null/i)
 })
 
 test('suppress never writes null', async () => {

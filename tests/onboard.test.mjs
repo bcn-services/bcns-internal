@@ -441,7 +441,6 @@ test('the onboarded body names the checklist and the request email', () => {
 test('the template lookup routes every stage to its own body', () => {
   assert.deepEqual(Object.keys(TEMPLATES), NOTIFY_STAGES)
   const row = { id: 'z', name: 'Acme Roofing', stage: 'x', research: null }
-  assert.match(TEMPLATES.call_due(row).subject, /^\[pipeline\] call Acme Roofing/)
   assert.match(TEMPLATES.quoting(row).subject, /^\[pipeline\] quote Acme Roofing$/)
   assert.match(TEMPLATES.quoted(row).subject, /^\[pipeline\] quote ready for Acme Roofing$/)
   assert.match(TEMPLATES.onboarded(row).subject, /^Signed: Acme Roofing/)

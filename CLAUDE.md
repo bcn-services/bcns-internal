@@ -29,6 +29,10 @@ When they disagree, LANE.md wins.
 - **Reads go through `selectable_businesses`, never `businesses`.** The view
   filters out suppressed rows; it is the opt-out boundary the whole system's
   safety rests on. `lib/db.mjs` enforces this with `assertSelectable`.
+- **Stages in the calls-only funnel.** `qualified` = the fit pool (≥2 code-detected
+  signals + a phone, scored in `research.fit_score`); `call_due` = on Brandon's
+  list (qualify promotes the top 50 a day); `lost` = unfit / no phone / dead site
+  (`research.lost_reason`); `no_email` = legacy, no longer written.
 - **Never construct an email address from a domain.** An unverified guess is a
   bounce, and bounces destroy sending reputation.
 - **Every job writes at least one `events` row** — job, kind, detail JSON. A job
