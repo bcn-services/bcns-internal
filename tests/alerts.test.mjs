@@ -97,6 +97,26 @@ test('uptimerobot: UP mail is resolved and ignorable by title', () => {
   assert.equal(parsed.fingerprintSeed, 'uptimerobot:bcn-services.com')
 })
 
+test('sentry: an uptime "Downtime detected for <url>" alert routes to the client by host', () => {
+  // Sentry uptime alerts sit under a generic SDK project and name the site only
+  // in the title, so with no host the outage fell to the ALERT_REPO fallback.
+  const clients = [{ name: 'L2 Detailz', github: 'bcn-services/bcns-client-l2detailz', site: 'https://l2details.com', status: 'active' }]
+  const parsed = parseAlert({
+    from: 'alerts@sentry.io',
+    subject: '[Sentry] [javascript-nextjs] JAVASCRIPT-NEXTJS-4 - Downtime detected for https://l2details.com',
+    text: 'Failure reason timeout - Request timed out\nhttps://bcns.sentry.io/issues/7810520468/',
+  })
+
+  assert.equal(parsed.refs.project, 'javascript-nextjs')
+  assert.equal(parsed.refs.host, 'l2details.com')
+  assert.equal(parsed.fingerprintSeed, 'sentry:7810520468')
+  assert.equal(
+    resolveRepo(parsed, { clients, map: {}, fallback: 'bcn-services/bcns-internal' }),
+    'bcn-services/bcns-client-l2detailz',
+  )
+  assert.equal(resolveRepo(parsed, { map: { 'l2details.com': 'o/l2' }, fallback: 'bcn-services/bcns-internal' }), 'o/l2')
+})
+
 test('uptimerobot: a subject with no URL in parens still yields a host and a repo', () => {
   // UptimeRobot's current template sends the monitor's friendly name alone,
   // with no `( url )` suffix. Unparsed, `refs` came back empty: the outage
