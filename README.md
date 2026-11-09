@@ -56,6 +56,7 @@ the whole suite testable without a network.
 | `quote` | every 20 min, after `pitch` | A `quoting` row with a teammate's `notes` reply gets `/quote`. → `quoted` |
 | `onboard` | every 20 min, after `quote` | A signed `won` row gets `/intake`. → `onboarded` |
 | `notify` | every 20 min, last | Tells the internal humans what the tick left behind. Writes no business row, ever. |
+| `digest` | weekdays 12:30 | One mail to `NOTIFY_TO` listing the day's `call_due` rows, best fit first; then appends them to the Cold Call Tracker's `Leads` tab, deduped on `place_id` (see `docs/NOTIFICATIONS.md`). Writes no business row. |
 | `heartbeat` | with the Monday run | Writes a dated file under `outputs/heartbeat` and commits it, so GitHub doesn't disable the schedules after 60 days of inactivity. |
 | `authcheck` | manual dispatch | Proves the keyless GCP token exchange worked and reports whether the `~/os` clone landed. Calls no Google API. |
 
@@ -125,6 +126,7 @@ writes its own `skipped` event — never a crash.
 |---|---|
 | `DATABASE_URL` | `sql`, `db`, `logEvent`, the grid readers |
 | `GCP_PROJECT` + a minted OIDC token | `places`, `readBudget` |
+| `BCNS_SHEET` (repo variable) + a minted OIDC token | `sheet` (digest's Leads-tab append) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `claude` (the CLI, billed to the subscription — there is no API-key path). Mint it with `claude setup-token`, never by copying the local keychain token: that one is revoked the next time the Mac's own `claude` refreshes its session, which killed the runner twice on 2026-09-05 |
 | `MAIL_FROM` | the address-verification probe |
 | `SMTP_PASS` | the outbound transport |

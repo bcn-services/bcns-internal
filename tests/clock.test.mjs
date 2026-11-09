@@ -314,3 +314,11 @@ test('buildDeps injects a voice rules reader only when OS_DIR is set', async () 
   assert.equal(typeof cloned.readVoiceRules, 'function')
   assert.equal(await cloned.readVoiceRules(), 'no em dashes\n')
 })
+
+test('buildDeps hands digest a sheet only with both a Google token and BCNS_SHEET', async () => {
+  assert.equal((await buildDeps({ GOOGLE_OAUTH_ACCESS_TOKEN: 'ya29.x' })).sheet, undefined)
+  assert.equal((await buildDeps({ BCNS_SHEET: 'S' })).sheet, undefined)
+  const deps = await buildDeps({ GOOGLE_OAUTH_ACCESS_TOKEN: 'ya29.x', BCNS_SHEET: 'S' })
+  assert.equal(typeof deps.sheet?.placeIds, 'function')
+  assert.equal(typeof deps.sheet?.append, 'function')
+})

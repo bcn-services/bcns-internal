@@ -148,6 +148,16 @@ nothing; so does a send that failed for any `NOTIFY_TO` address, which writes an
 `error` per failure and no marker). Rows the old per-lead mail
 already covered are excluded, so the first live digest is not the backlog.
 
+After a real `digested` marker (never on `would_digest` or a failed send) the
+same rows are appended to the Cold Call Tracker's `Leads` tab (`lib/sheet.mjs`,
+Sheets REST, `RAW` values), deduped on `place_id` against column A, and logged
+as `sheet_appended {count, skipped}`. Auth is the clock's keyless token
+(`spreadsheets` scope); the sheet is shared with `GCP_SERVICE_ACCOUNT` as an
+editor, and its id is the repo variable `BCNS_SHEET`. Unset → `sheet_skipped`.
+Any error → `sheet_failed`: the mail already went and the marker stands, so
+those ids are not retried — backfill them by hand. This replaced the Mac's
+launchd `/leads pull`.
+
 `NOTIFY_TO` (comma-separated) is the digest's only recipient: unset, the digest
 writes an `error` event and sends nothing — it never falls back to
 `NOTIFY_ALLOWED_RECIPIENTS`. Every address must still be on

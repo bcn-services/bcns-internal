@@ -32,8 +32,11 @@ const withScore = (id, name, fit_score) =>
 
 // A db fake with the semantics of digestCandidates: rows already listed by a
 // real `digested` event, or in `done`, never come back.
-function harness({ rows = [], dryRun = false, notifyTo = [BRANDON], allowed = ALLOWED, send = null } = {}) {
+// sheet_* events go to their own list: the Leads-tab append is orthogonal to
+// the mail/marker sequence the older tests pin down.
+function harness({ rows = [], dryRun = false, notifyTo = [BRANDON], allowed = ALLOWED, send = null, sheet = null } = {}) {
   const events = []
+  const sheetEvents = []
   const sent = []
   const db = {
     digestCandidates: async (_s, date) => {
@@ -44,15 +47,15 @@ function harness({ rows = [], dryRun = false, notifyTo = [BRANDON], allowed = AL
       }
     },
     logEvent: async (_s, job, kind, detail) => {
-      events.push({ job, kind, detail })
+      ;(kind.startsWith('sheet_') ? sheetEvents : events).push({ job, kind, detail })
       return []
     },
     updateBusiness: () => {
       throw new Error('digest must never write a business row')
     },
   }
-  const deps = { sql: {}, db, notify: send ?? (async (m) => sent.push(m)), internalRecipients: allowed, notifyTo, dryRun, now: NOW }
-  return { deps, events, sent }
+  const deps = { sql: {}, db, notify: send ?? (async (m) => sent.push(m)), internalRecipients: allowed, notifyTo, dryRun, now: NOW, sheet }
+  return { deps, events, sheetEvents, sent }
 }
 const kinds = (events) => events.map((e) => e.kind)
 
@@ -264,6 +267,80 @@ test('marker only when every NOTIFY_TO address was delivered; one failure leaves
   assert.deepEqual(sent, [BRANDON, BRANDON, NATE])
   assert.deepEqual(kinds(h.events), ['error', 'digested'])
   assert.deepEqual(h.events[1].detail.ids, ['a'])
+})
+
+function fakeSheet({ existing = [], fail = null } = {}) {
+  const appended = []
+  let reads = 0
+  return {
+    appended,
+    reads: () => reads,
+    placeIds: async () => { reads++; return existing },
+    append: async (values) => {
+      if (fail) throw new Error(fail)
+      appended.push(...values)
+    },
+  }
+}
+
+test('after a real digest the rows go to the Leads tab, best fit first, deduped on place_id', async () => {
+  const sheet = fakeSheet({ existing: ['p-old'] })
+  const h = harness({
+    sheet,
+    rows: [
+      { ...withScore('lo', 'Low', 3), place_id: 'p-lo' },
+      { ...withScore('hi', 'High', 9), place_id: 'p-hi' },
+      { ...withScore('old', 'Old', 5), place_id: 'p-old' },
+    ],
+  })
+
+  await digest(h.deps)
+
+  assert.deepEqual(sheet.appended.map((v) => [v[0], v[1], v.at(-2)]), [['p-hi', 'High', '2026-10-20'], ['p-lo', 'Low', '2026-10-20']])
+  assert.deepEqual(h.sheetEvents.map((e) => [e.kind, e.detail.count, e.detail.skipped]), [['sheet_appended', 2, 1]])
+  assert.deepEqual(kinds(h.events), ['digested'])
+})
+
+test('a failed append is logged as sheet_failed; the mail and the digested marker stand', async () => {
+  const h = harness({ rows: [biz({ id: 'a' })], sheet: fakeSheet({ fail: 'sheets 403: no permission' }) })
+
+  const out = await digest(h.deps)
+
+  assert.equal(h.sent.length, 1)
+  assert.equal(out.listed, 1)
+  assert.deepEqual(kinds(h.events), ['digested'])
+  assert.equal(h.sheetEvents[0].kind, 'sheet_failed')
+  assert.match(h.sheetEvents[0].detail.error, /403/)
+})
+
+test('a dry run never touches the sheet', async () => {
+  const sheet = fakeSheet()
+  const h = harness({ rows: [biz({ id: 'a' })], dryRun: true, sheet })
+
+  await digest(h.deps)
+
+  assert.equal(sheet.reads(), 0)
+  assert.equal(sheet.appended.length, 0)
+  assert.deepEqual(h.sheetEvents, [])
+})
+
+test('a failed send never touches the sheet', async () => {
+  const sheet = fakeSheet()
+  const h = harness({ rows: [biz({ id: 'a' })], sheet, send: async () => { throw new Error('smtp down') } })
+
+  await digest(h.deps)
+
+  assert.equal(sheet.reads(), 0)
+  assert.deepEqual(h.sheetEvents, [])
+})
+
+test('a live digest with no sheet capability says so in sheet_skipped', async () => {
+  const h = harness({ rows: [biz({ id: 'a' })] })
+
+  await digest(h.deps)
+
+  assert.deepEqual(h.sheetEvents.map((e) => e.kind), ['sheet_skipped'])
+  assert.match(h.sheetEvents[0].detail.reason, /BCNS_SHEET/)
 })
 
 test('digestCandidates reads the view, dedupes on digested ids and old call mail, and filters on next_touch_at', async () => {

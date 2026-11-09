@@ -29,7 +29,9 @@ asserts it). Both stay in the repo and run on demand with the `job` input
 (`job=touch`, `job=personalize`). `source`/`heartbeat` run weekday
 mornings at `0 11 * * 1-5` (`qualify` rides the hourly tick, last, and promotes
 only on weekday ticks before the digest); `digest` — the one daily call list to Brandon, see
-`docs/NOTIFICATIONS.md` — runs weekday midday at `30 12 * * 1-5`. That cron
+`docs/NOTIFICATIONS.md` — runs weekday midday at `30 12 * * 1-5` and then appends the same rows to the
+Cold Call Tracker's Leads tab (the auth step's token carries the
+`spreadsheets` scope for this). That cron
 string is unchanged (it used to run `personalize`), so the existing Cloud
 Scheduler job needs no edit; its name, `clock-personalize`, is now just a label.
 

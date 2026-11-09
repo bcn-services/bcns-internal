@@ -183,6 +183,13 @@ export async function buildDeps(env = process.env, exists = existsSync) {
     })
   }
 
+  // Same keyless token, spreadsheets scope: digest appends its call list to
+  // the Cold Call Tracker's Leads tab. No sheet id means no `sheet`.
+  if (token && env.BCNS_SHEET) {
+    const { createSheet } = await import('../lib/sheet.mjs')
+    deps.sheet = createSheet({ token, sheetId: env.BCNS_SHEET })
+  }
+
   // No credential of its own, but capped on purpose: qualify feeds whatever
   // comes back into a prompt, so an unbounded page is an unbounded bill.
   deps.fetchPage = createFetchPage()

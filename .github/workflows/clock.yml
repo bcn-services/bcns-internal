@@ -105,6 +105,9 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
           token_format: access_token
+          # cloud-platform for Places/budget; spreadsheets for digest's append
+          # to the Cold Call Tracker, which is shared with GCP_SERVICE_ACCOUNT.
+          access_token_scopes: https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/spreadsheets
 
       - name: Run job
         env:
@@ -117,6 +120,9 @@ jobs:
           # The auth action returns the minted token as a step output, not an
           # env var; a token here is proof the OIDC exchange actually ran.
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          # Cold Call Tracker id for digest's Leads-tab append. A repo variable,
+          # not a secret: the id grants nothing without the share.
+          BCNS_SHEET: ${{ vars.BCNS_SHEET }}
           # Always set. The clone is optional, so a job tests for the
           # directory rather than trusting the variable.
           OS_DIR: ${{ github.workspace }}/os

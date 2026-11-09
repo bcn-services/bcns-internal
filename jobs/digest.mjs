@@ -15,11 +15,16 @@
 //     (db.digestCandidates). A dry run (or a notifier that sent nothing)
 //     writes `would_digest` and consumes nothing.
 //  3. Writes no business row.
+//  4. After a real `digested` marker, the same rows are appended to the Cold
+//     Call Tracker's Leads tab (lib/sheet.mjs), deduped on place_id. Best
+//     effort: the mail has already gone and the marker stands, so a
+//     `sheet_failed` is NOT retried next run — a human backfills those ids.
 
 import { randomUUID } from 'node:crypto'
 import { createNotifier } from './poll.mjs'
 import { parseResearch } from './pitch.mjs'
 import { assertAllowed } from './touch.mjs'
+import { dedupe, mapRow } from '../lib/sheet.mjs'
 
 // America/New_York calendar date, YYYY-MM-DD ('en-CA' formats that way).
 export const etDate = (d) =>
@@ -81,6 +86,7 @@ export async function run({
   db,
   notify = null,
   transport = null,
+  sheet = null,
   internalRecipients = [],
   notifyTo = [],
   notifyFrom = 'bot@bcn-services.com',
@@ -133,6 +139,20 @@ export async function run({
 
   // `would_digest` is ignored by digestCandidates: a run that mailed nobody
   // must not consume the rows.
-  await log(dryRun || dry ? 'would_digest' : 'digested', { ids, date, subject: mail.subject })
+  const live = !(dryRun || dry)
+  await log(live ? 'digested' : 'would_digest', { ids, date, subject: mail.subject })
+  if (live && rows.length) await appendToSheet(sheet, rows, date, log)
   return { sent: delivered, listed: ids.length }
+}
+
+async function appendToSheet(sheet, rows, date, log) {
+  if (!sheet) return log('sheet_skipped', { reason: 'no sheet capability (BCNS_SHEET or Google token unset)', date })
+  try {
+    const mapped = sortRows(rows).map((r) => mapRow(r, date))
+    const fresh = dedupe(await sheet.placeIds(), mapped)
+    if (fresh.length) await sheet.append(fresh)
+    await log('sheet_appended', { count: fresh.length, skipped: mapped.length - fresh.length, date })
+  } catch (err) {
+    await log('sheet_failed', { error: String(err?.message ?? err), date })
+  }
 }
